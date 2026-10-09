@@ -132,6 +132,56 @@ def test_restart_reloads_dashboard(tmp: Path) -> None:
         w.close()
 
 
+def test_log_drawer_can_be_resized_and_collapsed(tmp: Path) -> None:
+    """The log drawer must be draggable/collapsible like the left sidebar.
+
+    It lives in the outer vertical splitter, so the divider can be moved and
+    the drawer collapsed to zero height; the dashboard keeps the rest.
+    """
+    st = sm.Store(tmp / "registry.json")
+    st.add(
+        sm.validate(
+            {
+                "name": "Drawer Test",
+                "command": f'{sys.executable} -c "pass"',
+                "url": "",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        w.resize(1200, 800)
+        _spin(300)
+        # the drawer is a splitter child, not a fixed-height widget
+        assert w.outer_split.indexOf(w.log_view) == 1, "log drawer is not in the splitter"
+        assert w.log_view.maximumHeight() > 500 or w.log_view.maximumHeight() == 16777215, (
+            f"drawer is height-capped at {w.log_view.maximumHeight()}, cannot be dragged tall"
+        )
+
+        def _drawer_h() -> int:
+            return w.outer_split.sizes()[1]
+
+        # collapse via the toolbar action
+        w._toggle_logs(False)
+        _spin(200)
+        assert _drawer_h() == 0, f"drawer did not collapse: {_drawer_h()}"
+        assert w.log_view.isVisible() is False or _drawer_h() == 0
+
+        # restore
+        w._toggle_logs(True)
+        _spin(200)
+        assert _drawer_h() > 0, f"drawer did not restore: {_drawer_h()}"
+
+        # and it can be dragged to an arbitrary height (the real gesture)
+        w.outer_split.setSizes([400, 400])
+        _spin(200)
+        assert 350 <= _drawer_h() <= 450, f"drawer did not accept a dragged size: {_drawer_h()}"
+    finally:
+        w.close()
+
+
 def test_stopped_project_shows_explanation(tmp: Path) -> None:
     """A project whose backend dies explains itself instead of hanging."""
     port = _PORTS["stopped"]

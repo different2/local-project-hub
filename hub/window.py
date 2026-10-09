@@ -184,16 +184,26 @@ class HubWindow(QMainWindow):
         split.addWidget(right_w)
         split.setSizes([260, 900])
 
-        # logs drawer
+        # logs drawer, below the main area. Putting it in the SAME splitter
+        # mechanism as the left sidebar means it can be dragged taller/shorter
+        # and collapsed out of the way by dragging the divider down, instead
+        # of being stuck at a fixed height.
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumHeight(220)
         self.log_view.setStyleSheet("font-family: Menlo, monospace; font-size: 11px;")
+
+        outer = QSplitter(Qt.Vertical)
+        outer.addWidget(split)
+        outer.addWidget(self.log_view)
+        outer.setSizes([620, 160])
+        # Let the drawer collapse fully but not the main area.
+        outer.setCollapsible(0, False)
+        outer.setCollapsible(1, True)
+        self.outer_split = outer
 
         center = QVBoxLayout()
         center.setContentsMargins(6, 6, 6, 0)
-        center.addWidget(split, 1)
-        center.addWidget(self.log_view, 0)
+        center.addWidget(outer, 1)
         c = QWidget()
         c.setLayout(center)
         self.setCentralWidget(c)
@@ -398,7 +408,14 @@ class HubWindow(QMainWindow):
         self.log_view.appendPlainText(text.rstrip("\n"))
 
     def _toggle_logs(self, shown: bool) -> None:
-        self.log_view.setVisible(shown)
+        # Collapse the splitter child rather than hiding the widget: a hidden
+        # splitter child leaves a dead gap and a divider you can still grab,
+        # while collapsing hands the space back to the dashboard.
+        total = self.outer_split.size().height()
+        if shown:
+            self.outer_split.setSizes([max(total - 160, 300), 160])
+        else:
+            self.outer_split.setSizes([total, 0])
 
     # ---------- autostart / last project ----------
 
