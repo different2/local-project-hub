@@ -88,6 +88,9 @@ class HubWindow(QMainWindow):
         self.procs: dict[str, ProjectProcess] = {}
         self.active_id: str | None = None
         self.waiters: dict[str, ReadinessWaiter] = {}
+        # Projects the user explicitly stopped, so an unrequested exit is not
+        # mistaken for one (only an explicit stop closes the project's tabs).
+        self._user_stopped_ids: set[str] = set()
 
         self._build_ui()
         self._reload_list()
@@ -148,31 +151,30 @@ class HubWindow(QMainWindow):
         left_w = QWidget()
         left_w.setLayout(left)
 
-        # right: tab bar over the webview. The project's dashboard is a
-        # permanent first tab; _blank popups (🪐 spheres, full replay) become
-        # additional tabs inside the hub instead of separate OS windows.
-        self.web = HubWebView()
-        self.web.popup_opened.connect(self._on_popup_opened)
-        self.web.loadFinished.connect(self._on_load_finished)
+        # right: tab bar. Each selected project gets its OWN tab and its OWN
+        # webview, so several dashboards can be open side by side (and a
+        # _blank popup becomes just another tab). The first tab is a starter
+        # pane shown before any project is opened.
         self.placeholder = QLabel("No project selected")
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setStyleSheet("color: gray; font-size: 15px;")
-        stack = QStackedLayout()
-        stack.setStackingMode(QStackedLayout.StackAll)
-        stack.addWidget(self.web)
-        stack.addWidget(self.placeholder)
-        self.stack = stack
+        self.stack = QStackedLayout()
+        self.stack.setStackingMode(QStackedLayout.StackAll)
+        self.stack.addWidget(self.placeholder)
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.setDocumentMode(True)
         self.tabs.setMovable(True)
         self.tabs.tabCloseRequested.connect(self._close_tab)
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        dash_w = QWidget()
-        dash_w.setLayout(stack)
-        self.dashboard_tab_index = self.tabs.addTab(dash_w, "Dashboard")
+
+        starter = QWidget()
+        starter.setLayout(self.stack)
+        self.dashboard_tab_index = self.tabs.addTab(starter, "Local Project Hub")
         self.tabs.tabBar().setTabButton(self.dashboard_tab_index, QTabBar.RightSide, None)
+        # Connect AFTER the starter tab exists: currentChanged can fire during
+        # construction, before dashboard_tab_index is set.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         right_w = QWidget()
         right_w.setLayout(QVBoxLayout())
@@ -246,10 +248,64 @@ class HubWindow(QMainWindow):
         rec = self.store.get(pid)
         proc = self._proc_for(rec)
         self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(proc.state, proc.state)}")
-        if proc.state in ("stopped", "error"):
-            self._start_active()
-        else:
+
+        # If this project already has a tab, just focus it (re-selecting a
+        # project should never spawn duplicates). Otherwise open a new tab.
+        existing = self._tab_index_for_project(pid)
+        if existing is not None:
+            self.tabs.setCurrentIndex(existing)
+            if proc.state in ("stopped", "error"):
+                self._start_active()
+            return
+        self._open_project_tab(rec)
+
+    def _tab_index_for_project(self, pid: str) -> int | None:
+        for i in range(self.tabs.count()):
+            if i == self.dashboard_tab_index:
+                continue
+            if self.tabs.widget(i).property("hub_project_id") == pid:
+                return i
+        return None
+
+    @property
+    def web(self) -> "HubWebView":
+        """The webview of the ACTIVE project tab (the starter tab has none)."""
+        i = self.tabs.currentIndex()
+        if i < 0 or i == self.dashboard_tab_index:
+            return None
+        w = self.tabs.widget(i)
+        return w if isinstance(w, HubWebView) else None
+
+    def _open_project_tab(self, rec: dict) -> None:
+        """Open (or focus) a tab holding this project's own dashboard view."""
+        view = HubWebView()
+        view.setProperty("hub_project_id", rec["id"])
+        view.popup_opened.connect(self._on_popup_opened)
+        view.loadFinished.connect(self._on_load_finished)
+        view.titleChanged.connect(
+            lambda t, v=view: self._label_tab(self.tabs.indexOf(v), t or rec["name"])
+        )
+        idx = self.tabs.addTab(view, f"{rec['icon']}  {rec['name']}")
+        self.tabs.setTabToolTip(idx, rec.get("description") or rec["command"])
+        self.tabs.setCurrentIndex(idx)
+
+        proc = self._proc_for(rec)
+        if not rec.get("url"):
+            # No URL: say so plainly instead of showing a blank pane.
+            self.status.showMessage(
+                f"{rec['name']} has no dashboard URL — edit it to add one (e.g. http://127.0.0.1:8471/)"
+            )
+            self._append_log(
+                f"[hub] {rec['name']} has no dashboard URL configured; nothing to load"
+            )
+            return
+        if proc.state == "running":
+            # Already up: load it directly, no polling needed.
             self._show_dashboard(rec)
+        else:
+            # stopped / error / starting: (re)start and poll for readiness.
+            # _start_active() handles the already-running case itself.
+            self._start_active()
 
     def _proc_for(self, rec: dict) -> ProjectProcess:
         pid = rec["id"]
@@ -285,24 +341,42 @@ class HubWindow(QMainWindow):
             self.status.showMessage(f"New tab: {s}", 6000)
 
         view.urlChanged.connect(_update)
-        view.titleChanged.connect(lambda t, i=idx: self._set_tab_label(i, t))
+        view.titleChanged.connect(lambda t, i=idx: self._label_tab(i, t))
 
-    def _set_tab_label(self, index: int, text: str) -> None:
+    def _label_tab(self, index: int, text: str) -> None:
         text = (text or "").strip()
-        if not text:
+        if not text or index < 0:
             return
-        # Keep labels short so several tabs stay readable.
         label = text if len(text) <= 22 else text[:21] + "…"
         self.tabs.setTabText(index, label)
         self.tabs.setTabToolTip(index, text)
 
     def _close_tab(self, index: int) -> None:
         if index == self.dashboard_tab_index:
-            return  # the project dashboard tab is permanent
+            return  # the starter tab is permanent
         widget = self.tabs.widget(index)
+        pid = widget.property("hub_project_id") if widget is not None else None
+        # Closing a project's tab also stops its backend, so a stopped
+        # project never leaves a process running in the background.
+        if pid:
+            proc = self.procs.get(pid)
+            if proc is not None:
+                self._append_log(f"[hub] stopping {self.store.get(pid, {}).get('name', pid)} (tab closed)")
+                self._user_stopped_ids.add(pid)
+                proc.stop()
         self.tabs.removeTab(index)
         if widget is not None:
             widget.deleteLater()
+
+    def _close_tabs_for_project(self, pid: str) -> None:
+        """Close every tab belonging to this project (used when it stops)."""
+        for i in range(self.tabs.count() - 1, -1, -1):
+            if i == self.dashboard_tab_index:
+                continue
+            w = self.tabs.widget(i)
+            if w is not None and w.property("hub_project_id") == pid:
+                self.tabs.removeTab(i)
+                w.deleteLater()
 
     def _on_tab_changed(self, index: int) -> None:
         # The toolbar acts on the project; nothing to do when a popup tab is
@@ -315,62 +389,62 @@ class HubWindow(QMainWindow):
 
     def _on_state(self, pid: str, state: str) -> None:
         rec = self.store.get(pid)
-        if pid == self.active_id and rec:
+        if rec is None:
+            return
+        if pid == self.active_id:
             self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(state, state)}")
-            # A process that dies right away must not leave "Starting…" up:
-            # show why instead of an apparently hung window.
-            if state == "error":
-                self.placeholder.setText(
-                    f"{rec['name']} exited with an error.\n"
-                    "Check the log below for the startup output."
-                )
-                self.stack.setCurrentWidget(self.placeholder)
-            elif state == "stopped" and pid in self.waiters:
+        if state == "error":
+            self._append_log(
+                f"[hub] {rec['name']} exited with an error — see the log below"
+            )
+        elif state == "stopped":
+            # Close the tabs only for an EXPLICIT stop. A project that exits
+            # on its own (or died during startup) keeps its tab so the user
+            # can see what happened and press Start again — silently
+            # destroying the tab is what left frozen/empty panes before.
+            if pid in self._user_stopped_ids:
+                self._user_stopped_ids.discard(pid)
+                self._close_tabs_for_project(pid)
                 w = self.waiters.pop(pid, None)
                 if w:
                     w.stop()
                     w.deleteLater()
-                self.placeholder.setText(
-                    f"{rec['name']} is stopped.\nPress Start to launch it again."
-                )
-                self.stack.setCurrentWidget(self.placeholder)
-        if state == "running" and rec and rec.get("url"):
+                if pid == self.active_id:
+                    self.active_id = None
+                    self.tabs.setCurrentIndex(self.dashboard_tab_index)
+        if state == "running" and rec.get("url"):
             self._wait_ready(rec)
 
     # ---------- dashboard display ----------
 
     def _show_dashboard(self, rec: dict) -> None:
         if not rec.get("url"):
-            self.placeholder.setText(f"{rec['name']} has no dashboard URL")
-            self.stack.setCurrentWidget(self.placeholder)
             return
-        self.stack.setCurrentWidget(self.web)
-        if self.web.url().toString() != rec["url"]:
-            self.web.setUrl(QUrl(rec["url"]))
+        view = self.web
+        if view is None:
+            return
+        if view.url().toString() != rec["url"]:
+            view.setUrl(QUrl(rec["url"]))
 
     def _on_load_finished(self, ok: bool) -> None:
+        view = self.sender()
+        rec = self.store.get(self.active_id) or {}
         if ok:
-            self.stack.setCurrentWidget(self.web)
+            return  # the tab is already the visible page
+        name = rec.get("name", "project")
+        proc = self.procs.get(self.active_id)
+        if proc is not None and proc.state == "running":
+            # Server says it's up but the page failed — could be a slow
+            # first render. Give it one automatic reload before bothering
+            # the user.
+            self._append_log(f"[hub] {name} page failed to load; retrying\n")
+            if view is not None:
+                QTimer.singleShot(1200, view.reload)
         else:
-            rec = self.store.get(self.active_id) or {}
-            name = rec.get("name", "project")
-            proc = self.procs.get(self.active_id)
-            if proc is not None and proc.state == "running":
-                # Server says it's up but the page failed — could be a slow
-                # first render. Give it one automatic reload before bothering
-                # the user.
-                self._append_log(f"[hub] {name} page failed to load; retrying\n")
-                self.stack.setCurrentWidget(self.placeholder)
-                self.placeholder.setText(f"{name}: page did not load, retrying…")
-                QTimer.singleShot(1200, lambda: self.web.reload())
-            else:
-                self.placeholder.setText(
-                    f"{name} is not reachable at that address yet.\n"
-                    "Its backend may still be starting — the page will load "
-                    "automatically once it answers.\n"
-                    "Check the log below if this persists."
-                )
-                self.stack.setCurrentWidget(self.placeholder)
+            self._append_log(
+                f"[hub] {name} is not reachable at {rec.get('url','?')} yet "
+                "— the backend may still be starting\n"
+            )
 
     def _wait_ready(self, rec: dict) -> None:
         pid = rec["id"]
@@ -452,13 +526,11 @@ class HubWindow(QMainWindow):
         proc = self._proc_for(rec)
         if proc.state == "running":
             return
-        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}\n")
+        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
         if rec.get("url"):
-            self.placeholder.setText(f"Starting {rec['name']}…")
-            self.stack.setCurrentWidget(self.placeholder)
-            # Poll for the dashboard now; when it answers, _ready() swaps the
-            # webview in. Do not wait on the "running" state signal alone —
-            # it can be missed when this runs from the selection handler.
+            # Poll for the dashboard now; when it answers, _ready() points the
+            # tab's webview at it. Do not wait on the "running" state signal
+            # alone — it can be missed when this runs from the selection handler.
             self._wait_ready(rec)
         proc.start()
 
@@ -466,6 +538,9 @@ class HubWindow(QMainWindow):
         pid = self.active_id
         if not pid:
             return
+        # Mark it so _on_state knows this exit was requested (and so the tabs
+        # should close). A crash or self-exit must not be treated as a stop.
+        self._user_stopped_ids.add(pid)
         self._proc_for(self.store.get(pid)).stop()
 
     def _restart_active(self) -> None:

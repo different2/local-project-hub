@@ -25,12 +25,12 @@ from PySide6.QtCore import QEventLoop, QTimer, QUrl  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from hub import store as sm  # noqa: E402
-from hub.window import HubWindow  # noqa: E402
+from hub.window import HubWebView, HubWindow  # noqa: E402
 
 # Each test gets its own port: sharing one lets a previous test's server kill
 # the next with "Address already in use" (code=1), which reads as a regression
 # but is just cross-test contamination.
-_PORTS = {"selecting": 8791, "load": 8792, "restart": 8793, "stopped": 8794}
+_PORTS = {"selecting": 8791, "load": 8792, "restart": 8793, "stopped": 8794, "stopping": 8790}
 
 
 def _server_src(port: int) -> str:
@@ -83,22 +83,90 @@ def make_window(tmp: Path, key: str = "selecting") -> tuple[HubWindow, int]:
     return w, port
 
 
-def test_selecting_project_loads_dashboard(tmp: Path) -> None:
-    """The core regression: select a project -> webview ends up on its URL."""
+def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
+    """Selecting a project opens ITS OWN tab and loads its dashboard there."""
     w, port = make_window(tmp, "selecting")
     try:
         assert w.active_id, "no project selected after open"
         proc = w._proc_for(w.store.get(w.active_id))
 
-        ok = _wait_for(lambda: w.web.url().toString() == f"http://127.0.0.1:{port}/")
+        # a new tab was created for the project (starter tab + 1)
+        ok = _wait_for(lambda: w.tabs.count() == 2)
+        assert ok, f"no tab was opened for the project: {w.tabs.count()}"
+
+        view = w.tabs.widget(1)
+        assert view.property("hub_project_id") == w.active_id, "tab is not bound to the project"
+        ok = _wait_for(lambda: view.url().toString() == f"http://127.0.0.1:{port}/")
         assert ok, (
-            "webview never got the dashboard URL — stuck on the placeholder.\n"
-            f"  webview url = {w.web.url().toString()!r}\n"
-            f"  proc state  = {proc.state}\n"
-            f"  stack shows webview = {w.stack.currentWidget() is w.web}"
+            "project tab never got the dashboard URL.\n"
+            f"  url = {view.url().toString()!r}\n"
+            f"  proc state = {proc.state}"
         )
-        # The dashboard loaded; don't couple this to the process staying alive.
-        assert w.stack.currentWidget() is w.web, "webview not visible after load"
+    finally:
+        w.close()
+
+
+def test_two_projects_get_two_tabs(tmp: Path) -> None:
+    """Each project has its own tab; re-selecting focuses instead of duplicating."""
+    port_a, port_b = _PORTS["selecting"], _PORTS["load"]
+    st = sm.Store(tmp / "registry.json")
+    for name, port in (("Proj A", port_a), ("Proj B", port_b)):
+        (tmp / f"srv_{port}.py").write_text(_server_src(port))
+        st.add(
+            sm.validate(
+                {
+                    "name": name,
+                    "command": f"{sys.executable} {tmp / f'srv_{port}.py'}",
+                    "url": f"http://127.0.0.1:{port}/",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+    w = HubWindow(st)
+    w.show()
+    try:
+        ids = [r["id"] for r in st.ordered()]
+        w._select_id(ids[0])
+        assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
+        # let A's dashboard actually load before switching
+        assert _wait_for(
+            lambda: isinstance(w.tabs.widget(1), HubWebView)
+            and w.tabs.widget(1).url().toString() != ""
+        ), "A's tab never loaded"
+
+        w._select_id(ids[1])
+        assert _wait_for(lambda: w.tabs.count() == 3), f"second project got no tab: {w.tabs.count()}"
+        assert _wait_for(
+            lambda: isinstance(w.tabs.widget(2), HubWebView)
+            and w.tabs.widget(2).url().toString() != ""
+        ), "B's tab never loaded"
+
+        # re-selecting the first project must NOT open a third tab
+        w._select_id(ids[0])
+        _spin(400)
+        assert w.tabs.count() == 3, f"duplicate tab opened: {w.tabs.count()}"
+
+        # each tab holds its own dashboard URL (skip the starter tab at 0)
+        urls = set()
+        for i in range(1, w.tabs.count()):
+            v = w.tabs.widget(i)
+            if isinstance(v, HubWebView):
+                urls.add(v.url().toString())
+        assert urls == {f"http://127.0.0.1:{port_a}/", f"http://127.0.0.1:{port_b}/"}, urls
+    finally:
+        w.close()
+
+
+def test_stopping_a_project_closes_its_tabs(tmp: Path) -> None:
+    """Stopping must close the project's tabs, leaving no frozen pane."""
+    w, port = make_window(tmp, "stopping")
+    try:
+        assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
+        pid = w.active_id
+        w._stop_active()
+        ok = _wait_for(lambda: w.tabs.count() == 1, timeout_s=30)
+        assert ok, f"tab was not closed on stop: {w.tabs.count()}"
+        assert w.tabs.currentIndex() == w.dashboard_tab_index, "did not fall back to the starter tab"
     finally:
         w.close()
 
@@ -107,12 +175,12 @@ def test_load_finishes_ok(tmp: Path) -> None:
     """The page itself loads, not just the URL assignment."""
     w, port = make_window(tmp, "load")
     try:
+        assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
         done = {"ok": None}
-        w.web.loadFinished.connect(lambda ok: done.update(ok=ok))
+        w.tabs.widget(1).loadFinished.connect(lambda ok: done.update(ok=ok))
         _wait_for(lambda: w.web.url().toString() == f"http://127.0.0.1:{port}/")
         _wait_for(lambda: done["ok"] is not None, timeout_s=25)
         assert done["ok"] is True, f"loadFinished={done['ok']}"
-        assert w.stack.currentWidget() is w.web, "webview not shown after load"
     finally:
         w.close()
 
@@ -122,6 +190,7 @@ def test_restart_reloads_dashboard(tmp: Path) -> None:
     w, port = make_window(tmp, "restart")
     try:
         url = f"http://127.0.0.1:{port}/"
+        assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
         _wait_for(lambda: w.web.url().toString() == url)
         # force the webview off the dashboard, then restart
         w.web.setUrl(QUrl("about:blank"))
@@ -182,8 +251,8 @@ def test_log_drawer_can_be_resized_and_collapsed(tmp: Path) -> None:
         w.close()
 
 
-def test_stopped_project_shows_explanation(tmp: Path) -> None:
-    """A project whose backend dies explains itself instead of hanging."""
+def test_erroring_project_logs_the_error(tmp: Path) -> None:
+    """A project that dies right away is reported, not left spinning."""
     port = _PORTS["stopped"]
     st = sm.Store(tmp / "registry2.json")
     st.add(
@@ -202,9 +271,8 @@ def test_stopped_project_shows_explanation(tmp: Path) -> None:
         proc = w._proc_for(w.store.get(w.active_id))
         ok = _wait_for(lambda: proc.state == "error", timeout_s=15)
         assert ok, f"expected error state, got {proc.state}"
-        assert w.stack.currentWidget() is w.placeholder, "no explanation shown"
-        text = w.placeholder.text()
-        assert "exited with an error" in text, text
+        log_text = w.log_view.toPlainText()
+        assert "exited with an error" in log_text, log_text[-300:]
     finally:
         w.close()
 
