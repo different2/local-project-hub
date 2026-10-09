@@ -1,0 +1,6 @@
+.DS_Store
+.hubenv/
+__pycache__/
+*.pyc
+registry.json
+hub.log
