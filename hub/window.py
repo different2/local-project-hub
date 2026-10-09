@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedLayout,
     QStatusBar,
+    QTabBar,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -69,14 +71,10 @@ class HubWebView(QWebEngineView):
     def createWindow(self, window_type):
         # NOTE: PySide6 expects the QWebEngineView itself here, not .page() —
         # returning a page raises RuntimeWarning and the popup never navigates.
-        # show() is required too: createWindow does not make the view visible,
-        # so without this a popup exists but never appears on screen.
+        # No show(): as a tab child the QTabWidget owns visibility. Calling
+        # show() here would pop a floating window.
         view = HubWebView()
-        # Forward popups-of-popups too (a dashboard may chain them).
         view.popup_opened.connect(self.popup_opened)
-        view.resize(1100, 750)
-        view.setWindowTitle("Local Project Hub — view")
-        view.show()
         self.popup_opened.emit(view)
         return view
 
@@ -150,7 +148,9 @@ class HubWindow(QMainWindow):
         left_w = QWidget()
         left_w.setLayout(left)
 
-        # right: webview stacked over a placeholder ("Starting…" panel)
+        # right: tab bar over the webview. The project's dashboard is a
+        # permanent first tab; _blank popups (🪐 spheres, full replay) become
+        # additional tabs inside the hub instead of separate OS windows.
         self.web = HubWebView()
         self.web.popup_opened.connect(self._on_popup_opened)
         self.web.loadFinished.connect(self._on_load_finished)
@@ -161,9 +161,23 @@ class HubWindow(QMainWindow):
         stack.setStackingMode(QStackedLayout.StackAll)
         stack.addWidget(self.web)
         stack.addWidget(self.placeholder)
-        right_w = QWidget()
-        right_w.setLayout(stack)
         self.stack = stack
+
+        self.tabs = QTabWidget()
+        self.tabs.setTabsClosable(True)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setMovable(True)
+        self.tabs.tabCloseRequested.connect(self._close_tab)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        dash_w = QWidget()
+        dash_w.setLayout(stack)
+        self.dashboard_tab_index = self.tabs.addTab(dash_w, "Dashboard")
+        self.tabs.tabBar().setTabButton(self.dashboard_tab_index, QTabBar.RightSide, None)
+
+        right_w = QWidget()
+        right_w.setLayout(QVBoxLayout())
+        right_w.layout().setContentsMargins(0, 0, 0, 0)
+        right_w.layout().addWidget(self.tabs)
 
         split = QSplitter(Qt.Horizontal)
         split.addWidget(left_w)
@@ -236,36 +250,58 @@ class HubWindow(QMainWindow):
             self.procs[pid] = proc
         return self.procs[pid]
 
-    # ---------- popups (window.open / target="_blank") ----------
+    # ---------- popups as tabs (window.open / target="_blank") ----------
 
     def _on_popup_opened(self, view: "HubWebView") -> None:
         """A dashboard asked for a new view (e.g. the 🪐 spheres page).
 
-        createWindow fires BEFORE QtWebEngine navigates the new view, so the
-        URL is still empty here — log it from urlChanged instead, once it is
-        real. The view must also be shown explicitly: createWindow does not
-        do it for us.
+        Instead of a separate OS window, the view becomes a tab in this hub
+        window. createWindow fires BEFORE QtWebEngine navigates, so the URL is
+        empty here; the tab label is set from urlChanged once it is real.
         """
-        self._append_log("[hub] opening a new view…")
-        view.setParent(self, Qt.Window)
-        view.setWindowTitle("Local Project Hub — view")
-        view.resize(1100, 750)
-        # createWindow already called show(); guard against a double-show and
-        # make sure it is not somehow hidden.
-        if view.isHidden():
-            view.show()
-        view.raise_()
+        idx = self.tabs.addTab(view, "New tab")
+        self.tabs.setCurrentIndex(idx)
+        self._append_log("[hub] opened a new tab")
+        # Popups of popups: keep chaining into tabs rather than windows.
+        view.popup_opened.connect(self._on_popup_opened)
 
-        def _report(url: QUrl) -> None:
+        def _update(url: QUrl) -> None:
             s = url.toString()
-            if s and s != "about:blank":
-                self._append_log(f"[hub] new view: {s}")
-                self.status.showMessage(f"New view: {s}", 6000)
+            if not s or s == "about:blank":
+                return
+            # Label with the page title once known, else a shortened URL.
+            view.page().runJavaScript("document.title", lambda t, i=idx: self._set_tab_label(i, t or s))
+            self._append_log(f"[hub] new tab: {s}")
+            self.status.showMessage(f"New tab: {s}", 6000)
 
-        view.urlChanged.connect(_report)
-        # Keep popups out of the grab-the-focus game but make sure the newest
-        # one is actually in front when several open.
-        view.activateWindow()
+        view.urlChanged.connect(_update)
+        view.titleChanged.connect(lambda t, i=idx: self._set_tab_label(i, t))
+
+    def _set_tab_label(self, index: int, text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        # Keep labels short so several tabs stay readable.
+        label = text if len(text) <= 22 else text[:21] + "…"
+        self.tabs.setTabText(index, label)
+        self.tabs.setTabToolTip(index, text)
+
+    def _close_tab(self, index: int) -> None:
+        if index == self.dashboard_tab_index:
+            return  # the project dashboard tab is permanent
+        widget = self.tabs.widget(index)
+        self.tabs.removeTab(index)
+        if widget is not None:
+            widget.deleteLater()
+
+    def _on_tab_changed(self, index: int) -> None:
+        # The toolbar acts on the project; nothing to do when a popup tab is
+        # selected, but keep the title useful.
+        if index < 0:
+            return
+        label = self.tabs.tabText(index)
+        if index != self.dashboard_tab_index:
+            self.status.showMessage(f"Viewing: {label}", 4000)
 
     def _on_state(self, pid: str, state: str) -> None:
         rec = self.store.get(pid)
