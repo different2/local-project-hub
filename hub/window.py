@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 import os
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -33,7 +34,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from . import store as store_mod
 from .process_manager import ProjectProcess
@@ -46,6 +46,36 @@ _STATE_LABEL = {
     "running": "● running",
     "error": "✕ error",
 }
+
+
+class _PopupBridge(QObject):
+    """Kept for import compatibility; the popup path now uses createWindow."""
+
+
+class HubWebView(QWebEngineView):
+    """A webview that answers window.open(..., "_blank") instead of dropping it.
+
+    Dashboards use _blank for the 🪐 spheres view, full replay, etc. Plain
+    QWebEngineView swallows those clicks (createWindow is not overridden), so
+    the click appears to do nothing. Overriding it and returning a real view
+    opens the page — verified for both window.open and target="_blank" links.
+
+    The child view is owned by the hub window (see HubWindow._on_popup_opened)
+    so popups stay alive independently of the dashboard that spawned them.
+    """
+
+    popup_opened = Signal(QWebEngineView)
+
+    def createWindow(self, window_type):
+        # NOTE: PySide6 expects the QWebEngineView itself here, not .page() —
+        # returning a page raises RuntimeWarning and the popup never navigates.
+        view = HubWebView()
+        # Forward popups-of-popups too (a dashboard may chain them).
+        view.popup_opened.connect(self.popup_opened)
+        view.resize(1100, 750)
+        view.setWindowTitle("Local Project Hub — view")
+        self.popup_opened.emit(view)
+        return view
 
 
 class HubWindow(QMainWindow):
@@ -118,7 +148,8 @@ class HubWindow(QMainWindow):
         left_w.setLayout(left)
 
         # right: webview stacked over a placeholder ("Starting…" panel)
-        self.web = QWebEngineView()
+        self.web = HubWebView()
+        self.web.popup_opened.connect(self._on_popup_opened)
         self.web.loadFinished.connect(self._on_load_finished)
         self.placeholder = QLabel("No project selected")
         self.placeholder.setAlignment(Qt.AlignCenter)
@@ -201,6 +232,21 @@ class HubWindow(QMainWindow):
             proc.output.connect(self._append_log)
             self.procs[pid] = proc
         return self.procs[pid]
+
+    # ---------- popups (window.open / target="_blank") ----------
+
+    def _on_popup_opened(self, view: "HubWebView") -> None:
+        """A dashboard asked for a new view (e.g. the 🪐 spheres page).
+
+        The child is a real top-level window owned by the hub: it stays alive
+        on its own, keeps working if the hub window is closed, and its URL is
+        recorded in the log so it can be reopened externally if needed.
+        """
+        self._append_log(f"[hub] new view opened: {view.url().toString()}")
+        self.status.showMessage(f"New view: {view.url().toString()}", 6000)
+        # Parent to the hub so it outlives a closed dashboard but never
+        # becomes an orphan process.
+        view.setParent(self, Qt.Window)
 
     def _on_state(self, pid: str, state: str) -> None:
         rec = self.store.get(pid)
