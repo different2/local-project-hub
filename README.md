@@ -8,14 +8,16 @@ See SPEC.md for the full requirements this repo implements.
 ## Run
 
 ```bash
-./run.sh          # uses ./.hubenv if present, else system python3
+./run.sh          # uses ./.hubenv (recommended — already has PySide6), else $PATH python3
 ```
 
-Or explicitly:
+Note: `./run.sh` on a fresh clone will fall back to `python3` from your PATH,
+which may be a different interpreter (e.g. Homebrew's) than the one that has
+PySide6. Create the venv once and the fallback is never used:
 
 ```bash
 python3 -m venv .hubenv && .hubenv/bin/pip install PySide6
-.hubenv/bin/python main.py
+.hubenv/bin/python main.py    # equivalent to ./run.sh
 ```
 
 ## Layout
