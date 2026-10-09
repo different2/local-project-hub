@@ -206,6 +206,23 @@ class HubWindow(QMainWindow):
         rec = self.store.get(pid)
         if pid == self.active_id and rec:
             self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(state, state)}")
+            # A process that dies right away must not leave "Starting…" up:
+            # show why instead of an apparently hung window.
+            if state == "error":
+                self.placeholder.setText(
+                    f"{rec['name']} exited with an error.\n"
+                    "Check the log below for the startup output."
+                )
+                self.stack.setCurrentWidget(self.placeholder)
+            elif state == "stopped" and pid in self.waiters:
+                w = self.waiters.pop(pid, None)
+                if w:
+                    w.stop()
+                    w.deleteLater()
+                self.placeholder.setText(
+                    f"{rec['name']} is stopped.\nPress Start to launch it again."
+                )
+                self.stack.setCurrentWidget(self.placeholder)
         if state == "running" and rec and rec.get("url"):
             self._wait_ready(rec)
 
@@ -321,6 +338,10 @@ class HubWindow(QMainWindow):
         if rec.get("url"):
             self.placeholder.setText(f"Starting {rec['name']}…")
             self.stack.setCurrentWidget(self.placeholder)
+            # Poll for the dashboard now; when it answers, _ready() swaps the
+            # webview in. Do not wait on the "running" state signal alone —
+            # it can be missed when this runs from the selection handler.
+            self._wait_ready(rec)
         proc.start()
 
     def _stop_active(self) -> None:

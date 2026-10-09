@@ -104,6 +104,7 @@ class ProjectProcess(QObject):
         proc.setEnvironment(env)
         proc.readyReadStandardOutput.connect(self._drain)
         proc.finished.connect(self._on_finished)
+        proc.started.connect(self._on_started)
         self._user_stopped = False
         self._started_at = time.time()
         self.proc = proc
@@ -143,6 +144,12 @@ class ProjectProcess(QObject):
         if data:
             self.history.append(data)
             self.output.emit(data)
+
+    def _on_started(self) -> None:
+        # QProcess reports Running but nothing forwards it; without this the
+        # window never learns the process is up, so it never starts the
+        # readiness poll and the dashboard never loads ("stuck on Starting…").
+        self.state_changed.emit("running")
 
     def _force_kill(self) -> None:
         if self.proc is None or self.proc.state() == QProcess.NotRunning:
