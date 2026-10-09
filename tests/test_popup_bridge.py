@@ -125,7 +125,84 @@ def test_popups_open_a_real_view(tmp: Path) -> None:
         ok = _wait_for(lambda: second.url().toString() == f"http://127.0.0.1:{PORT}/via-link/")
         assert ok, f"link popup wrong url: {second.url().toString()!r}"
 
+        # 3) the popup must actually be VISIBLE. An earlier version logged
+        # "new view opened" but never called show(), so nothing appeared —
+        # exactly the symptom of a window that exists but is invisible.
+        assert first.isVisible(), "popup window is not visible"
+        assert not first.isHidden(), "popup window is hidden"
+
         print("popup URLs:", [p.url().toString() for p in popups])
+        print("popup visible:", first.isVisible(), "| size:", first.size().width(), "x", first.size().height())
+    finally:
+        srv.terminate()
+        try:
+            srv.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            srv.kill()
+
+
+def test_hubwindow_popup_becomes_visible(tmp: Path) -> None:
+    """The regression that shipped: HubWindow._on_popup_opened never called show().
+
+    Drives the real HubWindow (not a bare HubWebView) so the window-level
+    handler runs, and asserts the popup ends up VISIBLE with a real URL —
+    the log line alone is not evidence.
+    """
+    from PySide6.QtWidgets import QApplication as _App
+
+    from hub import store as sm
+    from hub.window import HubWindow
+
+    srv = _start_server(tmp)
+    try:
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", PORT), 0.4):
+                    break
+            except OSError:
+                time.sleep(0.2)
+
+        st = sm.Store(tmp / "registry.json")
+        st.add(
+            sm.validate(
+                {
+                    "name": "Popup Host",
+                    "command": f"{sys.executable} -c \"pass\"",
+                    "url": f"http://127.0.0.1:{PORT}/",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+        app = _App.instance() or _App([])
+        win = HubWindow(st)
+        win.show()
+
+        popups = []
+        win.web.popup_opened.connect(lambda v: popups.append(v))
+        loaded = {"ok": None}
+        win.web.loadFinished.connect(lambda ok: loaded.update(ok=ok))
+        # point the main view at the page without starting a process
+        win._show_dashboard(win.store.get(win.active_id))
+        assert _wait_for(lambda: loaded["ok"] is True, timeout_s=25), "page never loaded"
+
+        win.web.page().runJavaScript(
+            f'window.open("http://127.0.0.1:{PORT}/hubwindow-open/", "_blank")'
+        )
+        assert _wait_for(lambda: popups, timeout_s=10), "no popup from window.open"
+        view = popups[0]
+
+        # URL must arrive (createWindow fires before navigation)
+        _wait_for(
+            lambda: view.url().toString() == f"http://127.0.0.1:{PORT}/hubwindow-open/"
+        )
+
+        # THE regression: the window has to be visible, not merely created.
+        assert view.isVisible(), (
+            "popup exists but is not visible — _on_popup_opened must call show()"
+        )
+        assert view.width() > 0 and view.height() > 0, f"popup has no size: {view.size()}"
+        print("hubwindow popup:", view.url().toString(), "| visible:", view.isVisible())
+        win.close()
     finally:
         srv.terminate()
         try:

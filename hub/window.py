@@ -69,11 +69,14 @@ class HubWebView(QWebEngineView):
     def createWindow(self, window_type):
         # NOTE: PySide6 expects the QWebEngineView itself here, not .page() —
         # returning a page raises RuntimeWarning and the popup never navigates.
+        # show() is required too: createWindow does not make the view visible,
+        # so without this a popup exists but never appears on screen.
         view = HubWebView()
         # Forward popups-of-popups too (a dashboard may chain them).
         view.popup_opened.connect(self.popup_opened)
         view.resize(1100, 750)
         view.setWindowTitle("Local Project Hub — view")
+        view.show()
         self.popup_opened.emit(view)
         return view
 
@@ -238,15 +241,31 @@ class HubWindow(QMainWindow):
     def _on_popup_opened(self, view: "HubWebView") -> None:
         """A dashboard asked for a new view (e.g. the 🪐 spheres page).
 
-        The child is a real top-level window owned by the hub: it stays alive
-        on its own, keeps working if the hub window is closed, and its URL is
-        recorded in the log so it can be reopened externally if needed.
+        createWindow fires BEFORE QtWebEngine navigates the new view, so the
+        URL is still empty here — log it from urlChanged instead, once it is
+        real. The view must also be shown explicitly: createWindow does not
+        do it for us.
         """
-        self._append_log(f"[hub] new view opened: {view.url().toString()}")
-        self.status.showMessage(f"New view: {view.url().toString()}", 6000)
-        # Parent to the hub so it outlives a closed dashboard but never
-        # becomes an orphan process.
+        self._append_log("[hub] opening a new view…")
         view.setParent(self, Qt.Window)
+        view.setWindowTitle("Local Project Hub — view")
+        view.resize(1100, 750)
+        # createWindow already called show(); guard against a double-show and
+        # make sure it is not somehow hidden.
+        if view.isHidden():
+            view.show()
+        view.raise_()
+
+        def _report(url: QUrl) -> None:
+            s = url.toString()
+            if s and s != "about:blank":
+                self._append_log(f"[hub] new view: {s}")
+                self.status.showMessage(f"New view: {s}", 6000)
+
+        view.urlChanged.connect(_report)
+        # Keep popups out of the grab-the-focus game but make sure the newest
+        # one is actually in front when several open.
+        view.activateWindow()
 
     def _on_state(self, pid: str, state: str) -> None:
         rec = self.store.get(pid)
