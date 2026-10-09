@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
@@ -224,12 +224,25 @@ class HubWindow(QMainWindow):
         if ok:
             self.stack.setCurrentWidget(self.web)
         else:
-            name = (self.store.get(self.active_id) or {}).get("name", "project")
-            self.placeholder.setText(
-                f"{name} is not reachable at that address yet.\n"
-                "Check the log below, or press Restart."
-            )
-            self.stack.setCurrentWidget(self.placeholder)
+            rec = self.store.get(self.active_id) or {}
+            name = rec.get("name", "project")
+            proc = self.procs.get(self.active_id)
+            if proc is not None and proc.state == "running":
+                # Server says it's up but the page failed — could be a slow
+                # first render. Give it one automatic reload before bothering
+                # the user.
+                self._append_log(f"[hub] {name} page failed to load; retrying\n")
+                self.stack.setCurrentWidget(self.placeholder)
+                self.placeholder.setText(f"{name}: page did not load, retrying…")
+                QTimer.singleShot(1200, lambda: self.web.reload())
+            else:
+                self.placeholder.setText(
+                    f"{name} is not reachable at that address yet.\n"
+                    "Its backend may still be starting — the page will load "
+                    "automatically once it answers.\n"
+                    "Check the log below if this persists."
+                )
+                self.stack.setCurrentWidget(self.placeholder)
 
     def _wait_ready(self, rec: dict) -> None:
         pid = rec["id"]
