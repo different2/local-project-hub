@@ -12,7 +12,6 @@ Exit code is 0 only when every suite passes.
 from __future__ import annotations
 
 import os
-import pty
 import subprocess
 import sys
 import time
@@ -20,6 +19,17 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
+
+# `pty` is POSIX-only; importing it on Windows raises ImportError, which would
+# take the whole runner down before a single test ran.
+IS_WINDOWS = sys.platform.startswith("win")
+try:
+    import pty
+
+    HAS_PTY = not IS_WINDOWS
+except ImportError:  # pragma: no cover - Windows
+    pty = None  # type: ignore[assignment]
+    HAS_PTY = False
 
 # GUI suites need a Qt platform that works headless on macOS and Linux.
 GUI_ENV = {"QT_QPA_PLATFORM": "offscreen"}
@@ -63,20 +73,23 @@ def interpreter() -> str:
 def run_one(path: Path, needs_gui: bool, extra_args: list[str] | None = None) -> tuple[int, str]:
     """Run one suite and return (exit_code, combined_output).
 
-    GUI suites get a PSEUDO-TERMINAL, not a pipe. QtWebEngine (Chromium)
-    behaves differently without a TTY: with a pipe the suite segfaults before
-    running anything, and it still crashes at exit even on a plain file. A pty
-    makes it behave exactly as it does in a normal terminal, which is the
+    GUI suites on POSIX get a PSEUDO-TERMINAL, not a pipe. QtWebEngine
+    (Chromium) behaves differently without a TTY: with a pipe the suite
+    segfaults before running anything, and it still crashes at exit on a plain
+    file. A pty makes it behave exactly as in a normal terminal, which is the
     environment these tests are written for.
+
+    Windows has no `pty` module, so there the pipe is used as-is — Windows
+    QtWebEngine does not show the same TTY sensitivity.
     """
     env = dict(os.environ)
     if needs_gui:
         env.update(GUI_ENV)
+    argv = [interpreter(), str(path), *(extra_args or [])]
 
-    if not needs_gui:
-        # Plain suites are fine with a pipe.
+    if not needs_gui or IS_WINDOWS or not HAS_PTY:
         proc = subprocess.run(
-            [interpreter(), str(path), *(extra_args or [])],
+            argv,
             cwd=str(PROJECT_ROOT),
             env=env,
             capture_output=True,
@@ -87,7 +100,7 @@ def run_one(path: Path, needs_gui: bool, extra_args: list[str] | None = None) ->
 
     master, slave = pty.openpty()
     proc = subprocess.Popen(
-        [interpreter(), str(path), *(extra_args or [])],
+        argv,
         cwd=str(PROJECT_ROOT),
         env=env,
         stdout=slave,

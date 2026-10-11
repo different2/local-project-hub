@@ -56,6 +56,18 @@ jobs:
             python tests/run_all.py
           fi
 
+      # Always upload the log, pass or fail: without it a red job gives no
+      # evidence of what actually broke.
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ runner.os }}
+          path: |
+            **/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   build-macos:
     name: Build macOS installer
     # Only on tags: a normal push should not produce release artifacts.
