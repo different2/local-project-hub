@@ -4,3 +4,13 @@ __pycache__/
 *.pyc
 registry.json
 hub.log
+
+# runtime state (registry.json is the one that matters: it holds the user's
+# registered projects, folders and commands, and must never be published)
+.hubstate/
+
+# packaging output
+build/
+dist/
+*.egg-info/
+.venv/

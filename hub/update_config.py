@@ -1,20 +1,23 @@
 """Update endpoint configuration.
 
-Point RELEASE_API_URL at the GitHub Releases "latest" endpoint of the repo
-that publishes Local Project Hub. Leave it empty to disable the updater
-entirely (the Check for Updates menu item then explains that updates are not
-configured, rather than failing silently).
+These point the in-app updater and the "Report a problem" dialog at this
+project's own GitHub repo. They are safe to publish: they are public URLs,
+not credentials.
 
-Example:
-    RELEASE_API_URL = "https://api.github.com/repos/OWNER/local-project-hub/releases/latest"
+Forks should change them to their own repo (or leave them pointing here to
+track upstream releases).
 """
 
-# Set this to your fork's releases endpoint before publishing.
-RELEASE_API_URL = ""
+# The GitHub Releases "latest" endpoint this build checks for updates.
+# Empty disables the updater; Check for Updates then explains that updates
+# are not configured rather than failing silently.
+RELEASE_API_URL = (
+    "https://api.github.com/repos/different2/local-project-hub/releases/latest"
+)
 
 # Where "Report a problem" opens a prefilled issue. Empty disables the
 # browser path; saving a report file always works.
-ISSUES_URL = ""
+ISSUES_URL = "https://github.com/different2/local-project-hub/issues/new"
 
 # Optional: when true, the app checks for updates in the background on start
 # and only *notifies*; installation stays user-initiated (release spec §5).
