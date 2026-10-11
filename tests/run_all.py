@@ -33,12 +33,27 @@ SUITES = [
 ]
 
 
+def interpreter() -> str:
+    """The Python that has PySide6 — the project venv if it exists.
+
+    Using bare `sys.executable` is a trap here: whoever launches this script
+    may have a different python3 first on PATH (e.g. Homebrew's, which has no
+    PySide6), and the GUI suites then fail with ModuleNotFoundError even
+    though the app runs fine. Prefer ./.hubenv, which is created for exactly
+    this reason.
+    """
+    venv_py = PROJECT_ROOT / ".hubenv" / "bin" / "python"
+    if venv_py.exists():
+        return str(venv_py)
+    return sys.executable
+
+
 def run_one(path: Path, needs_gui: bool) -> tuple[int, str]:
     env = dict(os.environ)
     if needs_gui:
         env.update(GUI_ENV)
     proc = subprocess.run(
-        [sys.executable, str(path)],
+        [interpreter(), str(path)],
         cwd=str(PROJECT_ROOT),
         env=env,
         capture_output=True,
@@ -71,6 +86,14 @@ def main() -> int:
         status = "ok  " if code == 0 else "FAIL"
         print(f"  {status}     {name:26} {passed} passed, {failed} failed")
         if code != 0:
+            if "ModuleNotFoundError" in out and "PySide6" in out:
+                print(
+                    "           ── PySide6 is missing for the interpreter this "
+                    "runner used ──\n"
+                    f"           interpreter: {interpreter()}\n"
+                    "           fix: ./.hubenv/bin/pip install PySide6\n"
+                    "           (or delete .hubenv and recreate it)\n"
+                )
             tail = "\n".join(out.strip().splitlines()[-12:])
             print(f"           ── last output ──\n{tail}\n")
         results.append((name, code))
