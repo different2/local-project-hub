@@ -280,10 +280,22 @@ def test_erroring_project_logs_the_error(tmp: Path) -> None:
 if __name__ == "__main__":
     import tempfile
 
+    # `--test=NAME` runs one test only. tests/run_all.py uses this to isolate
+    # GUI tests in separate processes, which is the only reliable way past
+    # QtWebEngine's shutdown segfault with several views alive.
+    only = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("--test="):
+            only = arg.split("=", 1)[1]
+
     app = QApplication.instance() or QApplication([])
     fails = 0
+    ran = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            if only and name != only:
+                continue
+            ran += 1
             with tempfile.TemporaryDirectory() as d:
                 try:
                     fn(Path(d))
@@ -291,5 +303,16 @@ if __name__ == "__main__":
                 except AssertionError as e:
                     fails += 1
                     print(f"FAIL {name}: {e}")
+    if only and ran == 0:
+        print(f"FAIL no such test: {only}")
+        sys.exit(2)
     print("---", "FAILURES" if fails else "all passed")
+
+    # QtWebEngine segfaults when several views are destroyed together during
+    # interpreter shutdown: every test above passes, then the process dies with
+    # SIGSEGV (-11) — which CI reads as a failure. There is no reliable way to
+    # tear down a dozen accumulated WebEngine views in one process, so the
+    # runner isolates each test in its own instead. Run standalone this prints
+    # the results and then may crash on exit; the runner's exit code is the
+    # authoritative one.
     sys.exit(1 if fails else 0)
