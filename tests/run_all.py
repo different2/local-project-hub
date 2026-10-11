@@ -42,6 +42,7 @@ SUITES = [
     ("test_process_e2e.py", True),
     ("test_window_e2e.py", True),
     ("test_popup_bridge.py", True),
+    ("test_urldetect.py", True),
 ]
 
 # Suites whose GUI tests must each run in their own process. QtWebEngine

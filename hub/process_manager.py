@@ -22,6 +22,7 @@ from collections import deque
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from .platform import resolve_interpreter, split_command
+from . import urldetect
 
 LOG_HISTORY = 500
 
@@ -47,6 +48,8 @@ class ProjectProcess(QObject):
 
     state_changed = Signal(str)  # "starting" | "running" | "stopped" | "error"
     output = Signal(str)
+    # Emitted once, when the server's own output reveals its dashboard URL.
+    url_detected = Signal(str)
 
     def __init__(self, rec: dict, parent=None):
         super().__init__(parent)
@@ -56,6 +59,7 @@ class ProjectProcess(QObject):
         self._user_stopped = False
         self._started_at = 0.0
         self._pending_restart = False
+        self.detected_url: str | None = None
         self._kill_timer = QTimer(self)
         self._kill_timer.setSingleShot(True)
         self._kill_timer.setInterval(TERM_GRACE_MS)
@@ -176,6 +180,40 @@ class ProjectProcess(QObject):
         if data:
             self.history.append(data)
             self.output.emit(data)
+            self._maybe_detect_url(data)
+
+    # ---------- URL auto-detection ----------
+
+    def _maybe_detect_url(self, text: str) -> None:
+        """Learn the dashboard URL from what the server prints.
+
+        Most servers announce themselves ("serving on http://localhost:8471"),
+        so the user should not have to type it. Emits url_detected once, the
+        first time a plausible URL appears; the caller decides whether to use
+        it (it never overrides a URL the user configured themselves).
+        """
+        if self.detected_url or self.rec.get("url"):
+            return
+        url = urldetect.find_url(text)
+        if not url:
+            return
+        # 0.0.0.0 means "all interfaces"; connect via localhost instead.
+        self.detected_url = url.replace("0.0.0.0", "127.0.0.1")
+        self.url_detected.emit(self.detected_url)
+
+    def detect_url_from_ports(self) -> str | None:
+        """Fallback for servers that start silently: ask the OS what it opened.
+
+        Best-effort. Only consulted when nothing was learned from stdout.
+        """
+        if self.detected_url or self.proc is None:
+            return self.detected_url
+        pid = self.proc.processId()
+        ports = urldetect.listening_ports(pid)
+        if ports:
+            self.detected_url = urldetect.url_from_port(ports[0])
+            self.url_detected.emit(self.detected_url)
+        return self.detected_url
 
     def _on_started(self) -> None:
         # QProcess reports Running but nothing forwards it; without this the

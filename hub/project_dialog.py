@@ -102,8 +102,20 @@ class ProjectDialog(QDialog):
         form.addRow("Env vars", self.env)
 
         self.url = QLineEdit(self._record.get("url", ""))
-        self.url.setPlaceholderText("http://127.0.0.1:8471/")
-        form.addRow("Dashboard URL", self.url)
+        self.url.setPlaceholderText("leave blank to detect it automatically")
+        url_help = QLabel(
+            "Optional. Most servers print their address when they start — the Hub "
+            "reads that and fills this in for you. Set it only if your project "
+            "starts silently."
+        )
+        url_help.setWordWrap(True)
+        url_help.setStyleSheet("color: gray; font-size: 11px;")
+        url_box = QVBoxLayout()
+        url_box.setContentsMargins(0, 0, 0, 0)
+        url_box.setSpacing(2)
+        url_box.addWidget(self.url)
+        url_box.addWidget(url_help)
+        form.addRow("Dashboard URL (optional)", self._wrap(url_box))
 
         self.autostart = QCheckBox("Start automatically when the hub opens")
         self.autostart.setChecked(self._record.get("autostart", False))

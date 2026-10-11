@@ -601,13 +601,20 @@ class HubWindow(QMainWindow):
 
         proc = self._proc_for(rec)
         if not rec.get("url"):
-            # No URL: say so plainly instead of showing a blank pane.
+            # No URL configured: start it anyway and learn the address from the
+            # server itself (its own output, or the port it opens). Returning
+            # here without starting would leave nothing to detect.
             self.status.showMessage(
-                f"{rec['name']} has no dashboard URL — edit it to add one (e.g. http://127.0.0.1:8471/)"
+                f"{rec['name']} has no dashboard URL yet — starting it to find one…"
             )
             self._append_log(
-                f"[hub] {rec['name']} has no dashboard URL configured; nothing to load"
+                f"[hub] {rec['name']} has no dashboard URL; starting it to detect one"
             )
+            if proc.state != "running":
+                self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
+                proc.start()
+            # Fallback for a server that never prints its address.
+            self._scan_ports_after(rec, proc)
             return
         if proc.state == "running":
             # Already up: load it directly, no polling needed.
@@ -617,14 +624,51 @@ class HubWindow(QMainWindow):
             # _start_active() handles the already-running case itself.
             self._start_active()
 
+    def _scan_ports_after(self, rec: dict, proc: ProjectProcess, delay_ms: int = 6000) -> None:
+        """For a silent server: look at what ports it opened, once it is up.
+
+        Only runs when no URL is known yet, and gives the server time to bind
+        before asking the OS. Best-effort — silence here is not an error.
+        """
+
+        def _scan():
+            if rec.get("url"):  # meanwhile it announced itself
+                return
+            url = proc.detect_url_from_ports()
+            if url:
+                self._append_log(f"[hub] detected listening port: {url}")
+
+        QTimer.singleShot(delay_ms, _scan)
+
     def _proc_for(self, rec: dict) -> ProjectProcess:
         pid = rec["id"]
         if pid not in self.procs:
             proc = ProjectProcess(rec)
             proc.state_changed.connect(lambda s, p=pid: self._on_state(p, s))
             proc.output.connect(self._append_log)
+            proc.url_detected.connect(self._on_url_detected)
             self.procs[pid] = proc
         return self.procs[pid]
+
+    def _on_url_detected(self, url: str) -> None:
+        """A server announced its own address — use it and remember it.
+
+        Only fills a gap: if the user configured a URL themselves, theirs wins
+        and nothing is overwritten. Saves to the registry so the URL field is
+        filled in for next time instead of asking again.
+        """
+        pid = self.active_id
+        rec = self.store.get(pid) if pid else None
+        if rec is None or rec.get("url"):
+            return
+        self._append_log(f"[hub] detected dashboard URL: {url}")
+        rec["url"] = url
+        try:
+            self.store.update(rec)
+        except store_mod.RegistryError:
+            pass
+        self.status.showMessage(f"Detected {rec['name']} at {url}", 6000)
+        self._show_dashboard(rec)
 
     # ---------- popups as tabs (window.open / target="_blank") ----------
 
@@ -773,7 +817,6 @@ class HubWindow(QMainWindow):
             if pid == self.active_id:
                 self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n")
                 self._show_dashboard(rec)
-
         def _fail(reason: str):
             _cleanup()
             self._append_log(f"[hub] {reason}\n")
