@@ -1,7 +1,10 @@
 # Local Project Hub
 
-A macOS desktop app that registers local Python projects, launches their backends,
-and shows their web dashboards in one window (PySide6 + QtWebEngine).
+A cross-platform desktop app that registers local projects, launches their
+backends, and shows their web dashboards in one window (PySide6 + QtWebEngine).
+
+Any project works: Python, Node, Go, Rust, or a shell script — the hub runs the
+startup command you configure and waits for the dashboard URL to answer.
 
 See SPEC.md for the full requirements this repo implements.
 

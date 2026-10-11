@@ -115,7 +115,7 @@ class HubWindow(QMainWindow):
             "About Local Project Hub",
             f"<h3>Local Project Hub</h3>"
             f"<p>Version <b>{__version__}</b></p>"
-            f"<p>A control centre for locally hosted Python projects.</p>"
+            f"<p>A control centre for your locally hosted projects.</p>"
             f"<p style='color: gray'>Supports {describe_platform_support()}.</p>",
         )
 

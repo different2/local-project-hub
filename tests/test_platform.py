@@ -114,6 +114,58 @@ def test_config_dir_has_no_hardcoded_macos_path():
             os.environ["LOCAL_PROJECT_HUB_HOME"] = old
 
 
+def test_hub_is_not_python_only():
+    """Nothing in the record rules out a non-Python project (Node/Go/Rust/script)."""
+    from hub import store as sm
+
+    rec = sm.validate(
+        {
+            "name": "Node app",
+            "command": "npm run dev",  # no python anywhere
+            "url": "http://127.0.0.1:5173/",
+            "working_dir": "/tmp",
+        }
+    )
+    assert rec["command"] == "npm run dev"
+    assert rec["interpreter"] == ""  # and it is not required
+
+    # The interpreter field is generic: any executable is accepted as-is.
+    rec2 = sm.validate(
+        {
+            "name": "Go app",
+            "command": "run .",
+            "interpreter": "/opt/homebrew/bin/go",
+            "working_dir": "/tmp",
+        }
+    )
+    assert rec2["interpreter"] == "/opt/homebrew/bin/go"
+
+
+def test_non_python_command_is_not_touched():
+    """A non-Python command must not have an interpreter prepended to it."""
+    from hub.process_manager import _looks_like_python
+
+    assert _looks_like_python("npm") is False
+    assert _looks_like_python("node") is False
+    assert _looks_like_python("go") is False
+    assert _looks_like_python("cargo") is False
+    assert _looks_like_python("./start.sh") is False
+    # only genuine Python names get interpreter resolution
+    assert _looks_like_python("python3") is True
+    assert _looks_like_python("python") is True
+    assert _looks_like_python(".venv/bin/python") is False  # an explicit path
+
+
+def test_resolve_interpreter_error_is_language_neutral():
+    """A missing tool must not be blamed on Python."""
+    from hub.platform import resolve_interpreter
+
+    path, err = resolve_interpreter("/opt/definitely/not/node")
+    if path is None:
+        assert "Python" not in err, f"wrong language in message: {err}"
+        assert "could not find" in err, err
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

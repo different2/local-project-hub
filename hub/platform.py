@@ -55,6 +55,10 @@ def resolve_interpreter(explicit: str = "") -> tuple[str | None, str | None]:
     Returns (path_or_name, error). When nothing is found the error explains
     what to install, which the UI surfaces instead of a bare "file not found"
     (release spec §8: "handles ... missing interpreters").
+
+    The "no interpreter" message only mentions Python when the thing being
+    resolved actually *is* Python; for any other command the hub should not
+    lecture the user about installing Python.
     """
     explicit = (explicit or "").strip()
     if explicit:
@@ -65,8 +69,13 @@ def resolve_interpreter(explicit: str = "") -> tuple[str | None, str | None]:
         found = shutil.which(explicit)
         if found:
             return found, None
-        return None, f"interpreter not found: {explicit}"
+        return None, (
+            f"could not find “{explicit}”. Check the path, or put the tool on "
+            "your PATH."
+        )
 
+    # Nothing configured: only hunt for Python when the caller is asking about
+    # a Python command (see process_manager._looks_like_python).
     for candidate in interpreter_candidates():
         found = shutil.which(candidate)
         if found:

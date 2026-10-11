@@ -64,11 +64,12 @@ class ProjectDialog(QDialog):
 
         self.interp = QLineEdit(self._record.get("interpreter", ""))
         self.interp.setPlaceholderText(
-            "optional — e.g. .venv/bin/python or .venv\\Scripts\\python.exe"
+            "optional — e.g. .venv/bin/python, /opt/homebrew/bin/node, C:\\Python312\\python.exe"
         )
         interp_help = QLabel(
-            "Leave blank to use the system Python. Set this to run the project "
-            "in its own virtual environment."
+            "Any executable that should run your command. Leave blank to use whatever "
+            "the command names itself (python3, node, npm, go…). Use it for a "
+            "project's own virtual environment or a specific toolchain."
         )
         interp_help.setWordWrap(True)
         interp_help.setStyleSheet("color: gray; font-size: 11px;")
@@ -77,11 +78,19 @@ class ProjectDialog(QDialog):
         interp_box.setSpacing(2)
         interp_box.addWidget(self.interp)
         interp_box.addWidget(interp_help)
-        form.addRow("Python interpreter", self._wrap(interp_box))
+        form.addRow("Interpreter (optional)", self._wrap(interp_box))
 
         self.command = QLineEdit(self._record.get("command", ""))
-        self.command.setPlaceholderText("python3 server.py 8471")
+        self.command.setPlaceholderText("python3 server.py 8471  ·  npm run dev  ·  go run .")
         form.addRow("Startup command", self.command)
+
+        cmd_help = QLabel(
+            "Runs from the project folder. Python, Node, Go, Rust, a shell script — "
+            "whatever starts your dashboard."
+        )
+        cmd_help.setWordWrap(True)
+        cmd_help.setStyleSheet("color: gray; font-size: 11px;")
+        form.addRow("", cmd_help)
 
         self.env = QPlainTextEdit()
         self.env.setPlaceholderText("KEY=VALUE, one per line (optional)")
