@@ -1,0 +1,48 @@
+[tool.briefcase]
+project_name = "Local Project Hub"
+bundle = "local.projecthub"
+version = "0.1.0"
+url = "https://github.com/different2/local-project-hub"
+license = "MIT"
+license-files = ["LICENSE"]
+author = "Local Project Hub contributors"
+
+# macOS: the app icon and the runtime it ships with. QtWebEngine is required
+# (the dashboard panes are real embedded browsers), so PySide6-Addons must be
+# in the requires list or the packaged app cannot import QWebEngineView.
+# Briefcase appends the extension itself, so the value must NOT include it.
+icon = "assets/icon"
+
+requires = [
+    "PySide6-Essentials",
+    "PySide6-Addons",
+]
+
+# Python 3.11+ has wheels for arm64 macOS; 3.9 (the dev interpreter) does not,
+# so the packaged app runs a newer Python than the source checkout.
+requires_python = ">=3.11"
+
+test_requires = ["pytest"]
+
+[tool.briefcase.app.hub]
+formal_name = "Local Project Hub"
+long_description = "A control centre for locally hosted projects: register a folder, configure how it starts, and open its dashboard in one window."
+description = "Launcher for local web project dashboards"
+# Briefcase requires the app name to match an importable package; the code
+# lives in `hub`, so the app is named `hub` and main.py is the entry point.
+sources = ["hub", "main.py"]
+# Briefcase defaults to running the package itself (python -m hub), which
+# fails: `hub` is a package with no __main__. Point it at main.py instead.
+entry_point = "main.py"
+
+# The state directory is created at runtime in the per-user location; nothing
+# in the bundle is written to, so the app works when installed to /Applications.
+[tool.briefcase.app.hub.macOS]
+minimum_system_version = "12.0"
+# arm64 (Apple silicon) and x86_64 (Intel) — one universal build for both.
+universal_build = false
+
+[tool.briefcase.app.hub.windows]
+# Notarisation/signing are off until certificates exist; see README "Signing".
+# The installer format matches what the in-app updater expects to hand off to.
+installer_license = "LICENSE"
