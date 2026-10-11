@@ -144,6 +144,59 @@ def url_from_port(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}/"
 
 
+def url_host_port(url: str) -> tuple[str, int]:
+    """Split a URL into (host, port), filling in the scheme's default port."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url or "")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return host, port
+
+
+def port_in_use(port: int) -> bool:
+    """True when something is listening on the port.
+
+    Deliberately does NOT set SO_REUSEADDR: with it, bind() can succeed even
+    when another socket holds the port on macOS, so the check would report a
+    busy port as free and the guarded start would proceed into the very
+    "Address already in use" failure it is meant to prevent.
+    """
+    import socket
+
+    if not port:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
+def port_owners(port: int) -> set[int]:
+    """PIDs listening on the port, via lsof. Empty set when undeterminable."""
+    if not port:
+        return set()
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    pids = set()
+    for line in out.split():
+        if line.strip().isdigit():
+            pids.add(int(line.strip()))
+    return pids
+
+
 if __name__ == "__main__":
     samples = [
         "serving on http://localhost:8471  (assets list at /_assets-list)",

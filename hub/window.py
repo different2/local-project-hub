@@ -815,6 +815,16 @@ class HubWindow(QMainWindow):
         def _ready():
             _cleanup()
             if pid == self.active_id:
+                # A URL that answers is only THIS project's dashboard if this
+                # project's process is actually alive. Otherwise something else
+                # owns the port and we would be showing a stranger's page.
+                proc = self.procs.get(pid)
+                if proc is not None and proc.state != "running":
+                    self._append_log(
+                        f"[hub] {rec['url']} answered, but {rec['name']} is not running —\n"
+                        f"[hub] that page belongs to another process on the same port.\n"
+                    )
+                    return
                 self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n")
                 self._show_dashboard(rec)
         def _fail(reason: str):

@@ -161,7 +161,55 @@ def test_window_fills_in_and_saves_detected_url(tmp: Path) -> None:
         w.close()
 
 
-def test_configured_url_is_never_overwritten(tmp: Path) -> None:
+def test_port_conflict_refuses_to_start(tmp: Path) -> None:
+    """A taken port must not start a doomed process that dies confusingly.
+
+    Without this guard the new process dies with "Address already in use" and
+    the hub then reports the OTHER process's page as this project's dashboard,
+    which reads as a success.
+    """
+    port = 8814
+    srv_py = tmp / "holder.py"
+    srv_py.write_text(_SILENT_SERVER)
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Holder",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        rec = sm.validate(
+            {
+                "name": "Second",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+                "url": f"http://127.0.0.1:{port}/",
+            }
+        )
+        p2 = ProjectProcess(rec)
+        out = []
+        p2.output.connect(lambda t: out.append(t))
+        p2.start()
+        # The refusal may surface as either error or stopped depending on Qt's
+        # timing; what matters is that nothing was launched and the user was
+        # told why.
+        _wait_for(lambda: p2.state in ("error", "stopped"), timeout_s=10)
+        assert p2.state in ("error", "stopped"), p2.state
+        assert p2.proc is None or p2.proc.processId() == 0, "a process was launched anyway"
+        text = "".join(out)
+        assert "already in use" in text, text
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
+def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
     srv_py = tmp / "announce3.py"
