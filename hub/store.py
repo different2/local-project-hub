@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 
@@ -30,11 +31,30 @@ SCHEMA_VERSION = 1
 
 
 def default_config_dir() -> Path:
-    base = os.environ.get(
-        "LOCAL_PROJECT_HUB_HOME",
-        os.path.expanduser("~/Library/Application Support/LocalProjectHub"),
-    )
-    return Path(base)
+    """Per-user application state directory, resolved per platform.
+
+    Kept in one place (spec §3/§7) so platform differences never leak into
+    the rest of the app. LOCAL_PROJECT_HUB_HOME still overrides everything,
+    which is how the tests and `run.sh` stay isolated.
+    """
+    override = os.environ.get("LOCAL_PROJECT_HUB_HOME")
+    if override:
+        return Path(override)
+
+    system = sys.platform
+    if system == "darwin":
+        # macOS: the conventional per-user Application Support location.
+        return Path.home() / "Library" / "Application Support" / "LocalProjectHub"
+    if system.startswith("win"):
+        # Windows: LOCALAPPDATA is per-user and never touched by installers
+        # (Program Files is), which is what spec §7 requires.
+        local = os.environ.get("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / "LocalProjectHub"
+    # Linux and anything else: XDG, falling back to a dotfile in $HOME.
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "local-project-hub"
 
 
 def default_registry_path() -> Path:

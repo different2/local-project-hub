@@ -6,6 +6,7 @@ Run:  python3 -m pytest tests/ -q      (or: python3 tests/test_store.py)
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -120,6 +121,40 @@ def test_save_is_atomic_no_tmp_left_behind():
         p = Path(d) / "registry.json"
         assert not p.with_suffix(".json.tmp").exists()
         json.loads(p.read_text())  # valid json
+
+
+def test_env_override_wins():
+    """LOCAL_PROJECT_HUB_HOME must override the platform default."""
+    with tempfile.TemporaryDirectory() as d:
+        old = os.environ.get("LOCAL_PROJECT_HUB_HOME")
+        os.environ["LOCAL_PROJECT_HUB_HOME"] = d
+        try:
+            assert sm.default_config_dir() == Path(d)
+            assert sm.default_registry_path() == Path(d) / "registry.json"
+        finally:
+            if old is None:
+                os.environ.pop("LOCAL_PROJECT_HUB_HOME", None)
+            else:
+                os.environ["LOCAL_PROJECT_HUB_HOME"] = old
+
+
+def test_config_dir_is_per_platform():
+    """The platform default must follow the OS convention (release spec §3/§7)."""
+    old = os.environ.pop("LOCAL_PROJECT_HUB_HOME", None)
+    try:
+        d = sm.default_config_dir()
+        if sys.platform == "darwin":
+            assert "Library/Application Support" in str(d), d
+        elif sys.platform.startswith("win"):
+            assert "LocalProjectHub" in str(d), d
+            # must NOT be a system-wide path an installer could replace
+            assert "Program Files" not in str(d), d
+        else:
+            assert "local-project-hub" in str(d), d
+        assert d.is_absolute(), d
+    finally:
+        if old is not None:
+            os.environ["LOCAL_PROJECT_HUB_HOME"] = old
 
 
 if __name__ == "__main__":
