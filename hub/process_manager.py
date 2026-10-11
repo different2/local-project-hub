@@ -16,16 +16,30 @@ canonical case) need room to finish; a 3s hard kill destroys them mid-warm-up.
 
 from __future__ import annotations
 
-import shlex
 import time
 from collections import deque
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
+from .platform import resolve_interpreter, split_command
+
 LOG_HISTORY = 500
 
 # Grace given to a project to exit after SIGTERM before we escalate to SIGKILL.
 TERM_GRACE_MS = 20_000
+
+# Names that mean "whatever Python is installed" rather than a specific file.
+_PYTHON_NAMES = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
+
+
+def _looks_like_python(program: str) -> bool:
+    """True when the program is a generic Python name, not a real path."""
+    import os
+
+    base = os.path.basename(program or "").lower()
+    if os.sep in (program or "") or (os.altsep and os.altsep in (program or "")):
+        return False  # an explicit path is used as-is
+    return base in _PYTHON_NAMES
 
 
 class ProjectProcess(QObject):
@@ -81,7 +95,7 @@ class ProjectProcess(QObject):
         if self.proc is not None and self.proc.state() != QProcess.NotRunning:
             return  # already running/starting
         try:
-            argv = shlex.split(self.rec["command"])
+            argv = split_command(self.rec["command"])
         except ValueError as e:
             self.state_changed.emit("error")
             self.output.emit(f"[hub] cannot parse command: {e}\n")
@@ -90,8 +104,26 @@ class ProjectProcess(QObject):
             self.state_changed.emit("error")
             self.output.emit("[hub] empty command\n")
             return
+        # An explicitly configured interpreter wins over whatever the command
+        # names. This is what makes a project's own venv usable without typing
+        # its full path into every command (release spec §3: "discovering or
+        # selecting Python interpreters").
+        interpreter = (self.rec.get("interpreter") or "").strip()
+        if interpreter:
+            argv = [interpreter] + argv
         program, args = argv[0], argv[1:]
         env_mods = dict(self.rec.get("env") or {})
+
+        # A bare "python3" does not exist on Windows (the launcher is "python"
+        # or "py"), and the hub's own bundled interpreter must win when the
+        # command says "python3" but none is on PATH. Resolve it once here so
+        # the error the user sees names the fix instead of "file not found".
+        resolved, err = resolve_interpreter(program) if _looks_like_python(program) else (program, None)
+        if err:
+            self.state_changed.emit("error")
+            self.output.emit(f"[hub] {err}\n")
+            return
+        program = resolved or program
 
         proc = QProcess(self)
         proc.setProcessChannelMode(QProcess.MergedChannels)

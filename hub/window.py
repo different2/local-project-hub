@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -37,10 +40,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import store as store_mod
+from . import diagnostics as diagnostics_mod
+from . import launch_at_login, store as store_mod
+from .diagnostics import build_report, format_report, save_report
+from .platform import IS_MACOS, IS_WINDOWS
 from .process_manager import ProjectProcess
 from .project_dialog import ProjectDialog
 from .readiness import ReadinessWaiter
+from .updater import UpdateError, _asset_for_platform, fetch_latest_release, is_newer, verify_sha256
 
 _STATE_LABEL = {
     "stopped": "● stopped",
@@ -97,9 +104,312 @@ class HubWindow(QMainWindow):
         self._restore_last_project()
         self._autostart()
 
+    # ---------- menus: About / Preferences / Updates / Reports ----------
+
+    def _show_about(self) -> None:
+        from . import __version__
+        from .diagnostics import describe_platform_support
+
+        QMessageBox.about(
+            self,
+            "About Local Project Hub",
+            f"<h3>Local Project Hub</h3>"
+            f"<p>Version <b>{__version__}</b></p>"
+            f"<p>A control centre for locally hosted Python projects.</p>"
+            f"<p style='color: gray'>Supports {describe_platform_support()}.</p>",
+        )
+
+    def _show_preferences(self) -> None:
+        """Application preferences (release spec §4).
+
+        Launch-at-login is the one real setting today (spec §9). It is opt-in
+        and off by default, and toggling it off removes the registration.
+        """
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Preferences")
+        form = QVBoxLayout(dlg)
+
+        self.chk_launch = QCheckBox("Launch Local Project Hub at login")
+        self.chk_launch.setChecked(launch_at_login.is_enabled())
+        self.chk_launch.setToolTip("Starts the Hub when you log in. Off by default.")
+        self.chk_launch.toggled.connect(self._toggle_launch_at_login)
+        form.addWidget(self.chk_launch)
+
+        note = QLabel(
+            "Launching at login starts the Hub only. Projects are never "
+            "started automatically unless you tick 'Start automatically' on "
+            "the project itself."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        form.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dlg.reject)
+        buttons.accepted.connect(dlg.accept)
+        buttons.button(QDialogButtonBox.Close).clicked.connect(dlg.accept)
+        form.addWidget(buttons)
+        dlg.exec()
+
+    def _toggle_launch_at_login(self, on: bool) -> None:
+        ok, err = launch_at_login.set_enabled(on)
+        if not ok:
+            QMessageBox.warning(self, "Launch at login", err or "Could not change that setting.")
+            self.chk_launch.setChecked(launch_at_login.is_enabled())
+
+    def _check_for_updates(self) -> None:
+        """Help → Check for Updates (release spec §5)."""
+        self.status.showMessage("Checking for updates…")
+        result = {"release": None, "error": None}
+
+        def _work():
+            try:
+                result["release"] = fetch_latest_release()
+            except UpdateError as e:
+                result["error"] = str(e)
+            except Exception as e:  # never let a check crash the app
+                result["error"] = f"Update check failed: {e}"
+
+        def _done():
+            err, release = result["error"], result["release"]
+            if err:
+                self.status.clearMessage()
+                QMessageBox.information(self, "Check for Updates", err)
+                return
+            if not is_newer(release.version):
+                self.status.clearMessage()
+                QMessageBox.information(
+                    self,
+                    "Check for Updates",
+                    f"Local Project Hub {__version__} is up to date.",
+                )
+                return
+            self._offer_update(release)
+
+        self._run_offline_safe(_work, _done)
+
+    def _offer_update(self, release) -> None:
+        from .updater import summarize_release
+
+        asset = _asset_for_platform(release.assets)
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Update available")
+        msg.setText(summarize_release(release))
+        msg.setInformativeText(
+            "Download and install now?\n\n"
+            + (
+                f"The {asset.name} installer will open; your projects and "
+                "settings are kept."
+                if asset
+                else "No installer for this platform was published in this release yet."
+            )
+        )
+        download = msg.addButton("Download and Install", QMessageBox.AcceptRole)
+        msg.addButton("Later", QMessageBox.RejectRole)
+        if release.html_url:
+            msg.addButton("Open release page", QMessageBox.HelpRole)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked is download:
+            self._download_update(release, asset)
+        elif release.html_url and clicked is not None and msg.buttonRole(clicked) == QMessageBox.HelpRole:
+            QDesktopServices.openUrl(QUrl(release.html_url))
+
+    def _download_update(self, release, asset) -> None:
+        """Download to a temp file, verify, then hand off to the OS installer.
+
+        Never replaces the running executable in place (release spec §5): the
+        artifact is staged, integrity-checked, and the platform installer is
+        launched, which asks the user before touching anything.
+        """
+        if asset is None:
+            QMessageBox.warning(
+                self,
+                "Update",
+                "This release does not include an installer for your platform yet.",
+            )
+            return
+        self.status.showMessage(f"Downloading {asset.name}…")
+        self._append_log(f"[hub] downloading update {asset.name}")
+
+        def _work():
+            import tempfile
+            import urllib.request
+
+            dest = Path(tempfile.gettempdir()) / asset.name
+            try:
+                urllib.request.urlretrieve(asset.url, dest)
+            except Exception as e:
+                return None, f"Download failed: {e}"
+            if asset.sha256:
+                if not verify_sha256(dest, asset.sha256):
+                    return None, (
+                        "The downloaded file did not match its published checksum, "
+                        "so it was discarded."
+                    )
+            return dest, None
+
+        def _done(res):
+            dest, err = res if res else (None, "Download failed.")
+            if err:
+                self.status.clearMessage()
+                self._append_log(f"[hub] update failed: {err}")
+                QMessageBox.warning(self, "Update", err)
+                return
+            self.status.clearMessage()
+            self._append_log(f"[hub] update downloaded to {dest}")
+            self._launch_installer(dest)
+
+        self._run_offline_safe(_work, _done)
+
+    def _launch_installer(self, path: Path) -> None:
+        """Hand the artifact to the OS. The running app is never overwritten."""
+        try:
+            if IS_MACOS:
+                # Opening a .dmg mounts it; the user drags the app across.
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+                QMessageBox.information(
+                    self,
+                    "Install the update",
+                    "The disk image has been opened.\n\n"
+                    "Drag Local Project Hub over your existing copy to replace it, "
+                    "then reopen it. Your projects and settings are untouched.",
+                )
+            elif IS_WINDOWS:
+                # .msi/.exe installers elevate themselves when needed.
+                os.startfile(str(path))  # noqa: SLF001 - Windows-only, guarded
+                QMessageBox.information(
+                    self,
+                    "Install the update",
+                    "The installer has started.\n\n"
+                    "Follow its prompts; your projects and settings are kept. "
+                    "You can finish now and restart the Hub when it is done.",
+                )
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Update",
+                f"Could not start the installer automatically.\n\n"
+                f"The file is saved at:\n{path}\n\n({e})",
+            )
+
+    def _report_problem(self) -> None:
+        """Help → Report a Problem: save a report, or open a prefilled issue."""
+        from . import diagnostics
+
+        report = diagnostics.build_report(
+            log_tail=self.log_view.toPlainText(),
+            project_count=len(self.store.projects),
+        )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Report a problem")
+        box.setText(
+            "This creates a report with the app version, your operating system, "
+            "and the recent log.\n\n"
+            "It does <b>not</b> include your projects, their folders, commands, "
+            "or anything a dashboard was showing."
+        )
+        save_btn = box.addButton("Save report file…", QMessageBox.AcceptRole)
+        issue_btn = None
+        if diagnostics.issue_url(report):
+            issue_btn = box.addButton("Open in browser…", QMessageBox.HelpRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec()
+
+        if box.clickedButton() is save_btn:
+            path = diagnostics.save_report(report)
+            self.status.showMessage(f"Report saved to {path}", 8000)
+            self._append_log(f"[hub] error report saved to {path}")
+            QMessageBox.information(
+                self,
+                "Report saved",
+                f"Saved to:\n{path}\n\nAttach it wherever you were asked to send it.",
+            )
+        elif issue_btn is not None and box.clickedButton() is issue_btn:
+            url = diagnostics.issue_url(report)
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+
+    def _run_offline_safe(self, work, done) -> None:
+        """Run blocking work off the GUI thread, then apply the result.
+
+        Kept tiny on purpose: a QThread wrapper would be more code than the
+        two call sites need, and a crash inside `work` is reported rather than
+        taking the window down with it.
+        """
+        from PySide6.QtCore import QThread
+
+        class _Worker(QThread):
+            def __init__(self):
+                super().__init__()
+                self.result = None
+                self.failure = None
+
+            def run(self) -> None:
+                try:
+                    self.result = work()
+                except Exception as e:  # noqa: BLE001 - surfaced to the user
+                    self.failure = f"{type(e).__name__}: {e}"
+
+        worker = _Worker()
+        self._workers = getattr(self, "_workers", [])
+        self._workers.append(worker)
+
+        def _finish():
+            if worker.failure:
+                self.status.clearMessage()
+                QMessageBox.warning(self, "Something went wrong", worker.failure)
+                return
+            done(worker.result)
+
+        worker.finished.connect(_finish)
+        worker.start()
+
     # ---------- UI ----------
 
+    def _build_menus(self) -> None:
+        """Native application menus (release spec §4).
+
+        On macOS the app menu is prepended automatically; on Windows and Linux
+        the same items live under Help so the feature is discoverable either
+        way (spec §4: "following platform conventions").
+        """
+        menubar = self.menuBar()
+
+        # --- App / File ---
+        app_menu = menubar.addMenu("Local Project Hub") if IS_MACOS else menubar.addMenu("File")
+        act_about = QAction("About Local Project Hub", self)
+        act_about.triggered.connect(self._show_about)
+        app_menu.addAction(act_about)
+        app_menu.addSeparator()
+        act_prefs = QAction("Preferences…", self)
+        act_prefs.setMenuRole(QAction.PreferencesRole)
+        act_prefs.triggered.connect(self._show_preferences)
+        app_menu.addAction(act_prefs)
+        if IS_MACOS:
+            app_menu.addSeparator()
+            act_quit = QAction("Quit", self)
+            act_quit.setShortcut(QKeySequence.Quit)
+            act_quit.setMenuRole(QAction.QuitRole)
+            act_quit.triggered.connect(self.close)
+            app_menu.addAction(act_quit)
+
+        # --- Help ---
+        help_menu = menubar.addMenu("Help")
+        act_update = QAction("Check for Updates…", self)
+        act_update.triggered.connect(self._check_for_updates)
+        help_menu.addAction(act_update)
+        help_menu.addSeparator()
+        act_report = QAction("Report a Problem…", self)
+        act_report.triggered.connect(self._report_problem)
+        help_menu.addAction(act_report)
+
     def _build_ui(self) -> None:
+        self._build_menus()
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)

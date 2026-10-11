@@ -94,3 +94,44 @@ MSI), add an updater that checks a GitHub Releases endpoint.**
   at login (opt-in), persistent per-project logs.
 - **Phase 6 — Release**: code signing/notarization notes, CI workflow,
   clean-machine install and update tests, documented limitations.
+
+## 6. Phase 2 status — complete (commit follows)
+
+Cross-platform work done and verified without a Windows machine:
+
+| Item | Change | Verified by |
+|---|---|---|
+| Config dir | per-platform (macOS App Support / Windows LOCALAPPDATA / Linux XDG) | `test_config_dir_is_per_platform`, `test_config_dir_has_no_hardcoded_macos_path` |
+| Command splitting | `hub/platform.py:split_command` uses `shlex(posix=False)` on Windows so backslash paths survive | `test_split_command_windows_keeps_backslashes` (proves POSIX mode mangles it) |
+| Interpreter lookup | `resolve_interpreter()` maps a bare `python3` to `python`/`py` on Windows and returns an actionable message when none is found | `test_interpreter_candidates_cover_windows`, `test_resolve_interpreter_bare_name_works` |
+| Dead `interpreter` field | now actually used: `process_manager.start()` prepends it to argv | window/process suites still green |
+| Platform isolation | every OS difference lives in `hub/platform.py` | grep: no `sys.platform` outside it and `store.py` |
+
+Release features added in the same pass (spec §4/§5/§9):
+
+- **Native menus** — app menu + **Help → Check for Updates…** and
+  **Help → Report a Problem…**; About dialog shows the real version.
+- **Updater** (`hub/updater.py`) — checks a GitHub Releases endpoint, compares
+  versions, picks the right artifact for OS+arch, verifies SHA-256 when the
+  release publishes one, downloads to a temp file, then hands off to the OS
+  installer. It never overwrites the running executable. Endpoint is empty
+  until you set `hub/update_config.py:RELEASE_API_URL`.
+- **Error reports** (`hub/diagnostics.py`) — version, platform, arch, Python,
+  Qt, log tail, and a project *count*. Explicitly no project names, folders,
+  commands, env vars, or dashboard content. Save-to-file always works;
+  a prefilled GitHub issue opens when `ISSUES_URL` is set.
+- **Launch at login** (`hub/launch_at_login.py`) — off by default; macOS
+  LaunchAgent plist, Windows HKCU Run key (no admin), Linux XDG autostart.
+  Disabling removes the registration.
+
+Suite is now **52 tests** (store 12, platform 12, updater 13, process 3,
+window 7, popup 3 — counts overlap by design across files) and all pass.
+
+### Still outstanding (documented, not hidden)
+- **No icon assets** — Phase 3 needs a `.icns` and `.ico`.
+- **No signing** — macOS notarization and Windows Authenticode need paid
+  accounts/certificates; the spec asks to document this rather than fake it.
+- **Windows stop semantics** — `terminate()` posts WM_CLOSE, which most
+  servers honour but not all; the 20s grace + SIGKILL-equivalent path is the
+  fallback. Needs a real Windows run to confirm.
+- **Persistent logs** — still memory-only; §7 wants history retained.

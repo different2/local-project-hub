@@ -63,8 +63,21 @@ class ProjectDialog(QDialog):
         form.addRow("Project folder", self._wrap(row_wd))
 
         self.interp = QLineEdit(self._record.get("interpreter", ""))
-        self.interp.setPlaceholderText("blank = system python3; or .venv/bin/python")
-        form.addRow("Python interpreter", self.interp)
+        self.interp.setPlaceholderText(
+            "optional — e.g. .venv/bin/python or .venv\\Scripts\\python.exe"
+        )
+        interp_help = QLabel(
+            "Leave blank to use the system Python. Set this to run the project "
+            "in its own virtual environment."
+        )
+        interp_help.setWordWrap(True)
+        interp_help.setStyleSheet("color: gray; font-size: 11px;")
+        interp_box = QVBoxLayout()
+        interp_box.setContentsMargins(0, 0, 0, 0)
+        interp_box.setSpacing(2)
+        interp_box.addWidget(self.interp)
+        interp_box.addWidget(interp_help)
+        form.addRow("Python interpreter", self._wrap(interp_box))
 
         self.command = QLineEdit(self._record.get("command", ""))
         self.command.setPlaceholderText("python3 server.py 8471")
