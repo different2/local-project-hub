@@ -611,8 +611,10 @@ class HubWindow(QMainWindow):
                 f"[hub] {rec['name']} has no dashboard URL; starting it to detect one"
             )
             if proc.state != "running":
-                self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
-                proc.start()
+                # Must go through _start_active so the port-conflict check runs:
+                # calling proc.start() here skipped it and started straight into
+                # a guaranteed "Address already in use".
+                self._start_active()
             # Fallback for a server that never prints its address.
             self._scan_ports_after(rec, proc)
             return
@@ -653,6 +655,20 @@ class HubWindow(QMainWindow):
             self.procs[pid] = proc
         return self.procs[pid]
 
+    def _conflict_for_port(self, port: int, exclude: set[int]) -> dict | None:
+        """A conflict dict for `port`, or None if no foreign process holds it."""
+        owners = urldetect.port_owners(port)
+        foreign = owners - exclude
+        if not owners or not foreign:
+            return None
+        return {
+            "port": port,
+            "host": "127.0.0.1",
+            "holders": [
+                {"pid": p, "command": urldetect.process_command(p)} for p in sorted(foreign)
+            ],
+        }
+
     def _on_port_conflict_from_output(self, pid: str, port: int) -> None:
         """A project died because its port was taken — offer to end the holder.
 
@@ -663,32 +679,25 @@ class HubWindow(QMainWindow):
         proc = self.procs.get(pid)
         if proc is None:
             return
-        port = port or self._guess_taken_port(exclude=proc._own_pids())
-        if not port:
-            # The command names no port (e.g. "python3 obs_live.py" uses an
-            # in-script default), so there is nothing specific to offer.
+        own = proc._own_pids()
+        conflict = self._conflict_for_port(port, own) if port else None
+        if conflict is None:
+            # The command named no port (e.g. "python3 obs_live.py" uses an
+            # in-script default), so try the ports we do know about.
+            guess = self._guess_taken_port(exclude=own)
+            conflict = self._conflict_for_port(guess, own) if guess else None
+        if conflict is None:
+            # Nothing specific could be determined; say so plainly rather than
+            # staying silent.
             self._append_log(
                 "[hub] that process could not start because its port was already "
                 "in use.\n[hub] If another copy of this project is running, stop it "
                 "and press Start again."
             )
             return
-        owners = urldetect.port_owners(port)
-        foreign = owners - proc._own_pids()
-        if not owners or not foreign:
-            # Nobody (or only our own processes) holds it now — the conflict
-            # was with something already gone, so there is nothing to offer.
-            return
         rec = self.store.get(pid)
         if not rec:
             return
-        conflict = {
-            "port": port,
-            "host": "127.0.0.1",
-            "holders": [
-                {"pid": p, "command": urldetect.process_command(p)} for p in sorted(foreign)
-            ],
-        }
         self._offer_to_free_port(rec, proc, conflict)
 
     def _guess_taken_port(self, exclude: set[int]) -> int | None:
@@ -964,6 +973,14 @@ class HubWindow(QMainWindow):
         # version did this on a QThread, which deadlocked the process under a
         # PTY (the runner), hanging the app indefinitely.
         conflict = proc.port_conflict()
+        if not conflict and not rec.get("url"):
+            # No URL means port_conflict() had nothing to inspect. A project
+            # that binds a fixed default port (obs_live's 8787) is still
+            # detectable: if any port we know about is held by a foreign
+            # process, that is almost certainly the one this will fail on.
+            guess = self._guess_taken_port(exclude=proc._own_pids())
+            if guess:
+                conflict = self._conflict_for_port(guess, proc._own_pids())
         if conflict:
             self._offer_to_free_port(rec, proc, conflict)
             return
@@ -986,21 +1003,20 @@ class HubWindow(QMainWindow):
     def _can_show_dialog() -> bool:
         """Whether a modal dialog could actually be answered.
 
-        Offscreen/headless runs and the test runner under a PTY have no user to
-        click a QMessageBox, so asking there would block the app forever. Any
-        non-interactive environment gets the log-message path instead.
+        A GUI app launched from Finder/Dock has no controlling terminal, so
+        testing stdin for a tty wrongly reports "headless" and silently
+        downgrades the prompt to a log line. The real test is whether Qt is
+        running a GUI platform plugin and this window is on screen.
+
+        Only the explicitly headless platforms (offscreen/minimal, used by the
+        test suite) are refused.
         """
         import os
-        import sys
 
-        platform = os.environ.get("QT_QPA_PLATFORM", "")
+        platform = os.environ.get("QT_QPA_PLATFORM", "").lower()
         if platform in ("offscreen", "minimal", "vnc"):
             return False
-        # A PTY means a test runner is driving us, not a person.
-        try:
-            return os.isatty(sys.stdin.fileno()) or bool(os.environ.get("DISPLAY"))
-        except (OSError, ValueError):
-            return False
+        return True
 
     def _offer_to_free_port(self, rec: dict, proc: ProjectProcess, conflict: dict) -> None:
         """Ask whether to end the process holding this project's port.

@@ -344,6 +344,74 @@ def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
         _wait_for(lambda: holder.state == "stopped", timeout_s=25)
 
 
+def test_no_url_project_still_detects_the_conflict(tmp: Path) -> None:
+    """A project with NO url must still get the port-conflict treatment.
+
+    The user's case: "obsv" is `python3 obs_live.py` with no URL, so
+    port_conflict() has nothing to inspect. The port has to be recovered from
+    what is actually held — otherwise the hub starts it straight into a
+    guaranteed "Address already in use", which is exactly what happened.
+    """
+    port = 8818
+    srv_py = tmp / "obs.py"
+    srv_py.write_text(_SILENT_SERVER)
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Stray",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        st = sm.Store(tmp / "registry.json")
+        # a sibling that knows the port, and the user's bare no-URL entry
+        st.add(
+            sm.validate(
+                {
+                    "name": "Observability",
+                    "command": f"{sys.executable} {srv_py}",
+                    "url": f"http://127.0.0.1:{port}/",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+        no_url = st.add(
+            sm.validate(
+                {
+                    "name": "obsv",
+                    "command": f"{sys.executable} {srv_py}",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+        w = HubWindow(st)
+        w.show()
+        offered = []
+        w._offer_to_free_port = lambda rec, proc, conflict: offered.append(conflict)
+        try:
+            w.active_id = no_url["id"]
+            w._start_active()
+            assert offered, (
+                "a no-URL project whose port was taken was started anyway "
+                "(no conflict detected)"
+            )
+            assert offered[0]["port"] == port, offered[0]
+            holder_pid = holder.proc.processId() if holder.proc else None
+            assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
+            # and it must NOT have been launched into the failure
+            assert w._proc_for(no_url).state != "running", "it was started anyway"
+        finally:
+            w.close()
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
