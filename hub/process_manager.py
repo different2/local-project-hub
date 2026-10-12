@@ -151,6 +151,18 @@ class ProjectProcess(QObject):
             self.state_changed.emit("error")
             self.output.emit("[hub] empty command\n")
             return
+        # Extra arguments are appended AFTER the command, so a project's own
+        # flags can be set once without being retyped into the command box
+        # (e.g. "--no-open" to stop a server opening its own browser, since the
+        # hub already shows the dashboard in its own tab).
+        extra = (self.rec.get("args") or "").strip()
+        if extra:
+            try:
+                argv = argv + split_command(extra)
+            except ValueError as e:
+                self.state_changed.emit("error")
+                self.output.emit(f"[hub] cannot parse extra arguments: {e}\n")
+                return
         # An explicitly configured interpreter wins over whatever the command
         # names. This is what makes a project's own venv usable without typing
         # its full path into every command (release spec §3: "discovering or

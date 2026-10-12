@@ -160,7 +160,16 @@ class Store:
         return n
 
 
-_STR_FIELDS = ("name", "description", "icon", "working_dir", "interpreter", "command", "url")
+_STR_FIELDS = (
+    "name",
+    "description",
+    "icon",
+    "working_dir",
+    "interpreter",
+    "command",
+    "args",
+    "url",
+)
 _BOOL_FIELDS = ("autostart",)
 
 

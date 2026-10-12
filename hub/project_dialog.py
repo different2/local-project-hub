@@ -101,6 +101,26 @@ class ProjectDialog(QDialog):
         )
         form.addRow("Env vars", self.env)
 
+        # Extra arguments, appended after the command. Deliberately NOT
+        # auto-injected: the hub cannot know which flag a given server uses to
+        # suppress its own browser ("--no-open" here, "--no-reload" for flask,
+        # nothing at all for npm), so guessing would corrupt commands.
+        self.args = QLineEdit(self._record.get("args", ""))
+        self.args.setPlaceholderText("--no-open")
+        args_help = QLabel(
+            "Appended to the command. Useful for flags you do not want to retype: "
+            "most servers have one that stops them opening their own browser, since "
+            "the Hub already shows the dashboard in its own tab."
+        )
+        args_help.setWordWrap(True)
+        args_help.setStyleSheet("color: gray; font-size: 11px;")
+        args_box = QVBoxLayout()
+        args_box.setContentsMargins(0, 0, 0, 0)
+        args_box.setSpacing(2)
+        args_box.addWidget(self.args)
+        args_box.addWidget(args_help)
+        form.addRow("Extra arguments (optional)", self._wrap(args_box))
+
         self.url = QLineEdit(self._record.get("url", ""))
         self.url.setPlaceholderText("leave blank to detect it automatically")
         url_help = QLabel(
@@ -154,6 +174,7 @@ class ProjectDialog(QDialog):
                 "working_dir": self.wd.text().strip(),
                 "interpreter": self.interp.text().strip(),
                 "command": self.command.text().strip(),
+                "args": self.args.text().strip(),
                 "url": self.url.text().strip(),
                 "autostart": self.autostart.isChecked(),
                 "env": self._parse_env(self.env.toPlainText()),

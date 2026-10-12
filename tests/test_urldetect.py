@@ -412,6 +412,51 @@ def test_no_url_project_still_detects_the_conflict(tmp: Path) -> None:
         _wait_for(lambda: holder.state == "stopped", timeout_s=25)
 
 
+def test_extra_args_reach_the_command(tmp: Path) -> None:
+    """The args field must be appended to argv, not stored and forgotten.
+
+    This is how a project's own flags (e.g. --no-open) get set once instead of
+    being retyped into the command box. An earlier version of the hub stored an
+    "interpreter" field the launcher never read; this guards against that.
+    """
+    echo_py = tmp / "echo.py"
+    echo_py.write_text("import sys\nprint('ARGV=' + ' '.join(sys.argv[1:]), flush=True)\n")
+    rec = sm.validate(
+        {
+            "name": "Args",
+            "command": f"{sys.executable} {echo_py}",
+            "args": "--no-open",
+            "working_dir": str(tmp),
+        }
+    )
+    assert rec["args"] == "--no-open", "args did not survive validation"
+    p = ProjectProcess(rec)
+    out = []
+    p.output.connect(lambda t: out.append(t))
+    p.start()
+    try:
+        got = _wait_for(lambda: "ARGV=" in "".join(out), timeout_s=20)
+        assert got, f"server never reported its argv: {''.join(out)!r}"
+        assert "--no-open" in "".join(out), "".join(out)
+    finally:
+        p.stop()
+        _wait_for(lambda: p.state == "stopped", timeout_s=20)
+
+
+def test_dialog_exposes_an_args_field() -> None:
+    """The Add/Edit dialog must actually offer the field it writes.
+
+    Guards the regression where a field was persisted but the dialog never
+    showed it (so users could not set it) — the QLabel-import class of bug.
+    """
+    from hub.project_dialog import ProjectDialog
+
+    d = ProjectDialog(base_dir="/tmp")
+    assert hasattr(d, "args"), "dialog has no args field"
+    d.args.setText("--no-open")
+    assert d.args.text().strip() == "--no-open"
+
+
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
