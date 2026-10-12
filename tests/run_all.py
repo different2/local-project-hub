@@ -43,6 +43,7 @@ SUITES = [
     ("test_window_e2e.py", True),
     ("test_popup_bridge.py", True),
     ("test_urldetect.py", True),
+    ("test_detect_type.py", False),
     ("test_version.py", False),
 ]
 

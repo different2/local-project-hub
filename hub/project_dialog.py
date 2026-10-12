@@ -27,8 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from . import store as store_mod
+from .detect_type import DISPLAY, detect as _detect_type
 
 _ICONS = ["🌐", "🧪", "📈", "🎮", "🎨", "🧭", "🛠️", "📚", "🤖", "⬜"]
+
+
+def _display_for(kind: str) -> str:
+    return DISPLAY.get(kind, DISPLAY["unknown"])
 
 
 class ProjectDialog(QDialog):
@@ -141,6 +146,36 @@ class ProjectDialog(QDialog):
         self.autostart.setChecked(self._record.get("autostart", False))
         form.addRow("", self.autostart)
 
+        # ---------- automatic detection (spec §5) ----------
+        # Shown live as the user types, so setup is informative without adding
+        # questions. Detection is best-effort: a low-confidence or "unknown"
+        # result is reported as such, and the type can be overridden below.
+        self.detection = QLabel("Type a command to see what the Hub detected…")
+        self.detection.setWordWrap(True)
+        self.detection.setStyleSheet("color: gray; font-size: 11px;")
+        det_box = QVBoxLayout()
+        det_box.setContentsMargins(0, 0, 0, 0)
+        det_box.setSpacing(2)
+        det_box.addWidget(self.detection)
+        form.addRow("Detected", self._wrap(det_box))
+
+        self.type_override = QComboBox()
+        self.type_override.addItems(["detect automatically", "web", "static", "desktop", "cli"])
+        current = self._record.get("type_override") or ""
+        self.type_override.setCurrentText(current or "detect automatically")
+        override_help = QLabel(
+            "Override only if the detection above is wrong. Your choice is saved and "
+            "reused; leave it on automatic otherwise."
+        )
+        override_help.setWordWrap(True)
+        override_help.setStyleSheet("color: gray; font-size: 11px;")
+        ov_box = QVBoxLayout()
+        ov_box.setContentsMargins(0, 0, 0, 0)
+        ov_box.setSpacing(2)
+        ov_box.addWidget(self.type_override)
+        ov_box.addWidget(override_help)
+        form.addRow("Project type", self._wrap(ov_box))
+
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -148,6 +183,48 @@ class ProjectDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self.buttons)
+
+        # Re-run detection whenever the fields it depends on change.
+        self.command.textChanged.connect(self._refresh_detection)
+        self.args.textChanged.connect(self._refresh_detection)
+        self.wd.textChanged.connect(self._refresh_detection)
+        self.type_override.currentIndexChanged.connect(self._refresh_detection)
+        self._refresh_detection()
+
+    def _refresh_detection(self) -> None:
+        """Show what the Hub currently believes about this project."""
+        override = self.type_override.currentText()
+        manual = override in ("web", "static", "desktop", "cli")
+        try:
+            det = _detect_type(
+                {
+                    "command": self.command.text().strip(),
+                    "args": self.args.text().strip(),
+                    "working_dir": self.wd.text().strip(),
+                }
+            )
+        except Exception:
+            # Detection is advisory; a failure here must never block the dialog.
+            self.detection.setText("Could not inspect this project.")
+            return
+        if manual:
+            kind = override
+            self.detection.setText(
+                f"Using your choice: {kind}. Will be shown as {_display_for(kind)}."
+            )
+            return
+        if not self.command.text().strip():
+            self.detection.setText("Type a command to see what the Hub detected…")
+            return
+        bits = [f"Type: {det.type} (confidence {det.confidence:.0%})"]
+        if det.framework:
+            bits.append(f"framework: {det.framework}")
+        if det.port:
+            bits.append(f"port: {det.port}")
+        bits.append(f"will be shown as {det.display}")
+        if det.type == "unknown":
+            bits.append("— the Hub could not tell; it will just run this command")
+        self.detection.setText(" · ".join(bits))
 
     @staticmethod
     def _wrap(layout) -> QWidget:
@@ -166,6 +243,21 @@ class ProjectDialog(QDialog):
         if self.result() != QDialog.Accepted:
             return None
         rec = dict(self._record)
+        override = self.type_override.currentText()
+        manual = override in ("web", "static", "desktop", "cli")
+        # Detection is stored BESIDE the record; the user's command is never
+        # rewritten with generated flags (spec §6).
+        det = _detect_type(
+            {
+                "command": self.command.text().strip(),
+                "args": self.args.text().strip(),
+                "working_dir": self.wd.text().strip(),
+            }
+        )
+        if manual:
+            det.type = override
+            det.display = _display_for(override)
+            det.evidence = list(det.evidence) + [f"user override: {override}"]
         rec.update(
             {
                 "name": self.name.text().strip(),
@@ -178,6 +270,8 @@ class ProjectDialog(QDialog):
                 "url": self.url.text().strip(),
                 "autostart": self.autostart.isChecked(),
                 "env": self._parse_env(self.env.toPlainText()),
+                "detected": det.as_dict(),
+                "type_override": override if manual else "",
             }
         )
         return store_mod.validate(rec)

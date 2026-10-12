@@ -27,7 +27,29 @@ import sys
 import uuid
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+def migrate_to_v2(rec: dict) -> dict:
+    """Add the v2 `detected` block to a v1 record, with safe defaults.
+
+    Existing registries have no `detected` key at all. Rather than re-running
+    detection on load (which would re-read files and could change a user's
+    saved choices), an absent block becomes an explicit "unknown" so the app
+    can tell "never inspected" from "inspected and inconclusive" (spec §7).
+    """
+    rec = dict(rec)
+    if not isinstance(rec.get("detected"), dict):
+        rec["detected"] = {
+            "type": "unknown",
+            "confidence": 0.0,
+            "framework": "",
+            "port": None,
+            "browser": "",
+            "display": "runs in the background (type unknown)",
+            "evidence": ["migrated from a registry without detection data"],
+        }
+    return rec
 
 
 def default_config_dir() -> Path:
@@ -89,11 +111,22 @@ class Store:
             raise RegistryError(f"could not read registry {self.path}: {e}") from e
         version = raw.get("version", SCHEMA_VERSION)
         if version != SCHEMA_VERSION:
-            raise RegistryError(
-                f"registry version {version} != {SCHEMA_VERSION}; "
-                "move it aside and re-register your projects"
-            )
+            if version == 1 and SCHEMA_VERSION == 2:
+                # v1 -> v2 is additive and safe: fill the new `detected` block
+                # with honest "unknown" defaults rather than refusing to load a
+                # registry the user has already populated (spec §7).
+                pass
+            else:
+                raise RegistryError(
+                    f"registry version {version} != {SCHEMA_VERSION}; "
+                    "move it aside and re-register your projects"
+                )
         for rec in raw.get("projects", []):
+            # Migrate BEFORE validate: validate() normalises the `detected`
+            # block, and running it on a v1 record would replace the migration's
+            # honest "unknown" with a blank one.
+            if version == 1:
+                rec = migrate_to_v2(rec)
             rec = validate(rec)
             self.projects[rec["id"]] = rec
 
@@ -186,6 +219,35 @@ def validate(rec: dict) -> dict:
     if not isinstance(env, dict):
         raise RegistryError("env must be an object of KEY: VALUE")
     out["env"] = {str(k): str(v) for k, v in env.items()}
+
+    # Detection results are stored BESIDE the record, never merged into it, so
+    # the user's original command stays verbatim (spec §6: "do not overwrite
+    # the original command with automatically generated flags").
+    #
+    # Detection is (re)run HERE rather than only in the dialog, so a record
+    # added by any path — the dialog, import_json, the API — gets classified
+    # identically. A record that already carries a `detected` block is trusted
+    # unless it has no evidence at all, so a saved result is not recomputed on
+    # every load (spec §6: "reuse the saved configuration").
+    from .detect_type import detect as _detect, Detection
+
+    existing = rec.get("detected")
+    if isinstance(existing, dict) and existing.get("evidence"):
+        det = Detection.from_dict(existing)
+    else:
+        try:
+            det = _detect(rec)
+        except Exception:
+            # Detection is advisory and must never block saving a project.
+            det = Detection()
+    # A user override wins over anything detected; it is explicit intent.
+    override = rec.get("type_override")
+    if isinstance(override, str) and override:
+        det.type = override
+        det.evidence = list(det.evidence) + [f"user override: {override}"]
+        det.display = Detection.from_dict({"type": override}).display
+    out["detected"] = det.as_dict()
+    out["type_override"] = str(rec.get("type_override") or "")
 
     if not out["name"].strip():
         raise RegistryError("project needs a name")

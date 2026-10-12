@@ -1,0 +1,441 @@
+"""Classify a project from its command and files, so the Hub launches it right.
+
+The spec's central insight is that a project's launch behavior follows from its
+TYPE, and the type is inferable from evidence that costs nothing to collect:
+the command line, the entry script, and the project's own manifest files
+(pyproject.toml, package.json, requirements.txt).
+
+Classification is best-effort and never authoritative. Every consumer must
+treat "unknown" as a real answer, not a failure to be papered over.
+
+What this module deliberately does NOT do:
+
+- It never executes project code to inspect it (spec §7). Reading files and
+  parsing text is passive; running `npm install` or importing a module is not.
+- It never rewrites the user's command (spec §6). Detected settings are stored
+  alongside it under `detected`, so the original stays verbatim.
+- It never injects a framework flag on a guess (spec §2). `--no-open` belongs
+  to obs_live.py, Flask uses `--no-reload`, Vite uses `--open false`, and npm
+  has no equivalent. Appending one blindly corrupts commands.
+
+Types (spec §1):
+
+  web      starts a local HTTP server serving a web interface
+  static   serves/displays HTML, CSS and JS files
+  desktop  opens its own native window
+  cli      runs headless, no user-facing UI
+  unknown  not enough evidence to say
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+
+# The type strings, in the order they appear in the spec.
+WEB = "web"
+STATIC = "static"
+DESKTOP = "desktop"
+CLI = "cli"
+UNKNOWN = "unknown"
+
+TYPES = (WEB, STATIC, DESKTOP, CLI, UNKNOWN)
+
+# What the Hub does with each type: how it should be shown to the user.
+DISPLAY = {
+    WEB: "embedded web view",
+    STATIC: "embedded web view (served locally)",
+    DESKTOP: "launches its own window",
+    CLI: "runs in the background",
+    UNKNOWN: "runs in the background (type unknown)",
+}
+
+
+@dataclass
+class Detection:
+    """Best-effort classification plus the evidence that produced it.
+
+    `confidence` is a plain 0.0-1.0 score so callers can decide when to ask the
+    user versus acting on it (spec §5: "prefer automatic configuration without
+    additional questions when the evidence is sufficient").
+    """
+
+    type: str = UNKNOWN
+    confidence: float = 0.0
+    framework: str = ""
+    port: int | None = None
+    browser: str = ""  # "known-suppressible" | "none" | "unknown"
+    display: str = DISPLAY[UNKNOWN]
+    evidence: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "Detection":
+        """Rebuild from a persisted record, tolerating missing/unknown keys.
+
+        Existing registry entries have no `detected` block at all, so this must
+        never raise (spec §7: "migrate existing project records safely").
+        """
+        data = data or {}
+        t = data.get("type") or UNKNOWN
+        if t not in TYPES:
+            t = UNKNOWN
+        port = data.get("port")
+        try:
+            port = int(port) if port else None
+        except (TypeError, ValueError):
+            port = None
+        try:
+            conf = float(data.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        return cls(
+            type=t,
+            confidence=min(max(conf, 0.0), 1.0),
+            framework=str(data.get("framework") or ""),
+            port=port,
+            browser=str(data.get("browser") or ""),
+            display=str(data.get("display") or DISPLAY.get(t, DISPLAY[UNKNOWN])),
+            evidence=list(data.get("evidence") or []),
+        )
+
+
+# ---------- framework knowledge ----------
+
+# Command-line tokens that mean "run a dev/HTTP server".
+_SERVER_TOKENS = (
+    "serve",
+    "server",
+    "http.server",
+    "runserver",
+    "dev",
+    "start",
+    "start:web",
+    "uvicorn",
+    "gunicorn",
+    "waitress-serve",
+    "hypercorn",
+    "flask run",
+    "manage.py runserver",
+    "app.run",
+)
+
+# Command-line tokens that mean "open a GUI window". Deliberately does NOT
+# include a bare "app.py": that is far more often a web entry point than a GUI
+# one, and guessing desktop there hid real web projects.
+_DESKTOP_TOKENS = (
+    "pyqt",
+    "pyside",
+    "tkinter",
+    "kivy",
+    "electron",
+    "tauri",
+    "customtkinter",
+)
+
+# Frameworks whose documented flag genuinely suppresses the auto-open. A
+# framework with no such option is simply absent: offering a guessed flag is
+# worse than leaving a redundant browser window (spec §2).
+BROWSER_FLAGS = {
+    "streamlit": "--server.headless true",
+    "panel": "--no-browser",
+    "jupyter": "--no-browser",
+    "marimo": "--headless",
+    "shiny": "--launch-browser false",
+}
+
+# Python packages that imply a web app, from the most to least specific.
+_WEB_DEPS = (
+    "flask",
+    "django",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "bottle",
+    "tornado",
+    "aiohttp",
+    "sanic",
+    "pyramid",
+    "streamlit",
+    "gradio",
+    "dash",
+    "panel",
+    "bokeh",
+    "nicegui",
+    "reflex",
+)
+
+# Python packages that imply a native GUI app.
+_DESKTOP_DEPS = (
+    "pyside6",
+    "pyqt5",
+    "pyqt6",
+    "pyside2",
+    "tkinter",
+    "kivy",
+    "wxpython",
+    "pygobject",
+    "customtkinter",
+    "eel",
+)
+
+# npm dependencies that imply a dev server.
+_WEB_NPM_DEPS = (
+    "vite",
+    "next",
+    "react-scripts",
+    "@angular/cli",
+    "vue-cli-service",
+    "webpack-dev-server",
+    "parcel",
+    "nuxt",
+    "svelte-kit",
+    "astro",
+    "gatsby",
+    "remix",
+)
+
+# npm scripts that conventionally start a dev server.
+_WEB_SCRIPTS = ("dev", "start", "serve", "preview")
+
+# npm packages that imply a native app.
+_DESKTOP_NPM = ("electron", "tauri", "@tauri-apps/cli")
+
+# Port arguments, in the forms projects actually use:
+#   --port 8080  --port=8080  -p 8080  :8080
+# and a bare trailing number ("python3 -m http.server 8080"), which is how
+# http.server and many one-off scripts take their port.
+_PORT_FLAG_RE = re.compile(r"(?:--port[=\s]+|-p[=\s]+|:)(\d{2,5})\b")
+_PORT_TRAILING_RE = re.compile(r"(?:^|\s)(\d{2,5})\s*$")
+
+
+def _port_from_command(text: str) -> int | None:
+    for pattern in (_PORT_FLAG_RE, _PORT_TRAILING_RE):
+        m = pattern.search(text or "")
+        if not m:
+            continue
+        try:
+            p = int(m.group(1))
+        except ValueError:
+            continue
+        if 1024 <= p <= 65535:
+            return p
+    return None
+
+
+def detect(record: dict) -> Detection:
+    """Classify a project record. Never raises; returns UNKNOWN when unsure.
+
+    `record` is a project dict (command, working_dir, args). Only its files and
+    text are read — nothing is executed (spec §7).
+    """
+    command = str(record.get("command") or "")
+    args = str(record.get("args") or "")
+    cwd = str(record.get("working_dir") or "")
+    haystack = f"{command} {args}".lower()
+
+    det = Detection()
+    det.port = _port_from_command(f"{command} {args}")
+
+    # 1. Explicit desktop markers are the strongest signal.
+    if any(t in haystack for t in _DESKTOP_TOKENS):
+        det.type = DESKTOP
+        det.confidence = 0.7
+        det.browser = "none"
+        det.display = DISPLAY[DESKTOP]
+        det.evidence.append(f"command names a GUI toolkit: {command!r}")
+        _enrich_from_deps(det, cwd)
+        return det
+
+    # 2. A python -m http.server (or any bare serve) is a static site.
+    if re.search(r"http\.server|python.*-m\s+serve|http-server|live-server|serve\b", haystack):
+        det.type = STATIC
+        det.confidence = 0.8
+        det.browser = "unknown"
+        det.display = DISPLAY[STATIC]
+        det.evidence.append("command serves files over HTTP")
+        _enrich_from_deps(det, cwd)
+        return det
+
+    # 3. An npm/yarn/pnpm script that means "dev server".
+    if _is_npm_dev_command(haystack):
+        det.type = WEB
+        det.confidence = 0.85
+        det.browser = "unknown"
+        det.display = DISPLAY[WEB]
+        det.evidence.append("command runs a package.json dev/serve script")
+        _enrich_from_npm(det, cwd)
+        return det
+
+    # 4. A python entry point: decide web vs cli from its dependencies.
+    if _is_python(haystack) or cwd:
+        dep_kind, framework = _inspect_python_project(cwd, command)
+        if dep_kind == WEB:
+            det.type = WEB
+            det.confidence = 0.8
+            det.framework = framework
+            det.browser = "known-suppressible" if framework in BROWSER_FLAGS else "unknown"
+            det.display = DISPLAY[WEB]
+            det.evidence.append(
+                f"python project depends on a web framework ({framework or 'unrecognised'})"
+            )
+            return det
+        if dep_kind == DESKTOP:
+            det.type = DESKTOP
+            det.confidence = 0.8
+            det.framework = framework
+            det.browser = "none"
+            det.display = DISPLAY[DESKTOP]
+            det.evidence.append(f"python project depends on a GUI toolkit ({framework})")
+            return det
+
+    # 5. A server-ish token in the command, but no framework evidence.
+    if any(t in haystack for t in _SERVER_TOKENS):
+        det.type = WEB
+        det.confidence = 0.5
+        det.browser = "unknown"
+        det.display = DISPLAY[WEB]
+        det.evidence.append("command looks like it starts a server")
+        return det
+
+    # An entry point whose NAME says server/API/app-wsgi is weak-but-real web
+    # evidence. A bare script with a neutral name is NOT: calling that "cli"
+    # would be a guess, and "unknown" is the honest answer (spec §1).
+    if re.search(r"\b(srv|server|api|app|wsgi|web|dashboard|ui)\.py\b", haystack):
+        det.type = WEB
+        det.confidence = 0.45
+        det.browser = "unknown"
+        det.display = DISPLAY[WEB]
+        det.evidence.append("entry point name suggests a server")
+        return det
+
+    # 6. Nothing web-like was found. A python command running a script is
+    # headless by convention, so "cli" is fair. Anything else — a binary or
+    # script the hub does not recognise — is genuinely UNKNOWN: claiming "cli"
+    # there would assert knowledge it does not have (spec §1).
+    if command.strip():
+        if _is_python(haystack) or cwd:
+            det.type = CLI
+            det.confidence = 0.4
+            det.browser = "none"
+            det.display = DISPLAY[CLI]
+            det.evidence.append("python project with no web or GUI dependency")
+        else:
+            det.type = UNKNOWN
+            det.confidence = 0.0
+            det.browser = "unknown"
+            det.display = DISPLAY[UNKNOWN]
+            det.evidence.append("no web, GUI or server evidence found")
+    return det
+
+
+def browser_suppress_args(det: Detection) -> str:
+    """The documented flag that stops this framework opening a browser, or "".
+
+    Returns "" for anything not in BROWSER_FLAGS. Guessing here is exactly what
+    spec §2 forbids: an unknown flag is worse than an extra browser window,
+    because it can break the command outright.
+    """
+    if not det or det.browser != "known-suppressible":
+        return ""
+    return BROWSER_FLAGS.get(det.framework, "")
+
+
+def _is_python(haystack: str) -> bool:
+    return bool(re.search(r"\bpython[0-9.]*\b|\.py\b|pip|conda|poetry|uv\b", haystack))
+
+
+def _is_npm_dev_command(haystack: str) -> bool:
+    if not re.search(r"\b(npm|yarn|pnpm|bun)\b", haystack):
+        return False
+    return any(f" {s}" in f" {haystack} " or s in haystack for s in ("dev", "start", "serve"))
+
+
+def _enrich_from_deps(det: Detection, cwd: str) -> None:
+    """Fill in a framework name from a python project's manifests."""
+    if not cwd:
+        return
+    base = Path(cwd)
+    for name in ("pyproject.toml", "requirements.txt", "setup.py", "Pipfile"):
+        f = base / name
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            continue
+        for dep in _WEB_DEPS:
+            if dep in text:
+                det.framework = det.framework or dep
+                det.evidence.append(f"{name} mentions {dep}")
+                if det.type == DESKTOP and dep not in _DESKTOP_DEPS:
+                    # A GUI command with a web dep is ambiguous; leave the type.
+                    pass
+                return
+        for dep in _DESKTOP_DEPS:
+            if dep in text:
+                det.framework = det.framework or dep
+                det.evidence.append(f"{name} mentions {dep}")
+                return
+
+
+def _inspect_python_project(cwd: str, command: str) -> tuple[str, str]:
+    """Decide web / desktop / nothing for a python project. (kind, framework)."""
+    base = Path(cwd) if cwd else None
+    text = (command or "").lower()
+    for name in ("pyproject.toml", "requirements.txt", "setup.py", "Pipfile"):
+        f = (base / name) if base else None
+        if f and f.is_file():
+            try:
+                text += "\n" + f.read_text(encoding="utf-8", errors="replace").lower()
+            except OSError:
+                pass
+    if not text.strip():
+        return "", ""
+    for dep in _WEB_DEPS:
+        if dep in text:
+            return WEB, dep
+    for dep in _DESKTOP_DEPS:
+        if dep in text:
+            return DESKTOP, dep
+    return "", ""
+
+
+def _enrich_from_npm(det: Detection, cwd: str) -> None:
+    """Fill in a framework name from package.json."""
+    if not cwd:
+        return
+    f = Path(cwd) / "package.json"
+    if not f.is_file():
+        return
+    try:
+        pkg = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return
+    deps = {}
+    for key in ("dependencies", "devDependencies"):
+        d = pkg.get(key)
+        if isinstance(d, dict):
+            deps.update(d)
+    for dep in _WEB_NPM_DEPS:
+        if dep in deps:
+            det.framework = dep
+            det.evidence.append(f"package.json depends on {dep}")
+            return
+    scripts = pkg.get("scripts") or {}
+    for s in _WEB_SCRIPTS:
+        if s in scripts:
+            det.evidence.append(f"package.json has a {s!r} script")
+            return
+    for dep in _DESKTOP_NPM:
+        if dep in deps:
+            det.framework = dep
+            det.type = DESKTOP
+            det.display = DISPLAY[DESKTOP]
+            det.browser = "none"
+            det.evidence.append(f"package.json depends on {dep} (native app)")
+            return

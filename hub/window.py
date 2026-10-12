@@ -587,7 +587,25 @@ class HubWindow(QMainWindow):
         return w if isinstance(w, HubWebView) else None
 
     def _open_project_tab(self, rec: dict) -> None:
-        """Open (or focus) a tab holding this project's own dashboard view."""
+        """Open (or focus) a tab holding this project's own dashboard view.
+
+        A DESKTOP project is not shown in a webview at all: it opens its own
+        native window, so forcing it into an embedded browser would show a blank
+        pane next to the real window (spec §4). It is started, and its log is
+        still visible, but no tab is created for it.
+        """
+        kind = (rec.get("detected") or {}).get("type") or ""
+        if kind == "desktop":
+            self._append_log(
+                f"[hub] {rec['name']} looks like a desktop app — starting it in its "
+                f"own window, not in a tab"
+            )
+            self.status.showMessage(f"{rec['name']} launched in its own window")
+            proc = self._proc_for(rec)
+            if proc.state != "running":
+                self._start_active()
+            return
+
         view = HubWebView()
         view.setProperty("hub_project_id", rec["id"])
         view.popup_opened.connect(self._on_popup_opened)
