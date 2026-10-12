@@ -154,6 +154,76 @@ def url_host_port(url: str) -> tuple[str, int]:
     return host, port
 
 
+def process_command(pid: int) -> str:
+    """The command line for a PID, or "" when it cannot be read.
+
+    Used to show the user WHAT is holding a port before offering to kill it.
+    """
+    if not pid:
+        return ""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=6,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.splitlines()[0].strip() if out else ""
+
+
+def kill_process(pid: int, timeout_s: float = 4.0) -> bool:
+    """End a process, politely then firmly. True if it is gone.
+
+    SIGTERM first so the process can clean up (close sockets, flush logs);
+    SIGKILL only if it is still there after `timeout_s`. Used only after the
+    user has confirmed they want the process ended.
+    """
+    import os
+    import signal
+    import subprocess
+    import time
+
+    if not pid or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        # Already gone, or not ours to signal — either way nothing to wait for.
+        return True
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not _process_alive(pid):
+            return True
+        time.sleep(0.2)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        return True
+    time.sleep(0.3)
+    return not _process_alive(pid)
+
+
+def _process_alive(pid: int) -> bool:
+    import subprocess
+
+    try:
+        return (
+            subprocess.run(
+                ["kill", "-0", str(pid)],
+                capture_output=True,
+                timeout=5,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def port_in_use(port: int) -> bool:
     """True when something is listening on the port.
 

@@ -43,6 +43,41 @@ def _looks_like_python(program: str) -> bool:
     return base in _PYTHON_NAMES
 
 
+def _find_foreign_port_holder(url: str, own_pids: set[int]) -> dict | None:
+    """Shared conflict logic: None unless a process we did not launch holds it.
+
+    Returns None when the port is free, when there is no URL, or when only our
+    own processes still hold it (a restart, or the brief overlap while our own
+    previous server shuts down). Only a genuinely foreign holder is reported,
+    because that is the one case the user can meaningfully be asked about.
+    """
+    if not url:
+        return None
+    try:
+        host, port = urldetect.url_host_port(url)
+    except Exception:
+        return None
+    if not port or not urldetect.port_in_use(port):
+        return None
+
+    owners = urldetect.port_owners(port)
+    if not owners:
+        # Cannot tell who holds it. Refusing to start on an unidentifiable
+        # holder would break legitimate restarts (the OS can lag releasing a
+        # socket), so let the start proceed and let the server report its own
+        # error if the port is truly unavailable.
+        return None
+
+    foreign = owners - own_pids
+    if not foreign:
+        return None
+
+    details = []
+    for pid in sorted(foreign):
+        details.append({"pid": pid, "command": urldetect.process_command(pid)})
+    return {"port": port, "host": host, "holders": details}
+
+
 class ProjectProcess(QObject):
     """One project's backend process + its captured output."""
 
@@ -60,6 +95,9 @@ class ProjectProcess(QObject):
         self._started_at = 0.0
         self._pending_restart = False
         self.detected_url: str | None = None
+        # PIDs this object launched that have since exited, so a restart does
+        # not mistake its own shutting-down server for a foreign port conflict.
+        self._retired_pids: set[int] = set()
         self._kill_timer = QTimer(self)
         self._kill_timer.setSingleShot(True)
         self._kill_timer.setInterval(TERM_GRACE_MS)
@@ -149,6 +187,15 @@ class ProjectProcess(QObject):
 
     def stop(self) -> None:
         if self.proc is None or self.proc.state() == QProcess.NotRunning:
+            # Nothing to terminate — but the intent still matters. The start may
+            # be in flight (the port-conflict probe launches asynchronously), so
+            # record it and emit the state the caller expects; otherwise a stop
+            # pressed during that window is silently dropped and the project's
+            # tabs stay open.
+            self._user_stopped = True
+            self._pending_start = False
+            if self.state != "stopped":
+                self.state_changed.emit("stopped")
             return
         self._user_stopped = True
         self.output.emit("[hub] terminating (waiting up to 20s for a clean exit)…\n")
@@ -183,6 +230,31 @@ class ProjectProcess(QObject):
             self._maybe_detect_url(data)
 
     # ---------- URL auto-detection ----------
+
+    def port_conflict(self) -> dict | None:
+        """A FOREIGN process holding this project's dashboard port, or None.
+
+        Synchronous, and cheap when the port is free (it returns before running
+        lsof). Callers on the GUI thread must only reach it on that fast path.
+        """
+        return _find_foreign_port_holder(self.rec.get("url"), self._own_pids())
+
+    def _own_pids(self) -> set[int]:
+        """PIDs this object launched: the live one plus any it has retired.
+
+        This is what stops a normal restart from being mistaken for a foreign
+        port conflict — our own previous server may briefly still hold the port
+        as it shuts down.
+        """
+        mine = set(self._retired_pids)
+        if self.proc is not None:
+            try:
+                pid = self.proc.processId()
+                if pid:
+                    mine.add(pid)
+            except Exception:
+                pass
+        return mine
 
     def _maybe_detect_url(self, text: str) -> None:
         """Learn the dashboard URL from what the server prints.
@@ -228,6 +300,16 @@ class ProjectProcess(QObject):
         self.proc.kill()
 
     def _on_finished(self, code: int, status) -> None:
+        # Remember the PID so port_conflict() does not mistake our own
+        # just-exited server for a foreign process holding the port. This is
+        # what keeps a normal restart from prompting the user to kill anything.
+        if self.proc is not None:
+            try:
+                pid = self.proc.processId()
+                if pid:
+                    self._retired_pids.add(pid)
+            except Exception:
+                pass
         # The `status` arg is unreliable in PySide6 (reports CrashExit for a
         # clean SIGTERM), so it is intentionally unused here; the state
         # property decides error vs stopped from _user_stopped + exit code.

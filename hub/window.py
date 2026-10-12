@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import diagnostics as diagnostics_mod
-from . import launch_at_login, store as store_mod
+from . import launch_at_login, store as store_mod, urldetect
 from .diagnostics import build_report, format_report, save_report
 from .platform import IS_MACOS, IS_WINDOWS
 from .process_manager import ProjectProcess
@@ -889,6 +889,20 @@ class HubWindow(QMainWindow):
         proc = self._proc_for(rec)
         if proc.state == "running":
             return
+        # If something OUTSIDE this hub already holds the project's port, the
+        # start is about to fail with "Address already in use". Offer to end
+        # that process instead of starting into a guaranteed failure — the
+        # usual cause is a stray copy of the same project.
+        #
+        # This is deliberately synchronous and only reached when the port is
+        # actually occupied (port_conflict returns immediately otherwise), so
+        # the free-port case — the common one — never runs lsof. An earlier
+        # version did this on a QThread, which deadlocked the process under a
+        # PTY (the runner), hanging the app indefinitely.
+        conflict = proc.port_conflict()
+        if conflict:
+            self._offer_to_free_port(rec, proc, conflict)
+            return
         self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
         if rec.get("url"):
             # Poll for the dashboard now; when it answers, _ready() points the
@@ -896,6 +910,99 @@ class HubWindow(QMainWindow):
             # alone — it can be missed when this runs from the selection handler.
             self._wait_ready(rec)
         proc.start()
+
+    def _launch(self, rec: dict, proc: ProjectProcess) -> None:
+        """Start the process and begin waiting for its dashboard."""
+        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
+        if rec.get("url"):
+            self._wait_ready(rec)
+        proc.start()
+
+    @staticmethod
+    def _can_show_dialog() -> bool:
+        """Whether a modal dialog could actually be answered.
+
+        Offscreen/headless runs and the test runner under a PTY have no user to
+        click a QMessageBox, so asking there would block the app forever. Any
+        non-interactive environment gets the log-message path instead.
+        """
+        import os
+        import sys
+
+        platform = os.environ.get("QT_QPA_PLATFORM", "")
+        if platform in ("offscreen", "minimal", "vnc"):
+            return False
+        # A PTY means a test runner is driving us, not a person.
+        try:
+            return os.isatty(sys.stdin.fileno()) or bool(os.environ.get("DISPLAY"))
+        except (OSError, ValueError):
+            return False
+
+    def _offer_to_free_port(self, rec: dict, proc: ProjectProcess, conflict: dict) -> None:
+        """Ask whether to end the process holding this project's port.
+
+        Falls back to a log message instead of a dialog when the environment
+        cannot show one (offscreen/headless, or the test runner under a PTY):
+        a modal QMessageBox there has nobody to click it and blocks forever.
+        """
+        holders = conflict["holders"]
+        listing = "\n".join(
+            f"  PID {h['pid']}: {h['command'] or '(unknown command)'}" for h in holders
+        )
+        reason = (
+            f"port {conflict['port']} is already in use, so {rec['name']} was not "
+            f"started: {listing}"
+        )
+
+        if not self._can_show_dialog():
+            self._append_log(f"[hub] {reason}")
+            self.status.showMessage(
+                f"{rec['name']} not started — port {conflict['port']} in use"
+            )
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Port already in use")
+        box.setText(
+            f"{rec['name']} uses port {conflict['port']}, which is already taken:"
+        )
+        box.setInformativeText(
+            f"{listing}\n\n"
+            "This is usually another copy of the same project, left running from "
+            "an earlier launch. End it now?"
+        )
+        kill_btn = box.addButton("End that process", QMessageBox.AcceptRole)
+        box.addButton("Leave it running", QMessageBox.RejectRole)
+        box.setDefaultButton(kill_btn)
+        box.exec()
+
+        if box.clickedButton() is not kill_btn:
+            self._append_log(
+                f"[hub] port {conflict['port']} is held by another process; "
+                f"{rec['name']} was not started"
+            )
+            return
+
+        killed = []
+        for h in holders:
+            if urldetect.kill_process(h["pid"]):
+                killed.append(h["pid"])
+        self._append_log(
+            f"[hub] ended process(es) holding port {conflict['port']}: {killed}"
+        )
+
+        def _start_after_free():
+            # Give the OS a moment to release the socket.
+            if not urldetect.port_in_use(conflict["port"]):
+                self._launch(rec, proc)
+            else:
+                self._append_log(
+                    f"[hub] port {conflict['port']} is still in use after ending the "
+                    f"process; {rec['name']} was not started"
+                )
+
+        QTimer.singleShot(1200, _start_after_free)
 
     def _stop_active(self) -> None:
         pid = self.active_id

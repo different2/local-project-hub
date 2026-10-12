@@ -209,6 +209,83 @@ def test_port_conflict_refuses_to_start(tmp: Path) -> None:
         _wait_for(lambda: holder.state == "stopped", timeout_s=25)
 
 
+def test_port_conflict_is_reported_with_command(tmp: Path) -> None:
+    """A foreign process on the port is reported, with enough detail to judge it.
+
+    The prompt must name what is holding the port so the user can tell whether
+    it is another copy of this project or something unrelated before deciding
+    to end it.
+    """
+    port = 8814
+    srv_py = tmp / "holder.py"
+    srv_py.write_text(_SILENT_SERVER)
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Holder",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        other = ProjectProcess(
+            sm.validate(
+                {
+                    "name": "Second",
+                    "command": f"{sys.executable} {srv_py} {port}",
+                    "working_dir": str(tmp),
+                    "url": f"http://127.0.0.1:{port}/",
+                }
+            )
+        )
+        conflict = other.port_conflict()
+        assert conflict, "a foreign holder on the port was not reported"
+        assert conflict["port"] == port, conflict
+        assert conflict["holders"], conflict
+        # The holder's PID must be the one named.
+        holder_pid = holder.proc.processId() if holder.proc else None
+        assert holder_pid in {h["pid"] for h in conflict["holders"]}, conflict
+        assert any(
+            "holder.py" in (h["command"] or "") for h in conflict["holders"]
+        ), conflict
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
+def test_own_process_is_not_a_conflict(tmp: Path) -> None:
+    """Our own server on the port must never be reported as a conflict.
+
+    This is the restart case: if it were reported, every restart would prompt
+    the user to kill a process the hub itself started.
+    """
+    port = 8815
+    srv_py = tmp / "mine.py"
+    srv_py.write_text(_SILENT_SERVER)
+    proc = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Mine",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+                "url": f"http://127.0.0.1:{port}/",
+            }
+        )
+    )
+    proc.start()
+    started = _wait_for(lambda: proc.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={proc.state})"
+    try:
+        assert proc.port_conflict() is None, "our own server was flagged as foreign"
+    finally:
+        proc.stop()
+        _wait_for(lambda: proc.state == "stopped", timeout_s=25)
+
+
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
