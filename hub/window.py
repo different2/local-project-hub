@@ -86,6 +86,24 @@ class HubWebView(QWebEngineView):
         return view
 
 
+def _entry_script(rec: dict) -> str:
+    """The script filename a project runs, for matching a stray copy of it.
+
+    "python3 obs_live.py --port 8787" -> "obs_live.py". Used only to identify
+    the same project running elsewhere, never to build a command.
+    """
+    import os
+
+    cmd = (rec or {}).get("command") or ""
+    best = ""
+    for token in cmd.split():
+        base = os.path.basename(token)
+        if base.endswith((".py", ".js", ".sh", ".rb", ".pl")):
+            if len(base) > len(best):
+                best = base
+    return best
+
+
 class HubWindow(QMainWindow):
     def __init__(self, store: store_mod.Store):
         super().__init__()
@@ -754,8 +772,11 @@ class HubWindow(QMainWindow):
         conflict = self._conflict_for_port(port, own) if port else None
         if conflict is None:
             # The command named no port (e.g. "python3 obs_live.py" uses an
-            # in-script default), so try the ports we do know about.
-            guess = self._guess_taken_port(exclude=own)
+            # in-script default), so look for what is actually holding a port —
+            # preferring the failing project's OWN script, so a stray copy of
+            # it is what gets offered for ending.
+            rec = self.store.get(pid) or {}
+            guess = self._guess_taken_port(exclude=own, rec=rec)
             conflict = self._conflict_for_port(guess, own) if guess else None
         if conflict is None:
             # Nothing specific could be determined; say so plainly rather than
@@ -771,16 +792,23 @@ class HubWindow(QMainWindow):
             return
         self._offer_to_free_port(rec, proc, conflict)
 
-    def _guess_taken_port(self, exclude: set[int]) -> int | None:
+    def _guess_taken_port(
+        self, exclude: set[int], rec: dict | None = None
+    ) -> int | None:
         """A port held by a process we did not launch, for a port-less failure.
 
         Used when a server dies with "Address already in use" but its command
-        names no port (the default lives inside the script). Any registered
-        project's URL port that is currently held by a foreign process is a
-        candidate; the failure just happened, so the culprit is very likely it.
+        names no port (the default lives inside the script). Two sources, in
+        order of precision:
+
+        1. Any registered project's URL port that is currently held by a
+           foreign process — the failure just happened, so it is very likely it.
+        2. Any listening port whose owning process runs the SAME script as the
+           project that just failed. This catches a stray copy of the project
+           when nothing in the registry names a port, which is the user's case.
         """
-        for rec in self.store.ordered():
-            url = rec.get("url")
+        for other in self.store.ordered():
+            url = other.get("url")
             if not url:
                 continue
             try:
@@ -792,6 +820,18 @@ class HubWindow(QMainWindow):
             owners = urldetect.port_owners(port)
             if owners and (owners - exclude):
                 return port
+
+        # Fall back to matching the script name: a stray copy of this very
+        # project is the usual cause, and it is identifiable by its command.
+        script = _entry_script(rec or {})
+        if script:
+            for port in urldetect.listening_ports_all():
+                owners = urldetect.port_owners(port)
+                if not (owners - exclude):
+                    continue
+                for owner in owners - exclude:
+                    if script in (urldetect.process_command(owner) or ""):
+                        return port
         return None
 
     def _on_url_detected(self, url: str) -> None:

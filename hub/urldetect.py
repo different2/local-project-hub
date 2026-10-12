@@ -140,6 +140,44 @@ def listening_ports(pid: int) -> list[int]:
     return [p for p in ports if p not in _UNLIKELY_PORTS]
 
 
+def listening_ports_all() -> list[int]:
+    """Every TCP port something is listening on, via lsof.
+
+    Used to find a stray copy of a project when nothing in the registry names
+    a port. Returns [] when it cannot be determined — callers must treat this
+    as best-effort.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    ports: list[int] = []
+    for line in out.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        # Depending on the platform the last column is either the address
+        # ("*:7000") or the state ("(LISTEN)") followed by the address, so scan
+        # the tail for anything that looks like host:port.
+        for token in reversed(fields[-2:]):
+            if ":" not in token:
+                continue
+            tail = token.rsplit(":", 1)[-1]
+            if tail.isdigit():
+                port = int(tail)
+                if port not in ports and port not in _UNLIKELY_PORTS:
+                    ports.append(port)
+                break
+    return ports
+
+
 def url_from_port(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}/"
 

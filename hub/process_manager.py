@@ -333,14 +333,14 @@ class ProjectProcess(QObject):
         self._kill_timer.stop()
         self.output.emit(f"[hub] process exited (code={code})\n")
 
-        # A server that dies because its port was taken names the port in its
-        # own error ("[Errno 48] Address already in use"). Learn it and treat
-        # it like a pre-start conflict: the port is discoverable this way even
-        # for projects that have no configured URL (the auto-detect case).
+        # A server that dies because its port was taken is a conflict even when
+        # the port cannot be read from the command ("python3 obs_live.py" binds
+        # a default inside the script). Emit regardless so the window can look
+        # for what is actually holding a port — otherwise a port-less command
+        # silently skips the whole conflict path.
         if not self._user_stopped and code not in (0, None):
-            clash = self._port_from_failure_output()
-            if clash:
-                self.port_conflict_from_output.emit(clash)
+            if self._failed_to_bind():
+                self.port_conflict_from_output.emit(self._port_from_failure_output() or 0)
 
         if self._user_stopped:
             self.state_changed.emit("stopped")
@@ -351,6 +351,15 @@ class ProjectProcess(QObject):
         if self._pending_restart:
             self._pending_restart = False
             self.start()
+
+    def _failed_to_bind(self) -> bool:
+        """True when this process died because its port was already taken.
+
+        Matched on the error text rather than a port number, because the port
+        is often not recoverable from the output at all.
+        """
+        text = "".join(self.history)
+        return "Address already in use" in text or "Errno 48" in text
 
     def _port_from_failure_output(self) -> int | None:
         """The port this server failed to bind, so the hub can offer to free it.

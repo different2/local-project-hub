@@ -613,6 +613,107 @@ def test_clicking_a_project_still_starts_it(tmp: Path) -> None:
         w.close()
 
 
+def test_listening_ports_all_actually_finds_ports(tmp: Path) -> None:
+    """listening_ports_all() must parse lsof output on this platform.
+
+    It silently returned [] for months of the conflict feature because the
+    parser read the LAST column, which on macOS is "(LISTEN)" rather than the
+    address. A helper that quietly finds nothing is worse than one that fails.
+    """
+    port = 8824
+    srv_py = tmp / "obs.py"
+    srv_py.write_text(_SILENT_SERVER)
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Stray",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        found = urldetect.listening_ports_all()
+        assert port in found, (
+            f"a live server on {port} was not found in {found[:12]} — the lsof "
+            "parser is broken again (check whether the last column is the "
+            "address or the state on this platform)"
+        )
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
+def test_bare_command_conflict_is_offered(tmp: Path) -> None:
+    """A project with NO url and NO port in its command still gets the dialog.
+
+    The user's exact case: one project, "python3 obs_live.py", which binds 8787
+    inside the script. Nothing in the command or registry names the port, so
+    the holder has to be found by matching the script against listening ports.
+    """
+    port = 8825
+    # A server whose port is a DEFAULT INSIDE the script, not an argument —
+    # exactly like obs_live.py. That is the whole difficulty: nothing in the
+    # command line names the port, so the holder can only be found by matching
+    # the script against what is actually listening.
+    srv_py = tmp / "obs_live.py"
+    srv_py.write_text(
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class H(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200); self.end_headers(); self.wfile.write(b'OK')\n"
+        "    def log_message(self,*a): pass\n"
+        f"HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+    )
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Stray",
+                "command": f"{sys.executable} {srv_py}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        st = sm.Store(tmp / "registry.json")
+        # bare command, no url, no args — exactly the user's entry
+        rec = st.add(
+            sm.validate(
+                {
+                    "name": "obs",
+                    "command": f"{sys.executable} {srv_py}",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+        w = HubWindow(st)
+        w.show()
+        offered = []
+        w._offer_to_free_port = lambda r, p, c: offered.append(c)
+        try:
+            w.active_id = rec["id"]
+            w._on_select()
+            ok = _wait_for(lambda: offered, timeout_s=30)
+            assert ok, (
+                "a bare-command project whose port was taken got no conflict "
+                "offer (it just died with 'Address already in use')"
+            )
+            assert offered[0]["holders"], offered[0]
+            holder_pid = holder.proc.processId() if holder.proc else None
+            assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
+        finally:
+            w.close()
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
