@@ -647,8 +647,72 @@ class HubWindow(QMainWindow):
             proc.state_changed.connect(lambda s, p=pid: self._on_state(p, s))
             proc.output.connect(self._append_log)
             proc.url_detected.connect(self._on_url_detected)
+            proc.port_conflict_from_output.connect(
+                lambda port, p=pid: self._on_port_conflict_from_output(p, port)
+            )
             self.procs[pid] = proc
         return self.procs[pid]
+
+    def _on_port_conflict_from_output(self, pid: str, port: int) -> None:
+        """A project died because its port was taken — offer to end the holder.
+
+        This is the path for projects with NO configured URL: the pre-start
+        check cannot know which port to look at, but the server's own
+        traceback names it. Only prompts if something foreign still holds it.
+        """
+        proc = self.procs.get(pid)
+        if proc is None:
+            return
+        port = port or self._guess_taken_port(exclude=proc._own_pids())
+        if not port:
+            # The command names no port (e.g. "python3 obs_live.py" uses an
+            # in-script default), so there is nothing specific to offer.
+            self._append_log(
+                "[hub] that process could not start because its port was already "
+                "in use.\n[hub] If another copy of this project is running, stop it "
+                "and press Start again."
+            )
+            return
+        owners = urldetect.port_owners(port)
+        foreign = owners - proc._own_pids()
+        if not owners or not foreign:
+            # Nobody (or only our own processes) holds it now — the conflict
+            # was with something already gone, so there is nothing to offer.
+            return
+        rec = self.store.get(pid)
+        if not rec:
+            return
+        conflict = {
+            "port": port,
+            "host": "127.0.0.1",
+            "holders": [
+                {"pid": p, "command": urldetect.process_command(p)} for p in sorted(foreign)
+            ],
+        }
+        self._offer_to_free_port(rec, proc, conflict)
+
+    def _guess_taken_port(self, exclude: set[int]) -> int | None:
+        """A port held by a process we did not launch, for a port-less failure.
+
+        Used when a server dies with "Address already in use" but its command
+        names no port (the default lives inside the script). Any registered
+        project's URL port that is currently held by a foreign process is a
+        candidate; the failure just happened, so the culprit is very likely it.
+        """
+        for rec in self.store.ordered():
+            url = rec.get("url")
+            if not url:
+                continue
+            try:
+                _, port = urldetect.url_host_port(url)
+            except Exception:
+                continue
+            if not port:
+                continue
+            owners = urldetect.port_owners(port)
+            if owners and (owners - exclude):
+                return port
+        return None
 
     def _on_url_detected(self, url: str) -> None:
         """A server announced its own address — use it and remember it.

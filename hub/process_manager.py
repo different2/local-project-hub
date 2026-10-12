@@ -16,6 +16,7 @@ canonical case) need room to finish; a 3s hard kill destroys them mid-warm-up.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 
@@ -85,6 +86,10 @@ class ProjectProcess(QObject):
     output = Signal(str)
     # Emitted once, when the server's own output reveals its dashboard URL.
     url_detected = Signal(str)
+    # A port this server failed to bind, read from its own traceback. Lets the
+    # hub offer the port-conflict dialog even for projects with no configured
+    # URL (the auto-detect case).
+    port_conflict_from_output = Signal(int)
 
     def __init__(self, rec: dict, parent=None):
         super().__init__(parent)
@@ -315,6 +320,16 @@ class ProjectProcess(QObject):
         # property decides error vs stopped from _user_stopped + exit code.
         self._kill_timer.stop()
         self.output.emit(f"[hub] process exited (code={code})\n")
+
+        # A server that dies because its port was taken names the port in its
+        # own error ("[Errno 48] Address already in use"). Learn it and treat
+        # it like a pre-start conflict: the port is discoverable this way even
+        # for projects that have no configured URL (the auto-detect case).
+        if not self._user_stopped and code not in (0, None):
+            clash = self._port_from_failure_output()
+            if clash:
+                self.port_conflict_from_output.emit(clash)
+
         if self._user_stopped:
             self.state_changed.emit("stopped")
         elif code in (0, None):
@@ -324,3 +339,33 @@ class ProjectProcess(QObject):
         if self._pending_restart:
             self._pending_restart = False
             self.start()
+
+    def _port_from_failure_output(self) -> int | None:
+        """The port this server failed to bind, so the hub can offer to free it.
+
+        Python's traceback rarely contains the literal number — it prints
+        `("127.0.0.1", args.port)` and then `self.socket.bind(self.server_address)`,
+        never resolving it. So the port is taken from the COMMAND instead: an
+        explicit `--port N` / `-p N`, else a bare trailing number, else a
+        `:N` in any URL-ish argument. Returns None when no port can be found,
+        which is fine: the caller only prompts when something foreign still
+        holds the port anyway.
+        """
+        text = "".join(self.history)
+        if "Address already in use" not in text and "Errno 48" not in text:
+            return None
+
+        argv = self.rec.get("command") or ""
+        # --port 8787 / --port=8787 / -p 8787
+        m = re.search(r"(?:--port|-p)(?:\s+|=)(\d{2,5})\b", argv)
+        if m:
+            return int(m.group(1))
+        # a bare trailing number: "python3 obs_live.py 8787"
+        m = re.search(r"(?:^|\s)(\d{2,5})\s*$", argv.strip())
+        if m:
+            return int(m.group(1))
+        # a URL-ish argument carrying a port: "http://127.0.0.1:8787"
+        m = re.search(r":(\d{2,5})(?![\d.])", argv)
+        if m:
+            return int(m.group(1))
+        return None

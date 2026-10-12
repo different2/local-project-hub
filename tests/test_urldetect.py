@@ -286,6 +286,64 @@ def test_own_process_is_not_a_conflict(tmp: Path) -> None:
         _wait_for(lambda: proc.state == "stopped", timeout_s=25)
 
 
+def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
+    """A port-less project that dies with "in use" must still be actionable.
+
+    The user's real case: `python3 obs_live.py` with no URL and no port
+    argument. The pre-start check cannot help (no URL to inspect), so the port
+    has to come from the command or from what is actually holding a port.
+    """
+    port = 8817
+    srv_py = tmp / "obs.py"
+    srv_py.write_text(_SILENT_SERVER)
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Stray",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        # no url at all, and the port is only implied by the command
+        rec = sm.validate(
+            {
+                "name": "obsv",
+                "command": f"{sys.executable} {srv_py} --port {port}",
+                "working_dir": str(tmp),
+            }
+        )
+        victim = ProjectProcess(rec)
+        got: list[int] = []
+        victim.port_conflict_from_output.connect(got.append)
+
+        # Feed it the real traceback the user saw, then finish with code 1.
+        # history is filled by _drain from real process output; append directly
+        # to stand in for a server that actually printed this.
+        victim.history.append(
+            "Traceback (most recent call last):\n"
+            f'  File "{srv_py}", line 1, in <module>\n'
+            '    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)\n'
+            "OSError: [Errno 48] Address already in use\n"
+        )
+        # _on_finished is what reads the history; drive it the way Qt would.
+        victim._user_stopped = False
+        victim._on_finished(1, None)
+
+        assert got, "a bind failure did not surface the conflicting port"
+        assert got[0] == port, f"expected port {port}, got {got[0]}"
+        # and the holder must be identifiable for the dialog
+        assert holder.proc is not None
+        assert holder.proc.processId() in urldetect.port_owners(port)
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
