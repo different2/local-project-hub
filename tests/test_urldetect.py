@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from hub import store as sm, urldetect  # noqa: E402
 from hub.process_manager import ProjectProcess  # noqa: E402
@@ -455,6 +455,58 @@ def test_dialog_exposes_an_args_field() -> None:
     assert hasattr(d, "args"), "dialog has no args field"
     d.args.setText("--no-open")
     assert d.args.text().strip() == "--no-open"
+
+
+def test_removing_a_project_closes_its_tab(tmp: Path) -> None:
+    """Removing a project must take its tab with it.
+
+    Without this, a removed project leaves a live dashboard tab behind that
+    nothing can restart or close — the tab outlives the thing it belongs to.
+    """
+    port = 8819
+    srv_py = tmp / "srv.py"
+    srv_py.write_text(_SILENT_SERVER)
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(
+        sm.validate(
+            {
+                "name": "Goner",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "url": f"http://127.0.0.1:{port}/",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    # Bypass the confirmation dialog; this test is about the tab, not the prompt.
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+    try:
+        w.active_id = rec["id"]
+        # HubWindow auto-opens the active project's tab on construction, so the
+        # count should already be dashboard + 1. Calling _open_project_tab again
+        # would just prove duplicate tabs are avoided, so wait for the real one.
+        opened = _wait_for(lambda: w._tab_index_for_project(rec["id"]) is not None)
+        assert opened, "no tab was opened for the project"
+        dashboard_index = w.dashboard_tab_index
+        tabs_before = w.tabs.count()
+
+        w._remove_project()
+
+        assert st.get(rec["id"]) is None, "project was not removed from the registry"
+        assert w._tab_index_for_project(rec["id"]) is None, (
+            "the removed project still has a tab open"
+        )
+        assert w.tabs.count() == tabs_before - 1, (
+            f"tab count went {tabs_before} -> {w.tabs.count()}, expected exactly one fewer"
+        )
+        # the permanent dashboard tab must survive
+        assert w.dashboard_tab_index < w.tabs.count(), (
+            "removing a project destroyed the dashboard tab"
+        )
+        assert dashboard_index == w.dashboard_tab_index
+    finally:
+        w.close()
 
 
 def test_configured_url_is_never_overridden(tmp: Path) -> None:

@@ -1182,6 +1182,15 @@ class HubWindow(QMainWindow):
         proc = self.procs.pop(pid, None)
         if proc:
             proc.stop()
+        # The project's tabs must go with it, or a removed project leaves a
+        # live dashboard tab behind that nothing can restart or close — the tab
+        # outlives the thing it belongs to.
+        self._close_tabs_for_project(pid)
+        waiter = self.waiters.pop(pid, None)
+        if waiter:
+            waiter.stop()
+            waiter.deleteLater()
+        self._user_stopped_ids.discard(pid)
         self.store.remove(pid)
         self.active_id = None
         self._reload_list()
