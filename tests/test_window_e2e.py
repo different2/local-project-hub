@@ -80,6 +80,12 @@ def make_window(tmp: Path, key: str = "selecting") -> tuple[HubWindow, int]:
     )
     w = HubWindow(st)
     w.show()
+    # Opening the window must NOT start anything (that was a reported bug: it
+    # fired the project and its browser). Selecting the project is what a user
+    # does, so do that here.
+    rec = st.ordered()[0]
+    w.active_id = rec["id"]
+    w._on_select()
     return w, port
 
 
@@ -267,6 +273,9 @@ def test_erroring_project_logs_the_error(tmp: Path) -> None:
     )
     w = HubWindow(st)
     w.show()
+    # Opening the window does not start anything; the user selecting it does.
+    w.active_id = st.ordered()[0]["id"]
+    w._on_select()
     try:
         proc = w._proc_for(w.store.get(w.active_id))
         ok = _wait_for(lambda: proc.state == "error", timeout_s=15)

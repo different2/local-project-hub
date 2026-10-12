@@ -98,11 +98,16 @@ class HubWindow(QMainWindow):
         # Projects the user explicitly stopped, so an unrequested exit is not
         # mistaken for one (only an explicit stop closes the project's tabs).
         self._user_stopped_ids: set[str] = set()
+        # True only while the window is being constructed. Selecting a project
+        # during startup (populating the sidebar) must not start it — a project
+        # runs when the user asks, or when its autostart box is ticked.
+        self._starting_up = True
 
         self._build_ui()
         self._reload_list()
         self._restore_last_project()
         self._autostart()
+        self._starting_up = False
 
     # ---------- menus: About / Preferences / Updates / Reports ----------
 
@@ -537,12 +542,40 @@ class HubWindow(QMainWindow):
         if keep:
             self._select_id(keep)
         elif self.list.count() and not self.list.currentItem():
-            self.list.setCurrentRow(0)
+            # Populate the first row WITHOUT starting it: selecting fires the
+            # selection handler, which launches the project. During startup the
+            # list is only being filled in.
+            if self._starting_up:
+                self._select_id(self.list.item(0).data(Qt.UserRole), start=False)
+            else:
+                self.list.setCurrentRow(0)
 
-    def _select_id(self, project_id: str) -> None:
+    def _select_id(self, project_id: str, start: bool = True) -> None:
+        """Select a project in the sidebar and, by default, launch it.
+
+        `start=False` restores the selection WITHOUT launching — used at
+        startup, where merely reopening the hub must not fire a project (and
+        its browser) the user never asked to run.
+        """
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == project_id:
-                self.list.setCurrentRow(i)
+                if not start:
+                    # Select without launching: open the tab in view-only mode
+                    # rather than letting the selection handler start it.
+                    self.list.blockSignals(True)
+                    self.list.setCurrentRow(i)
+                    self.list.blockSignals(False)
+                    self.active_id = project_id
+                    self._set_controls_enabled(True)
+                    self._open_project_tab(self.store.get(project_id), start=False)
+                    return
+                if self.list.currentRow() == i:
+                    # setCurrentRow on the already-current row emits no signal,
+                    # so an explicit re-select would silently do nothing. Call
+                    # the handler directly.
+                    self._on_select()
+                else:
+                    self.list.setCurrentRow(i)  # fires _on_select
                 return
 
     def _on_select(self) -> None:
@@ -557,6 +590,7 @@ class HubWindow(QMainWindow):
             return
         rec = self.store.get(pid)
         proc = self._proc_for(rec)
+
         self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(proc.state, proc.state)}")
 
         # If this project already has a tab, just focus it (re-selecting a
@@ -586,16 +620,26 @@ class HubWindow(QMainWindow):
         w = self.tabs.widget(i)
         return w if isinstance(w, HubWebView) else None
 
-    def _open_project_tab(self, rec: dict) -> None:
+    def _open_project_tab(self, rec: dict, start: bool = True) -> None:
         """Open (or focus) a tab holding this project's own dashboard view.
 
         A DESKTOP project is not shown in a webview at all: it opens its own
         native window, so forcing it into an embedded browser would show a blank
         pane next to the real window (spec §4). It is started, and its log is
         still visible, but no tab is created for it.
+
+        `start=False` opens the tab WITHOUT launching the project. Restoring the
+        last selection at startup must never start anything: a project should
+        run only when the user asks (the Start action, or an autostart project
+        whose checkbox is ticked).
         """
         kind = (rec.get("detected") or {}).get("type") or ""
         if kind == "desktop":
+            if not start:
+                self._append_log(
+                    f"[hub] {rec['name']} is a desktop app — press Start to launch it"
+                )
+                return
             self._append_log(
                 f"[hub] {rec['name']} looks like a desktop app — starting it in its "
                 f"own window, not in a tab"
@@ -616,6 +660,15 @@ class HubWindow(QMainWindow):
         idx = self.tabs.addTab(view, f"{rec['icon']}  {rec['name']}")
         self.tabs.setTabToolTip(idx, rec.get("description") or rec["command"])
         self.tabs.setCurrentIndex(idx)
+
+        if not start:
+            # Restoring a selection must not launch anything. Show the tab with
+            # a clear message instead of a blank pane.
+            self.placeholder.setText(
+                f"{rec['name']} is not running.\nPress Start, or double-click it, to launch it."
+            )
+            self.status.showMessage(f"{rec['name']} not started")
+            return
 
         proc = self._proc_for(rec)
         if not rec.get("url"):
@@ -957,7 +1010,10 @@ class HubWindow(QMainWindow):
     def _restore_last_project(self) -> None:
         pid = self._settings_last()
         if pid and self.store.get(pid):
-            self._select_id(pid)
+            # Restore the SELECTION only. This must not start the project: a
+            # project runs when the user asks (Start, or a ticked autostart),
+            # never merely because it was the last one looked at.
+            self._select_id(pid, start=False)
         elif self.list.count():
             self.list.setCurrentRow(0)
 

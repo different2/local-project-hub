@@ -509,6 +509,110 @@ def test_removing_a_project_closes_its_tab(tmp: Path) -> None:
         w.close()
 
 
+def test_opening_the_hub_does_not_start_anything(tmp: Path) -> None:
+    """Opening the hub must not launch projects.
+
+    A project runs when the user asks — the Start action, a double-click, or a
+    ticked autostart — never merely because the window opened and the sidebar
+    selected it. The user hit this: opening the hub fired obs_live, which then
+    opened Firefox.
+    """
+    port = 8821
+    srv_py = tmp / "srv.py"
+    srv_py.write_text(_SILENT_SERVER)
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(
+        sm.validate(
+            {
+                "name": "obs",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "url": f"http://127.0.0.1:{port}/",
+                "autostart": False,
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        _wait_for(lambda: False, timeout_s=2)  # let any stray start happen
+        proc = w._proc_for(st.get(rec["id"]))
+        assert proc.state == "stopped", (
+            f"opening the hub started {rec['name']} (state={proc.state})"
+        )
+        assert proc.proc is None or proc.proc.processId() == 0, (
+            "a process was launched just by opening the window"
+        )
+    finally:
+        w.close()
+
+
+def test_autostart_project_still_starts(tmp: Path) -> None:
+    """The fix must not break the autostart checkbox that IS ticked."""
+    port = 8822
+    srv_py = tmp / "srv.py"
+    srv_py.write_text(_SILENT_SERVER)
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(
+        sm.validate(
+            {
+                "name": "Auto",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "url": f"http://127.0.0.1:{port}/",
+                "autostart": True,
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        started = _wait_for(
+            lambda: w._proc_for(st.get(rec["id"])).state == "running", timeout_s=25
+        )
+        assert started, "an autostart project was not started"
+    finally:
+        p = w._proc_for(st.get(rec["id"]))
+        p.stop()
+        _wait_for(lambda: p.state == "stopped", timeout_s=25)
+        w.close()
+
+
+def test_clicking_a_project_still_starts_it(tmp: Path) -> None:
+    """Selecting a project by hand must still launch it (the normal path)."""
+    port = 8823
+    srv_py = tmp / "srv.py"
+    srv_py.write_text(_SILENT_SERVER)
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(
+        sm.validate(
+            {
+                "name": "Manual",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "url": f"http://127.0.0.1:{port}/",
+                "autostart": False,
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        _wait_for(lambda: False, timeout_s=2)
+        assert w._proc_for(st.get(rec["id"])).state == "stopped", "started on open"
+        w.active_id = rec["id"]
+        w._on_select()
+        started = _wait_for(
+            lambda: w._proc_for(st.get(rec["id"])).state == "running", timeout_s=25
+        )
+        assert started, "clicking a project did not start it"
+    finally:
+        p = w._proc_for(st.get(rec["id"]))
+        p.stop()
+        _wait_for(lambda: p.state == "stopped", timeout_s=25)
+        w.close()
+
+
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
     port = 8803
