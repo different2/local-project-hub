@@ -823,6 +823,9 @@ class HubWindow(QMainWindow):
 
         # Fall back to matching the script name: a stray copy of this very
         # project is the usual cause, and it is identifiable by its command.
+        # Deliberately narrow — this only ever runs AFTER this project has
+        # already failed to bind, never as a pre-flight guess, because scanning
+        # unrelated ports would block a legitimate start.
         script = _entry_script(rec or {})
         if script:
             for port in urldetect.listening_ports_all():
@@ -1087,14 +1090,6 @@ class HubWindow(QMainWindow):
         # version did this on a QThread, which deadlocked the process under a
         # PTY (the runner), hanging the app indefinitely.
         conflict = proc.port_conflict()
-        if not conflict and not rec.get("url"):
-            # No URL means port_conflict() had nothing to inspect. A project
-            # that binds a fixed default port (obs_live's 8787) is still
-            # detectable: if any port we know about is held by a foreign
-            # process, that is almost certainly the one this will fail on.
-            guess = self._guess_taken_port(exclude=proc._own_pids())
-            if guess:
-                conflict = self._conflict_for_port(guess, proc._own_pids())
         if conflict:
             self._offer_to_free_port(rec, proc, conflict)
             return
@@ -1240,7 +1235,11 @@ class HubWindow(QMainWindow):
             QMessageBox.warning(self, "Could not add", str(e))
             return
         self._reload_list()
-        self._select_id(rec["id"])
+        # Select the new project but do NOT start it. Adding a project
+        # registers it; the user has not asked for it to run yet, and starting
+        # here is what fired obs_live (and its own browser) the moment it was
+        # added. Press Start, or click it, to launch.
+        self._select_id(rec["id"], start=False)
 
     def _edit_project(self) -> None:
         pid = self.active_id
@@ -1259,7 +1258,9 @@ class HubWindow(QMainWindow):
         if old:
             old.stop()
         self._reload_list()
-        self._select_id(pid)
+        # Editing must not start it either — the project may already be running,
+        # and re-selecting would restart it. Just keep the selection.
+        self._select_id(pid, start=False)
 
     def _remove_project(self) -> None:
         pid = self.active_id
