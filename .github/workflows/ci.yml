@@ -53,6 +53,8 @@ jobs:
       - name: Verify QtWebEngine is importable
         shell: bash
         run: |
+          python -c "import PySide6, os; d=os.path.dirname(PySide6.__file__); print('PySide6', PySide6.__version__, 'at', d); print('Qt dirs:', sorted(x for x in os.listdir(d) if x.startswith('Qt')))"
+          python -m pip list | grep -i pyside || true
           python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('QtWebEngine OK', __import__('PySide6').__version__)"
 
       # The GUI suites need a display; xvfb provides one on Linux.
