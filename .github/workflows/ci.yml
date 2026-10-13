@@ -29,11 +29,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        # ubuntu-latest migrates to Ubuntu 26.04 starting 2026-10-19
+        # (actions/runner-images#14748). Pin the image we test against so
+        # the OS cannot change underneath a green run.
+        os: [macos-latest, windows-latest, ubuntu-24.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -75,7 +78,7 @@ jobs:
       # evidence of what actually broke.
       - name: Upload test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-log-${{ runner.os }}
           path: |
@@ -89,9 +92,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -113,7 +116,7 @@ jobs:
           find build -name "*.dmg" -exec cp {} dist/ \;
           ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: LocalProjectHub-macOS
           path: dist/*.dmg
@@ -124,9 +127,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -145,7 +148,7 @@ jobs:
           find build -name "*.msi" -exec cp {} dist/ \;
           ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: LocalProjectHub-Windows
           path: dist/*.msi
@@ -158,10 +161,10 @@ jobs:
     name: Publish to the GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-macos, build-windows]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true
