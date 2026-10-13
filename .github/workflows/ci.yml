@@ -60,10 +60,33 @@ jobs:
           python -m pip list | grep -i pyside || true
           python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('QtWebEngine OK', __import__('PySide6').__version__)"
 
-      # The GUI suites need a display; xvfb provides one on Linux.
-      - name: Install xvfb (Linux only)
+      # xvfb provides a display; the rest are the SYSTEM libraries QtWebEngine
+      # links against. PySide6's wheel bundles none of them (verified: none of
+      # libEGL/libGL/libglib/libdbus/libxkbcommon/libX11/libxcb-cursor/libgbm/
+      # libasound/libnss3/libnspr4 ship inside the package), so on a bare
+      # ubuntu runner the import dies with
+      #   ImportError: libEGL.so.1: cannot open shared object file
+      # which looks like a broken wheel but is a missing OS package.
+      - name: Install Qt runtime libraries (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: |
+          sudo apt-get update
+          # Install each package individually and tolerate a name that does not
+          # exist in this image: one wrong name must not abort the whole job and
+          # hide the real Qt error. The import guard below is the actual check.
+          for p in \
+            libegl1 libgl1 libglib2.0-0 libdbus-1-3 \
+            libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 \
+            libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 \
+            libxcb-xfixes0 libxcb-xkb1 libxext6 libxfixes3 libxi6 libxrender1 \
+            libfontconfig1 libfreetype6 libgbm1 libasound2 \
+            libnss3 libnspr4 libexpat1 ; do
+            sudo apt-get install -y --no-install-recommends "$p" \
+              || echo "::warning::$p unavailable in this image (continuing)"
+          done
+          sudo apt-get install -y --no-install-recommends xvfb
 
       - name: Run the test suite
         shell: bash
