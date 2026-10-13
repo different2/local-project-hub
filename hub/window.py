@@ -445,6 +445,12 @@ class HubWindow(QMainWindow):
 
         # --- App / File ---
         app_menu = menubar.addMenu("Local Project Hub") if IS_MACOS else menubar.addMenu("File")
+        # The hub's own tab is closable, so it needs a way back.
+        act_home = QAction("Show Overview", self)
+        act_home.setShortcut(QKeySequence("Ctrl+1"))
+        act_home.triggered.connect(self.open_starter_tab)
+        app_menu.addAction(act_home)
+        app_menu.addSeparator()
         act_about = QAction("About Local Project Hub", self)
         act_about.triggered.connect(self._show_about)
         app_menu.addAction(act_about)
@@ -546,8 +552,13 @@ class HubWindow(QMainWindow):
 
         starter = QWidget()
         starter.setLayout(self.stack)
+        # Mark the WIDGET, not the index. The starter tab is closable now, and
+        # a stale index is how "which tab is the hub's own?" silently breaks:
+        # after a close, index 0 would be a project tab, and every
+        # `index == dashboard_tab_index` check would then misread it.
+        starter.setProperty("hub_starter", True)
         self.dashboard_tab_index = self.tabs.addTab(starter, "Local Project Hub")
-        self.tabs.tabBar().setTabButton(self.dashboard_tab_index, QTabBar.RightSide, None)
+        self.starter_widget = starter
         # Connect AFTER the starter tab exists: currentChanged can fire during
         # construction, before dashboard_tab_index is set.
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -736,22 +747,56 @@ class HubWindow(QMainWindow):
                 f"{running} running."
             )
 
+    def _is_starter_index(self, index: int) -> bool:
+        """True when this tab is the hub's own starter tab.
+
+        Checks the widget's property rather than the stored index, so it stays
+        correct after the starter is closed and reopened.
+        """
+        if index is None or index < 0 or index >= self.tabs.count():
+            return False
+        w = self.tabs.widget(index)
+        return w is not None and w.property("hub_starter") is True
+
     def starter_has_close_button(self) -> bool:
         """Whether the starter tab currently shows a close button.
 
-        The starter tab is permanent, so this must stay False. Exposed as a
-        method (rather than the test poking tabBar() itself) so the invariant
-        has one name to test against.
+        The starter tab is closable on request, so this is True whenever the
+        tab exists at all.
         """
-        return self.tabs.tabBar().tabButton(
-            self.dashboard_tab_index, QTabBar.RightSide
-        ) is not None
+        return self.starter_index() is not None
+
+    def starter_index(self) -> int | None:
+        """The starter tab's current index, or None when it is closed."""
+        for i in range(self.tabs.count()):
+            if self._is_starter_index(i):
+                return i
+        return None
+
+    def open_starter_tab(self) -> None:
+        """Reopen the hub's own tab after the user closed it.
+
+        The pane itself is kept alive (not destroyed) so reopening is cheap and
+        loses nothing. Focuses the existing tab if it is already there.
+        """
+        existing = self.starter_index()
+        if existing is not None:
+            self.tabs.setCurrentIndex(existing)
+            return
+        if getattr(self, "starter_widget", None) is None:
+            return
+        self.dashboard_tab_index = self.tabs.addTab(
+            self.starter_widget, "Local Project Hub"
+        )
+        self.tabs.setCurrentIndex(self.dashboard_tab_index)
+        self._on_tab_changed(self.dashboard_tab_index)
 
     def _tab_index_for_project(self, pid: str) -> int | None:
         for i in range(self.tabs.count()):
-            if i == self.dashboard_tab_index:
+            if self._is_starter_index(i):
                 continue
-            if self.tabs.widget(i).property("hub_project_id") == pid:
+            w = self.tabs.widget(i)
+            if w is not None and w.property("hub_project_id") == pid:
                 return i
         return None
 
@@ -759,7 +804,7 @@ class HubWindow(QMainWindow):
     def web(self) -> "HubWebView":
         """The webview of the ACTIVE project tab (the starter tab has none)."""
         i = self.tabs.currentIndex()
-        if i < 0 or i == self.dashboard_tab_index:
+        if i < 0 or self._is_starter_index(i):
             return None
         w = self.tabs.widget(i)
         return w if isinstance(w, HubWebView) else None
@@ -1014,7 +1059,13 @@ class HubWindow(QMainWindow):
             if not s or s == "about:blank":
                 return
             # Label with the page title once known, else a shortened URL.
-            view.page().runJavaScript("document.title", lambda t, i=idx: self._set_tab_label(i, t or s))
+            # _label_tab is the real helper; _set_tab_label never existed, so
+            # this raised AttributeError on every popup tab whose title
+            # resolved -- inside a JS callback, where Qt turned it into a
+            # SystemError and killed the test.
+            view.page().runJavaScript(
+                "document.title", lambda t, i=idx: self._label_tab(i, t or s)
+            )
             self._append_log(f"[hub] new tab: {s}")
             self.status.showMessage(f"New tab: {s}", 6000)
 
@@ -1030,14 +1081,14 @@ class HubWindow(QMainWindow):
         self.tabs.setTabToolTip(index, text)
 
     def _close_tab(self, index: int) -> None:
-        if index == self.dashboard_tab_index:
-            # The starter tab is permanent. Log the attempt so a user pressing
-            # an x that is not there can be told what happened rather than
-            # left guessing why nothing moved.
-            self._append_log(
-                f"[hub] tab '{self.tabs.tabText(index)}' is the hub's own tab "
-                f"and stays open"
-            )
+        if self._is_starter_index(index):
+            # Closing the hub's own tab removes the TAB but keeps the pane, so
+            # it can be reopened without rebuilding it. Never deleteLater() the
+            # starter widget: that would make reopening impossible.
+            label = self.tabs.tabText(index)
+            self.tabs.removeTab(index)
+            self.dashboard_tab_index = -1
+            self._append_log(f"[hub] closed tab '{label.strip()}'")
             return
         widget = self.tabs.widget(index)
         pid = widget.property("hub_project_id") if widget is not None else None
@@ -1066,10 +1117,10 @@ class HubWindow(QMainWindow):
         from a close that is deliberately refused.
         """
         label = self.tabs.tabText(index) if 0 <= index < self.tabs.count() else "?"
-        if index == self.dashboard_tab_index:
+        if self._is_starter_index(index):
             self._append_log(
-                f"[hub] close pressed on '{label}' — this tab is permanent, "
-                f"so nothing will close"
+                f"[hub] close pressed on '{label.strip()}' — reopening it is in "
+                f"the File menu"
             )
         else:
             self._append_log(f"[hub] close pressed on '{label.strip()}'")
@@ -1077,7 +1128,7 @@ class HubWindow(QMainWindow):
     def _close_tabs_for_project(self, pid: str) -> None:
         """Close every tab belonging to this project (used when it stops)."""
         for i in range(self.tabs.count() - 1, -1, -1):
-            if i == self.dashboard_tab_index:
+            if self._is_starter_index(i):
                 continue
             w = self.tabs.widget(i)
             if w is not None and w.property("hub_project_id") == pid:
@@ -1089,7 +1140,7 @@ class HubWindow(QMainWindow):
         # selected, but keep the title useful.
         if index < 0:
             return
-        on_starter = index == self.dashboard_tab_index
+        on_starter = self._is_starter_index(index)
         # The starter tab shows the welcome pane; the grey "select a project"
         # hint belongs on top of a project tab that has no dashboard yet.
         self.welcome.setVisible(on_starter)
@@ -1124,7 +1175,13 @@ class HubWindow(QMainWindow):
                     w.deleteLater()
                 if pid == self.active_id:
                     self.active_id = None
-                    self.tabs.setCurrentIndex(self.dashboard_tab_index)
+                    # Fall back to the hub's own tab. Reopen it if the user had
+                    # closed it, rather than jumping to whatever tab happens to
+                    # be left.
+                    if self.starter_index() is None:
+                        self.open_starter_tab()
+                    else:
+                        self.tabs.setCurrentIndex(self.starter_index())
         if state == "running" and rec.get("url"):
             self._wait_ready(rec)
 

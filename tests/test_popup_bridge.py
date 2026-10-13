@@ -210,9 +210,16 @@ def test_target_blank_link_and_closing(tmp: Path) -> None:
                 "project tab should remain"
             )
 
-            # the starter tab itself cannot be closed
-            win._close_tab(win.dashboard_tab_index)
-            assert win.tabs.count() == 2, "starter tab was closed"
+            # the starter tab IS closable now; closing it must not take the
+            # project tab with it
+            starter = win.starter_index()
+            assert starter is not None, "starter tab missing before the close"
+            win._close_tab(starter)
+            assert win.tabs.count() == 1, f"tabs={win.tabs.count()}"
+            assert win.tabs.widget(0).property("hub_project_id") == win.active_id, (
+                "project tab should remain after the starter closed"
+            )
+            assert win.starter_index() is None, "starter should be gone"
         finally:
             win.close()
     finally:

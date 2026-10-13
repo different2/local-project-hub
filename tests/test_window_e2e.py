@@ -314,7 +314,7 @@ def test_erroring_project_logs_the_error(tmp: Path) -> None:
 
 
 def test_starter_tab_shows_welcome_not_an_empty_box(tmp: Path) -> None:
-    """The permanent starter tab explains the app instead of showing nothing.
+    """The starter tab explains the app instead of showing nothing.
 
     The tab cannot be closed, so leaving it blank wastes the one pane that is
     always available. It must name the version and how to add a project.
@@ -330,7 +330,7 @@ def test_starter_tab_shows_welcome_not_an_empty_box(tmp: Path) -> None:
         assert not w.placeholder.isVisible(), "grey hint overlapped the welcome"
         text = w.welcome_count.text()
         assert "No projects registered" in text, text
-        assert w.starter_has_close_button() is False, "starter tab must stay open"
+        assert w.starter_has_close_button() is True, "starter tab must be closable"
         # the version and the how-to must actually be on the pane
         labels = " ".join(l.text() for l in w.welcome.findChildren(QLabel))
         assert "Local Project Hub" in labels, labels
@@ -387,14 +387,14 @@ def test_reselecting_a_project_does_not_open_a_second_tab(tmp: Path) -> None:
 
 
 def test_project_tab_close_button_exists_and_starter_has_none(tmp: Path) -> None:
-    """Project tabs are closable; the starter tab deliberately is not."""
+    """Both the starter tab and project tabs are closable."""
     st = sm.Store(tmp / "registry.json")
     st.add(sm.validate({"name": "Closable", "command": "python3 x.py",
                         "url": "http://127.0.0.1:9999/", "working_dir": str(tmp)}))
     w = HubWindow(st)
     w.show()
     try:
-        assert not w.starter_has_close_button(), "starter tab should not be closable"
+        assert w.starter_has_close_button(), "starter tab should be closable"
         w._select_id(st.ordered()[0]["id"], start=False)
         idx = w._tab_index_for_project(st.ordered()[0]["id"])
         assert idx is not None, "project tab not found"
@@ -463,20 +463,37 @@ def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
         w.close()
 
 
-def test_close_press_is_logged_even_when_refused(tmp: Path) -> None:
-    """A refused close must say so, so the user is not left guessing.
+def test_closing_the_starter_tab_leaves_project_tabs_working(tmp: Path) -> None:
+    """Closing the hub's own tab must not corrupt the tab bar.
 
-    The starter tab is permanent. Pressing its x logged nothing before, which
-    reads as "the button is broken" when it is in fact deliberate.
+    The starter used to be identified by a stored INDEX. Once it could be
+    closed, index 0 became a project tab, and every `index == dashboard_tab_index`
+    check would have misread that project as the starter -- silently stripping
+    its close button. Identity now comes from the widget, so this asserts the
+    project tab keeps its button and stays a project after the starter is gone.
     """
     st = sm.Store(tmp / "registry.json")
+    st.add(sm.validate({"name": "Proj", "command": "python3 x.py",
+                        "url": "http://127.0.0.1:9999/", "working_dir": str(tmp)}))
     w = HubWindow(st)
     w.show()
     try:
-        w.tabs.tabCloseRequested.emit(w.dashboard_tab_index)
-        text = w.log_view.toPlainText()
-        assert "permanent" in text, f"refused close was not logged: {text[-300:]}"
-        assert w.tabs.count() == 1, "starter tab was closed"
+        pid = st.ordered()[0]["id"]
+        w._select_id(pid, start=False)
+        assert w.starter_index() == 0, w.starter_index()
+        w.tabs.tabCloseRequested.emit(w.starter_index())
+        assert w.tabs.count() == 1, "starter tab did not close"
+        assert w.starter_index() is None, "starter still present"
+        # the project tab moved to index 0 -- it must NOT be read as the starter
+        assert not w._is_starter_index(0), "project tab misread as the starter"
+        assert w.tabs.tabBar().tabButton(0, QTabBar.RightSide) is not None, (
+            "project tab lost its close button after the starter closed"
+        )
+        # and the starter can be brought back
+        w.open_starter_tab()
+        assert w.starter_index() is not None, "starter could not be reopened"
+        assert w.tabs.count() == 2, w.tabs.count()
+        assert w.welcome.isVisible(), "welcome pane did not come back"
     finally:
         w.close()
 
