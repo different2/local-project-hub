@@ -320,6 +320,106 @@ def test_user_override_wins_over_detection() -> None:
         assert rec["type_override"] == "cli", rec
 
 
+# ---------- spec §8.3 — custom python server using webbrowser.open() ----------
+
+_STDLIB_SERVER = '''\
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import argparse
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args()
+    srv = ThreadingHTTPServer(("127.0.0.1", args.port), BaseHTTPRequestHandler)
+    if not args.no_open:
+        import webbrowser
+        webbrowser.open(f"http://127.0.0.1:{args.port}")
+    srv.serve_forever()
+    return 0
+'''
+
+
+def test_custom_stdlib_server_is_a_web_app() -> None:
+    """A stdlib HTTP server has no framework, but is still a web app.
+
+    This is obs_live.py's shape: no dependency in any manifest, so the
+    framework table cannot classify it and the hub would otherwise call it
+    "cli" and never look for a URL or a no-open flag.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"obs_live.py": _STDLIB_SERVER})
+        det = dt.detect({"command": "python3 obs_live.py", "working_dir": d})
+        assert det.type == WEB, det
+        assert det.framework == "", det
+        assert det.browser == "known-suppressible", det
+        assert any("stdlib HTTP server" in e for e in det.evidence), det
+
+
+def test_custom_stdlib_server_flag_comes_from_its_own_argparse() -> None:
+    """The suppress flag is the one the script itself declares — not a guess.
+
+    Spec §2 forbids appending a flag the program does not understand: an
+    unknown flag breaks the command outright, which is worse than a spare
+    browser window.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"obs_live.py": _STDLIB_SERVER})
+        det = dt.detect({"command": "python3 obs_live.py", "working_dir": d})
+        assert dt.browser_suppress_args(det) == "--no-open", det
+
+
+def test_stdlib_server_without_a_no_open_flag_gets_none() -> None:
+    """A server that never declares the flag must not be handed one."""
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"srv.py": _STDLIB_SERVER.replace(
+            '    ap.add_argument("--no-open", action="store_true")\n', ""
+        ).replace("    if not args.no_open:", "    if True:").replace(
+            "        webbrowser.open(f\"http://127.0.0.1:{args.port}\")\n", ""
+        )})
+        det = dt.detect({"command": "python3 srv.py", "working_dir": d})
+        assert det.type == WEB, det
+        assert det.browser == "unknown", det
+        assert dt.browser_suppress_args(det) == "", det
+
+
+def test_plain_cli_script_is_not_treated_as_a_web_app() -> None:
+    """The negative control: no server markers means no URL hunt, no flag."""
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"thing.py": (
+            "import argparse\n"
+            "ap = argparse.ArgumentParser()\n"
+            'ap.add_argument("--port", type=int)\n'
+            'print("done")\n'
+        )})
+        det = dt.detect({"command": "python3 thing.py", "working_dir": d})
+        assert det.type == CLI, det
+        assert dt.browser_suppress_args(det) == "", det
+
+
+def test_missing_entry_script_yields_no_flag() -> None:
+    """An unreadable or absent script returns no flag rather than raising."""
+    det = dt.Detection()
+    det.type = WEB
+    det.browser = "known-suppressible"
+    det.entry_script = "/nonexistent/definitely-not-here.py"
+    assert dt.browser_suppress_args(det) == "", det
+
+
+def test_detection_never_executes_the_entry_script() -> None:
+    """Spec §7: inspection is read-only. A script that would fail on import
+    must still be classified without being run."""
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"boom.py": (
+            "from http.server import BaseHTTPRequestHandler\n"
+            "raise SystemExit('this must never run')\n"
+        )})
+        # Would raise if the module were imported or executed.
+        det = dt.detect({"command": "python3 boom.py", "working_dir": d})
+        assert det.type == WEB, det
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):

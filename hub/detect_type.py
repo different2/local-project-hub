@@ -30,6 +30,7 @@ Types (spec §1):
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -69,6 +70,10 @@ class Detection:
     browser: str = ""  # "known-suppressible" | "none" | "unknown"
     display: str = DISPLAY[UNKNOWN]
     evidence: list[str] = field(default_factory=list)
+    # Absolute or cwd-relative path to the .py the command runs. Lets
+    # browser_suppress_args() read the script's own argparse instead of
+    # guessing a flag (spec §2). Not persisted; recomputed each detection.
+    entry_script: str = field(default="", repr=False)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -278,7 +283,15 @@ def detect(record: dict) -> Detection:
             det.type = WEB
             det.confidence = 0.8
             det.framework = framework
+            det.entry_script = _entry_script_path(command, cwd)
             det.browser = "known-suppressible" if framework in BROWSER_FLAGS else "unknown"
+            # A custom server can still advertise the flag in its own argparse;
+            # that is evidence, so it counts as suppressible too.
+            if det.browser == "unknown" and _argparse_no_open_flag(det):
+                det.browser = "known-suppressible"
+                det.evidence.append(
+                    f"entry script declares {_argparse_no_open_flag(det)} in its argparse"
+                )
             det.display = DISPLAY[WEB]
             det.evidence.append(
                 f"python project depends on a web framework ({framework or 'unrecognised'})"
@@ -313,6 +326,28 @@ def detect(record: dict) -> Detection:
         det.evidence.append("entry point name suggests a server")
         return det
 
+    # 5b. No framework dependency, but the entry script itself implements a
+    # stdlib HTTP server. A script that subclasses BaseHTTPRequestHandler or
+    # instantiates an HTTPServer *is* a web app — the framework table simply has
+    # no name for it. This is what makes a custom server like obs_live.py
+    # detectable at all; without it the hub calls it "cli" and never looks for a
+    # URL or a no-open flag.
+    if _script_serves_http(_entry_script_path(command, cwd)):
+        det.type = WEB
+        det.confidence = 0.6
+        det.framework = ""
+        det.entry_script = _entry_script_path(command, cwd)
+        det.browser = "unknown"
+        det.display = DISPLAY[WEB]
+        det.evidence.append(
+            "entry script implements a stdlib HTTP server (BaseHTTPRequestHandler/HTTPServer)"
+        )
+        flag = _argparse_no_open_flag(det)
+        if flag:
+            det.browser = "known-suppressible"
+            det.evidence.append(f"entry script declares {flag} in its argparse")
+        return det
+
     # 6. Nothing web-like was found. A python command running a script is
     # headless by convention, so "cli" is fair. Anything else — a binary or
     # script the hub does not recognise — is genuinely UNKNOWN: claiming "cli"
@@ -339,10 +374,86 @@ def browser_suppress_args(det: Detection) -> str:
     Returns "" for anything not in BROWSER_FLAGS. Guessing here is exactly what
     spec §2 forbids: an unknown flag is worse than an extra browser window,
     because it can break the command outright.
+
+    Two sources of truth, in order:
+      1. BROWSER_FLAGS — the framework's own documented switch.
+      2. The entry script's own ``argparse`` — if the script literally declares
+         a no-open style flag, using it is quoting the program, not guessing.
     """
     if not det or det.browser != "known-suppressible":
         return ""
-    return BROWSER_FLAGS.get(det.framework, "")
+    if det.framework in BROWSER_FLAGS:
+        return BROWSER_FLAGS[det.framework]
+    return _argparse_no_open_flag(det)
+
+
+# Flags that mean "do not open a browser", as a script would spell them.
+_NO_OPEN_NAMES = ("no-open", "no_open", "no-browser", "no_browser",
+                  "headless", "no-launch", "no-launch-browser")
+
+
+def _entry_script_path(command: str, cwd: str) -> str:
+    """Best-effort path to the .py file a command runs, or "".
+
+    Only the command line is parsed — the script is never imported or run
+    (spec §7: no arbitrary execution for inspection).
+    """
+    tokens = [t for t in command.split() if t]
+    for tok in tokens:
+        if tok.endswith(".py"):
+            return tok if os.path.isabs(tok) else os.path.join(cwd or ".", tok)
+    return ""
+
+
+# stdlib HTTP-server markers. Any of these means the script serves HTTP itself,
+# with no framework involved (spec §1 wants web vs cli decided from evidence).
+_HTTP_SERVER_TOKENS = (
+    "BaseHTTPRequestHandler",
+    "ThreadingHTTPServer",
+    "HTTPServer",
+    "socketserver.TCPServer",
+    "http.server",
+)
+
+
+def _script_serves_http(script: str) -> bool:
+    """True when the entry script implements a stdlib HTTP server.
+
+    Text-only: the file is read, never imported or executed (spec §7).
+    """
+    if not script:
+        return False
+    try:
+        with open(script, encoding="utf-8", errors="replace") as fh:
+            source = fh.read(512_000)
+    except (OSError, ValueError):
+        return False
+    return any(tok in source for tok in _HTTP_SERVER_TOKENS)
+
+
+def _argparse_no_open_flag(det: Detection) -> str:
+    """A no-open flag the entry script declares in its own argparse, or "".
+
+    Text-only inspection: the script is never executed or imported. A project
+    that advertises the flag is a custom server like obs_live.py, which has no
+    framework but does define ``--no-open`` itself. Passing it is reading the
+    program's own contract, which is evidence rather than a guess -- but if the
+    file cannot be read or parsed we return "" and leave the browser alone.
+    """
+    script = (getattr(det, "entry_script", "") or "").strip()
+    if not script:
+        return ""
+    try:
+        with open(script, encoding="utf-8", errors="replace") as fh:
+            source = fh.read(512_000)  # cap: a huge file is not argparse
+    except (OSError, ValueError):
+        return ""
+    if "argparse" not in source and "ArgumentParser" not in source:
+        return ""
+    for m in re.finditer(r"""add_argument\(\s*['"](--[^'"]+)['"]""", source):
+        if any(name in m.group(1).lower() for name in _NO_OPEN_NAMES):
+            return m.group(1)
+    return ""
 
 
 def _is_python(haystack: str) -> bool:
