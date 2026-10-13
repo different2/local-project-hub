@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from . import diagnostics as diagnostics_mod
 from . import launch_at_login, store as store_mod, urldetect
 from .diagnostics import build_report, format_report, save_report
@@ -123,6 +124,12 @@ class HubWindow(QMainWindow):
 
         self._build_ui()
         self._reload_list()
+        self._refresh_welcome()
+        # The starter tab is already current when the window is built, so
+        # currentChanged never fires for it. Apply the starter state once here:
+        # show the welcome pane, hide the grey "select a project" hint.
+        self.welcome.setVisible(True)
+        self.placeholder.setVisible(False)
         self._restore_last_project()
         self._autostart()
         self._starting_up = False
@@ -520,13 +527,15 @@ class HubWindow(QMainWindow):
         # right: tab bar. Each selected project gets its OWN tab and its OWN
         # webview, so several dashboards can be open side by side (and a
         # _blank popup becomes just another tab). The first tab is a starter
-        # pane shown before any project is opened.
-        self.placeholder = QLabel("No project selected")
+        # pane: it explains the app instead of showing an empty grey box.
+        self.placeholder = QLabel("Select a project on the left to open its dashboard")
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setStyleSheet("color: gray; font-size: 15px;")
+        self.welcome = self._build_welcome_pane()
         self.stack = QStackedLayout()
         self.stack.setStackingMode(QStackedLayout.StackAll)
         self.stack.addWidget(self.placeholder)
+        self.stack.addWidget(self.welcome)
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
@@ -654,6 +663,89 @@ class HubWindow(QMainWindow):
             return
         self._open_project_tab(rec)
 
+    def _build_welcome_pane(self) -> QWidget:
+        """The starter tab's content: what this app is and how to drive it.
+
+        The tab is permanent, so it should say something useful rather than
+        showing an empty grey box. It is built once; the project count is
+        refreshed by _refresh_welcome() whenever projects change.
+        """
+        pane = QWidget()
+        v = QVBoxLayout(pane)
+        v.setContentsMargins(28, 24, 28, 24)
+        v.setSpacing(10)
+
+        title = QLabel(f"<h2>Local Project Hub</h2><p style='color:gray'>"
+                       f"version {__version__}</p>")
+        title.setTextFormat(Qt.RichText)
+        v.addWidget(title)
+
+        self.welcome_count = QLabel("")
+        self.welcome_count.setStyleSheet("color: gray;")
+        v.addWidget(self.welcome_count)
+
+        v.addSpacing(8)
+
+        steps = QLabel(
+            "<b>Getting started</b><br>"
+            "1. Press <b>+ Add Project</b> on the left and give it a command "
+            "such as <code>python3 obs_live.py</code>.<br>"
+            "2. The dashboard URL is detected automatically — leave that field "
+            "blank unless the project needs a fixed one.<br>"
+            "3. Click a project in the list to open it here. Adding or "
+            "selecting a project never starts it by itself.<br><br>"
+            "<b>Things worth knowing</b><br>"
+            "• Each project gets its own tab; a project that opens its own "
+            "window (a sphere view, say) gets an extra tab you can close.<br>"
+            "• The log drawer at the bottom shows what each project prints. "
+            "Drag its edge to resize, or collapse it with the arrow.<br>"
+            "• If a port is already taken, the hub offers to end the process "
+            "holding it instead of failing to start.<br>"
+            "• Browser-opening flags such as <code>--no-open</code> are read "
+            "from your project's own code, so the app does not guess.<br>"
+        )
+        steps.setWordWrap(True)
+        steps.setTextFormat(Qt.RichText)
+        steps.setAlignment(Qt.AlignTop)
+        v.addWidget(steps)
+        v.addStretch(1)
+        return pane
+
+    def _refresh_welcome(self) -> None:
+        """Keep the starter tab's project count honest as projects change."""
+        if not hasattr(self, "welcome_count"):
+            return
+        try:
+            recs = self.store.ordered()
+        except Exception:
+            return
+        running = sum(
+            1 for r in recs
+            if (self.procs.get(r["id"]) is not None
+                and self.procs[r["id"]].state == "running")
+        )
+        n = len(recs)
+        if n == 0:
+            self.welcome_count.setText(
+                "No projects registered yet — press + Add Project to begin."
+            )
+        else:
+            self.welcome_count.setText(
+                f"{n} project{'s' if n != 1 else ''} registered, "
+                f"{running} running."
+            )
+
+    def starter_has_close_button(self) -> bool:
+        """Whether the starter tab currently shows a close button.
+
+        The starter tab is permanent, so this must stay False. Exposed as a
+        method (rather than the test poking tabBar() itself) so the invariant
+        has one name to test against.
+        """
+        return self.tabs.tabBar().tabButton(
+            self.dashboard_tab_index, QTabBar.RightSide
+        ) is not None
+
     def _tab_index_for_project(self, pid: str) -> int | None:
         for i in range(self.tabs.count()):
             if i == self.dashboard_tab_index:
@@ -698,6 +790,17 @@ class HubWindow(QMainWindow):
             self.status.showMessage(f"{rec['name']} launched in its own window")
             proc = self._proc_for(rec)
             if proc.state != "running":
+                self._start_active()
+            return
+
+        # One tab per project: re-selecting focuses the existing tab instead of
+        # opening a second copy. A duplicate tab shows a stale view and, worse,
+        # the stale copy's close button then stops the project out from under
+        # the live tab.
+        existing = self._tab_index_for_project(rec["id"])
+        if existing is not None and existing >= 0:
+            self.tabs.setCurrentIndex(existing)
+            if start and self._proc_for(rec).state != "running":
                 self._start_active()
             return
 
@@ -957,8 +1060,15 @@ class HubWindow(QMainWindow):
         # selected, but keep the title useful.
         if index < 0:
             return
-        label = self.tabs.tabText(index)
-        if index != self.dashboard_tab_index:
+        on_starter = index == self.dashboard_tab_index
+        # The starter tab shows the welcome pane; the grey "select a project"
+        # hint belongs on top of a project tab that has no dashboard yet.
+        self.welcome.setVisible(on_starter)
+        self.placeholder.setVisible(not on_starter)
+        if on_starter:
+            self._refresh_welcome()
+        else:
+            label = self.tabs.tabText(index)
             self.status.showMessage(f"Viewing: {label}", 4000)
 
     def _on_state(self, pid: str, state: str) -> None:
@@ -1268,6 +1378,7 @@ class HubWindow(QMainWindow):
             QMessageBox.warning(self, "Could not add", str(e))
             return
         self._reload_list()
+        self._refresh_welcome()
         # Select the new project but do NOT start it. Adding a project
         # registers it; the user has not asked for it to run yet, and starting
         # here is what fired obs_live (and its own browser) the moment it was
@@ -1291,6 +1402,7 @@ class HubWindow(QMainWindow):
         if old:
             old.stop()
         self._reload_list()
+        self._refresh_welcome()
         # Editing must not start it either — the project may already be running,
         # and re-selecting would restart it. Just keep the selection.
         self._select_id(pid, start=False)
@@ -1324,6 +1436,7 @@ class HubWindow(QMainWindow):
         self.store.remove(pid)
         self.active_id = None
         self._reload_list()
+        self._refresh_welcome()
 
     def _set_controls_enabled(self, on: bool) -> None:
         for a in (

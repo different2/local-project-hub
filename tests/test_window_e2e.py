@@ -22,10 +22,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QEventLoop, QTimer, QUrl  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QTabBar  # noqa: E402
 
 from hub import store as sm  # noqa: E402
 from hub.window import HubWebView, HubWindow  # noqa: E402
+from hub import __version__  # noqa: E402
 
 # Each test gets its own port: sharing one lets a previous test's server kill
 # the next with "Address already in use" (code=1), which reads as a regression
@@ -307,6 +308,98 @@ def test_erroring_project_logs_the_error(tmp: Path) -> None:
         assert ok, f"expected error state, got {proc.state}"
         log_text = w.log_view.toPlainText()
         assert "exited with an error" in log_text, log_text[-300:]
+    finally:
+        w.close()
+
+
+def test_starter_tab_shows_welcome_not_an_empty_box(tmp: Path) -> None:
+    """The permanent starter tab explains the app instead of showing nothing.
+
+    The tab cannot be closed, so leaving it blank wastes the one pane that is
+    always available. It must name the version and how to add a project.
+    """
+    st = sm.Store(tmp / "registry.json")
+    w = HubWindow(st)
+    w.show()
+    try:
+        starter = w.dashboard_tab_index
+        w.tabs.setCurrentIndex(starter)
+        _wait_for(lambda: w.welcome.isVisible())
+        assert w.welcome.isVisible(), "welcome pane never became visible"
+        assert not w.placeholder.isVisible(), "grey hint overlapped the welcome"
+        text = w.welcome_count.text()
+        assert "No projects registered" in text, text
+        assert w.starter_has_close_button() is False, "starter tab must stay open"
+        # the version and the how-to must actually be on the pane
+        labels = " ".join(l.text() for l in w.welcome.findChildren(QLabel))
+        assert "Local Project Hub" in labels, labels
+        assert "Add Project" in labels, labels
+        assert __version__ in labels, f"version {__version__} missing from the pane"
+    finally:
+        w.close()
+
+
+def test_welcome_counts_projects(tmp: Path) -> None:
+    """The starter tab's summary stays honest as projects are added."""
+    st = sm.Store(tmp / "registry.json")
+    w = HubWindow(st)
+    w.show()
+    try:
+        st.add(sm.validate({"name": "One", "command": "python3 x.py",
+                            "working_dir": str(tmp)}))
+        w._reload_list()
+        w._refresh_welcome()
+        assert "1 project registered" in w.welcome_count.text(), w.welcome_count.text()
+        st.add(sm.validate({"name": "Two", "command": "python3 y.py",
+                            "working_dir": str(tmp)}))
+        w._reload_list()
+        w._refresh_welcome()
+        assert "2 projects registered" in w.welcome_count.text(), w.welcome_count.text()
+    finally:
+        w.close()
+
+
+def test_reselecting_a_project_does_not_open_a_second_tab(tmp: Path) -> None:
+    """One tab per project: re-selecting focuses instead of duplicating.
+
+    A duplicate shows a stale view, and its close button then stops the
+    project out from under the live tab.
+    """
+    st = sm.Store(tmp / "registry.json")
+    rec = sm.validate({"name": "Solo", "command": "python3 x.py",
+                       "url": "http://127.0.0.1:9999/", "working_dir": str(tmp)})
+    st.add(rec)
+    w = HubWindow(st)
+    w.show()
+    try:
+        pid = rec["id"]
+        w._select_id(pid, start=False)
+        assert w.tabs.count() == 2, w.tabs.count()
+        w._select_id(pid, start=False)
+        assert w.tabs.count() == 2, f"duplicated to {w.tabs.count()} tabs"
+        w._select_id(pid, start=False)
+        assert w.tabs.count() == 2, f"duplicated to {w.tabs.count()} tabs"
+        labels = [w.tabs.tabText(i) for i in range(w.tabs.count())]
+        assert labels.count("  Solo") == 1, labels
+    finally:
+        w.close()
+
+
+def test_project_tab_close_button_exists_and_starter_has_none(tmp: Path) -> None:
+    """Project tabs are closable; the starter tab deliberately is not."""
+    st = sm.Store(tmp / "registry.json")
+    st.add(sm.validate({"name": "Closable", "command": "python3 x.py",
+                        "url": "http://127.0.0.1:9999/", "working_dir": str(tmp)}))
+    w = HubWindow(st)
+    w.show()
+    try:
+        assert not w.starter_has_close_button(), "starter tab should not be closable"
+        w._select_id(st.ordered()[0]["id"], start=False)
+        idx = w._tab_index_for_project(st.ordered()[0]["id"])
+        assert idx is not None, "project tab not found"
+        assert w.tabs.tabBar().tabButton(idx, QTabBar.RightSide) is not None, (
+            "project tab has no close button"
+        )
     finally:
         w.close()
 
