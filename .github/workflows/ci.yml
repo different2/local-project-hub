@@ -42,6 +42,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow pytest
 
+      # QtWebEngineWidgets ships in the base PySide6 wheel, NOT in
+      # PySide6-Addons/Essentials. When pip resolves only the Addons/Essentials
+      # names the import fails, every GUI suite exits non-zero with zero tests
+      # run, and the job reports a bare "Run the test suite" failure with
+      # nothing to read. Assert the import here so the error names itself.
+      - name: Verify QtWebEngine is importable
+        shell: bash
+        run: |
+          python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('QtWebEngine OK', __import__('PySide6').__version__)"
+
       # The GUI suites need a display; xvfb provides one on Linux.
       - name: Install xvfb (Linux only)
         if: runner.os == 'Linux'
