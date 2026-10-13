@@ -133,14 +133,26 @@ class HubWindow(QMainWindow):
         from . import __version__
         from .diagnostics import describe_platform_support
 
-        QMessageBox.about(
-            self,
-            "About Local Project Hub",
+        # Built explicitly rather than via the QMessageBox.about() static
+        # helper: that helper creates a parentless message box with no default
+        # button, so macOS highlights an arbitrary control and renders the text
+        # as selectable (an editable-looking caret inside an About box).
+        box = QMessageBox(self)
+        box.setWindowTitle("About Local Project Hub")
+        box.setTextFormat(Qt.RichText)
+        box.setText(
             f"<h3>Local Project Hub</h3>"
             f"<p>Version <b>{__version__}</b></p>"
             f"<p>A control centre for your locally hosted projects.</p>"
-            f"<p style='color: gray'>Supports {describe_platform_support()}.</p>",
+            f"<p style='color: gray'>Supports {describe_platform_support()}.</p>"
         )
+        box.setTextInteractionFlags(Qt.NoTextInteraction)
+        ok = box.addButton(QMessageBox.Ok)
+        ok.setDefault(True)
+        ok.setAutoDefault(True)
+        ok.setFocus()
+        box.setDefaultButton(ok)
+        box.exec()
 
     def _show_preferences(self) -> None:
         """Application preferences (release spec §4).

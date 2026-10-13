@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
+from PySide6.QtCore import QEventLoop, Qt, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from hub import store as sm, urldetect  # noqa: E402
@@ -712,6 +712,48 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
     finally:
         holder.stop()
         _wait_for(lambda: holder.state == "stopped", timeout_s=25)
+
+
+def test_about_dialog_has_a_real_default_button() -> None:
+    """The About box must behave like a dialog, not a floating text pane.
+
+    QMessageBox.about() is a static helper that builds a parentless box with no
+    default button: macOS then highlights an arbitrary control and renders the
+    text as selectable, so the About box shows a caret you can move between
+    letters. Both are wrong for an informational box.
+    """
+    import tempfile
+
+    captured = {}
+
+    def fake_exec(self):
+        captured["box"] = self
+        return 0
+
+    original = QMessageBox.exec
+    QMessageBox.exec = fake_exec
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            st = sm.Store(Path(d) / "registry.json")
+            w = HubWindow(st)
+            w.show()
+            try:
+                HubWindow._show_about(w)
+            finally:
+                w.close()
+    finally:
+        QMessageBox.exec = original
+
+    box = captured.get("box")
+    assert box is not None, "no dialog was shown"
+    assert box.parent() is not None, "the About box has no parent window"
+    default = box.defaultButton()
+    assert default is not None, "no default button — macOS will highlight anything"
+    assert default.text() == "OK", default.text()
+    assert box.focusWidget() is default, "focus is not on the OK button"
+    assert box.textInteractionFlags() == Qt.NoTextInteraction, (
+        "the text is selectable, which shows an editable-looking caret"
+    )
 
 
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
