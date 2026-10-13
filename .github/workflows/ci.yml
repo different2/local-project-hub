@@ -40,13 +40,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow pytest
+          # QtWebEngineWidgets lives in the base PySide6 wheel, NOT in
+          # PySide6-Addons/Essentials. Naming only the Addons/Essentials
+          # packages installs a PySide6 that imports fine and then fails with
+          # "No module named PySide6.QtWebEngineWidgets", which makes every GUI
+          # suite exit non-zero with zero tests run.
+          python -m pip install PySide6-Essentials PySide6-Addons PySide6 Pillow pytest
 
-      # QtWebEngineWidgets ships in the base PySide6 wheel, NOT in
-      # PySide6-Addons/Essentials. When pip resolves only the Addons/Essentials
-      # names the import fails, every GUI suite exits non-zero with zero tests
-      # run, and the job reports a bare "Run the test suite" failure with
-      # nothing to read. Assert the import here so the error names itself.
+      # QtWebEngineWidgets ships in the base PySide6 wheel. Assert it imports so
+      # a resolution problem here names itself instead of surfacing later as a
+      # bare "Run the test suite" failure with no test output to read.
       - name: Verify QtWebEngine is importable
         shell: bash
         run: |
