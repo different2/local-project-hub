@@ -31,7 +31,8 @@ from hub import __version__  # noqa: E402
 # Each test gets its own port: sharing one lets a previous test's server kill
 # the next with "Address already in use" (code=1), which reads as a regression
 # but is just cross-test contamination.
-_PORTS = {"selecting": 8791, "load": 8792, "restart": 8793, "stopped": 8794, "stopping": 8790}
+_PORTS = {"selecting": 8791, "load": 8792, "restart": 8793, "stopped": 8794,
+          "stopping": 8790, "close_running": 8795}
 
 
 def _server_src(port: int) -> str:
@@ -400,6 +401,82 @@ def test_project_tab_close_button_exists_and_starter_has_none(tmp: Path) -> None
         assert w.tabs.tabBar().tabButton(idx, QTabBar.RightSide) is not None, (
             "project tab has no close button"
         )
+    finally:
+        w.close()
+
+
+def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
+    """The x on a RUNNING project's tab must close the tab and stop the backend.
+
+    This is the user's exact report: the tab closed when the project was
+    stopped but not when it was running. The cause was a TypeError inside the
+    close handler — `store.get(pid, {})` passes two arguments to a method that
+    takes one — which threw only on the running path (the log line is inside
+    `if proc is not None`) and was swallowed by the Qt signal, so the click
+    silently did nothing.
+    """
+    port = _PORTS["close_running"]
+    _wait_for_port_free(port)
+    srv = tmp / "srv.py"
+    srv.write_text(_server_src(port))
+    st = sm.Store(tmp / "registry.json")
+    rec = sm.validate(
+        {"name": "Live", "command": f"{sys.executable} {srv}",
+         "url": "", "working_dir": str(tmp)}
+    )
+    st.add(rec)
+    w = HubWindow(st)
+    w.show()
+    try:
+        pid = st.ordered()[0]["id"]
+        w._select_id(pid, start=True)
+        assert _wait_for(lambda: w.procs[pid].state == "running", timeout_s=25), (
+            f"server never started: {w.procs[pid].state}"
+        )
+        idx = w._tab_index_for_project(pid)
+        assert idx is not None, "no tab for the running project"
+        assert w.tabs.tabBar().tabButton(idx, QTabBar.RightSide) is not None, (
+            "running project's tab has no close button"
+        )
+        assert w.tabs.count() == 2, w.tabs.count()
+
+        # exactly what clicking the x does
+        w.tabs.tabCloseRequested.emit(idx)
+        assert w.tabs.count() == 1, (
+            f"tab did not close while running (tabs={w.tabs.count()})"
+        )
+        assert [w.tabs.tabText(i) for i in range(w.tabs.count())] == [
+            "Local Project Hub"
+        ], "the wrong tab was closed"
+        # the backend must go down too, not be left running behind a closed tab
+        assert _wait_for(lambda: w.procs[pid].state == "stopped", timeout_s=30), (
+            f"process still {w.procs[pid].state} after its tab closed"
+        )
+        # and the project stays registered so it can be started again
+        assert any(r["id"] == pid for r in st.ordered()), "project was unregistered"
+    finally:
+        for p in list(w.procs.values()):
+            try:
+                p.stop()
+            except Exception:
+                pass
+        w.close()
+
+
+def test_close_press_is_logged_even_when_refused(tmp: Path) -> None:
+    """A refused close must say so, so the user is not left guessing.
+
+    The starter tab is permanent. Pressing its x logged nothing before, which
+    reads as "the button is broken" when it is in fact deliberate.
+    """
+    st = sm.Store(tmp / "registry.json")
+    w = HubWindow(st)
+    w.show()
+    try:
+        w.tabs.tabCloseRequested.emit(w.dashboard_tab_index)
+        text = w.log_view.toPlainText()
+        assert "permanent" in text, f"refused close was not logged: {text[-300:]}"
+        assert w.tabs.count() == 1, "starter tab was closed"
     finally:
         w.close()
 

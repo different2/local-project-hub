@@ -541,6 +541,7 @@ class HubWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setDocumentMode(True)
         self.tabs.setMovable(True)
+        self.tabs.tabCloseRequested.connect(self._log_tab_close_press)
         self.tabs.tabCloseRequested.connect(self._close_tab)
 
         starter = QWidget()
@@ -1030,20 +1031,48 @@ class HubWindow(QMainWindow):
 
     def _close_tab(self, index: int) -> None:
         if index == self.dashboard_tab_index:
-            return  # the starter tab is permanent
+            # The starter tab is permanent. Log the attempt so a user pressing
+            # an x that is not there can be told what happened rather than
+            # left guessing why nothing moved.
+            self._append_log(
+                f"[hub] tab '{self.tabs.tabText(index)}' is the hub's own tab "
+                f"and stays open"
+            )
+            return
         widget = self.tabs.widget(index)
         pid = widget.property("hub_project_id") if widget is not None else None
+        label = self.tabs.tabText(index)
         # Closing a project's tab also stops its backend, so a stopped
         # project never leaves a process running in the background.
         if pid:
             proc = self.procs.get(pid)
             if proc is not None:
-                self._append_log(f"[hub] stopping {self.store.get(pid, {}).get('name', pid)} (tab closed)")
+                rec = self.store.get(pid)
+                name = (rec or {}).get("name") or pid
+                self._append_log(f"[hub] stopping {name} (tab closed)")
                 self._user_stopped_ids.add(pid)
                 proc.stop()
         self.tabs.removeTab(index)
+        self._append_log(f"[hub] closed tab '{label.strip()}'")
         if widget is not None:
             widget.deleteLater()
+
+    def _log_tab_close_press(self, index: int) -> None:
+        """Record a close-button press and whether it will do anything.
+
+        Wired to tabCloseRequested BEFORE the real handler, so the log shows
+        the press even when the close itself is refused. A press that never
+        appears here at all means the click never reached Qt — a different bug
+        from a close that is deliberately refused.
+        """
+        label = self.tabs.tabText(index) if 0 <= index < self.tabs.count() else "?"
+        if index == self.dashboard_tab_index:
+            self._append_log(
+                f"[hub] close pressed on '{label}' — this tab is permanent, "
+                f"so nothing will close"
+            )
+        else:
+            self._append_log(f"[hub] close pressed on '{label.strip()}'")
 
     def _close_tabs_for_project(self, pid: str) -> None:
         """Close every tab belonging to this project (used when it stops)."""
