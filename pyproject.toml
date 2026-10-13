@@ -1,7 +1,7 @@
 [tool.briefcase]
 project_name = "Local Project Hub"
 bundle = "local.projecthub"
-version = "0.2.9"
+version = "0.3.0"
 url = "https://github.com/different2/local-project-hub"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -16,6 +16,11 @@ icon = "assets/icon"
 requires = [
     "PySide6-Essentials",
     "PySide6-Addons",
+    # macOS only: the About box's traffic lights cannot be controlled through Qt
+    # (every window-button hint combination yields some set of buttons, never
+    # close alone), so the real AppKit buttons are hidden via pyobjc. Guarded at
+    # import time — the app runs unchanged where it is absent or not macOS.
+    "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
 ]
 
 # Python 3.11+ has wheels for arm64 macOS; 3.9 (the dev interpreter) does not,

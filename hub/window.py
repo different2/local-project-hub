@@ -151,15 +151,29 @@ class HubWindow(QMainWindow):
         label.setTextInteractionFlags(Qt.NoTextInteraction)
         layout.addWidget(label)
         dlg.setMinimumWidth(380)
-        # Close button only. Window-button HINTS are advisory and are ignored by
-        # the macOS platform plugin for a plain QDialog — every combination
-        # reports the same flags offscreen while the real window still shows all
-        # three lights. Qt.Tool is the window type macOS renders with the close
-        # button alone (it is what sheet/utility panels use), so it is set
-        # INSTEAD of Dialog rather than alongside it.
+        # Close button only. Qt's window-button HINTS cannot do this on macOS —
+        # every combination yields some set of traffic lights, never close alone
+        # (Qt.Dialog gave red+green, Qt.Tool gave all three). The real buttons
+        # are AppKit subviews, hidden individually below. Best-effort: without
+        # pyobjc, or on other platforms, the box simply keeps its buttons.
         dlg.setWindowFlags(Qt.Tool | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         dlg.setWindowModality(Qt.ApplicationModal)
+        dlg.show()
+        self._close_only_window_buttons(dlg)
         dlg.exec()
+
+    @staticmethod
+    def _close_only_window_buttons(win) -> None:
+        """Hide the minimise/zoom traffic lights, where AppKit is available."""
+        try:
+            from . import macos_buttons
+        except Exception:
+            return
+        if not macos_buttons.available():
+            return
+        ns_window = macos_buttons.find_window(win)
+        if ns_window is not None:
+            macos_buttons.show_only_close_button(ns_window)
 
     def _show_preferences(self) -> None:
         """Application preferences (release spec §4).

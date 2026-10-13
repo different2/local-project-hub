@@ -20,7 +20,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialog,
+    QLabel,
+    QMessageBox,
+)
 
 from hub import store as sm, urldetect  # noqa: E402
 from hub.process_manager import ProjectProcess  # noqa: E402
@@ -773,6 +778,54 @@ def test_about_dialog_is_closable_and_unhighlighted() -> None:
     assert labels[0].textInteractionFlags() == Qt.NoTextInteraction, (
         "the text is selectable, which shows an editable-looking caret"
     )
+
+
+def test_about_box_hides_extra_window_buttons() -> None:
+    """The About box must show the close button alone.
+
+    Qt's window-button hints CANNOT achieve this on macOS (every combination
+    gives some set of traffic lights), so this asserts on the real AppKit
+    buttons, which only exist on a real screen. Skipped under the offscreen
+    platform, where no window decorations are created at all and the assertions
+    could never hold.
+    """
+    import os
+
+    from PySide6.QtCore import Qt
+
+    from hub import macos_buttons as mb
+
+    if os.environ.get("QT_QPA_PLATFORM") in ("offscreen", "minimal", "vnc"):
+        print("SKIP test_about_box_hides_extra_window_buttons: offscreen has no decorations")
+        return
+    if not mb.available():
+        print("SKIP test_about_box_hides_extra_window_buttons: no pyobjc")
+        return
+
+    dlg = QDialog()
+    dlg.setWindowTitle("About Local Project Hub")
+    dlg.setWindowFlags(Qt.Tool | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+    dlg.show()
+    QApplication.processEvents()
+    try:
+        ns_window = mb.find_window(dlg)
+        assert ns_window is not None, "could not find the backing NSWindow"
+        mb.show_only_close_button(ns_window)
+
+        close_button = ns_window.standardWindowButton_(0)
+        minimize_button = ns_window.standardWindowButton_(1)
+        zoom_button = ns_window.standardWindowButton_(2)
+        assert close_button is not None and not close_button.isHidden(), (
+            "the close button must stay visible"
+        )
+        assert minimize_button is not None and minimize_button.isHidden(), (
+            "the minimise button is still shown"
+        )
+        assert zoom_button is not None and zoom_button.isHidden(), (
+            "the zoom button is still shown"
+        )
+    finally:
+        dlg.close()
 
 
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
