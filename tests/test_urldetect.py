@@ -747,10 +747,17 @@ def test_about_dialog_has_a_real_default_button() -> None:
     box = captured.get("box")
     assert box is not None, "no dialog was shown"
     assert box.parent() is not None, "the About box has no parent window"
-    default = box.defaultButton()
-    assert default is not None, "no default button — macOS will highlight anything"
-    assert default.text() == "OK", default.text()
-    assert box.focusWidget() is default, "focus is not on the OK button"
+    # No default button: macOS paints a default blue, which reads as "pressed"
+    # on a purely informational box.
+    assert box.defaultButton() is None, (
+        "OK is the default button, so macOS highlights it"
+    )
+    ok_buttons = [b for b in box.buttons() if b.text() == "OK"]
+    assert ok_buttons, "the About box has no OK button"
+    assert not ok_buttons[0].autoDefault(), "OK will be painted as the default"
+    # Escape must still close it, so the box is dismissable without a mouse.
+    escape = box.escapeButton()
+    assert escape is not None and escape.text() == "OK", "Escape does not close the box"
     assert box.textInteractionFlags() == Qt.NoTextInteraction, (
         "the text is selectable, which shows an editable-looking caret"
     )

@@ -148,10 +148,15 @@ class HubWindow(QMainWindow):
         )
         box.setTextInteractionFlags(Qt.NoTextInteraction)
         ok = box.addButton(QMessageBox.Ok)
-        ok.setDefault(True)
-        ok.setAutoDefault(True)
-        ok.setFocus()
-        box.setDefaultButton(ok)
+        # Deliberately NOT the default button. A default is painted blue by
+        # macOS, which reads as "pressed" on a purely informational box; Hermes'
+        # own About dialog does not highlight it either. The button still works
+        # on click, and Escape/Return close the box through QMessageBox's own
+        # standard roles.
+        ok.setDefault(False)
+        ok.setAutoDefault(False)
+        box.setDefaultButton(None)
+        box.setEscapeButton(ok)
         box.exec()
 
     def _show_preferences(self) -> None:
