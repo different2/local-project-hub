@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -850,6 +851,134 @@ def test_configured_url_is_never_overridden(tmp: Path) -> None:
     _wait_for(lambda: p.state == "stopped", timeout_s=25)
     # detection must not fire at all when a URL is already configured
     assert got == [], f"detection ran despite a configured URL: {got}"
+
+
+def test_hardcoded_port_conflict_is_detected_without_a_url(tmp: Path) -> None:
+    """A project whose port is hardcoded in its script still gets checked.
+
+    the_sphere_project's server.py binds `PORT = ... else 8471`, so nothing on
+    the command line and no URL reveals the port. Before this the pre-start
+    check had nothing to test, the start ran straight into "Address already in
+    use", and the hub looped restarting a server that could never come up.
+    """
+    port = 8817
+    srv_py = tmp / "server.py"
+    # a hardcoded default port, exactly the sphere shape
+    srv_py.write_text(
+        "import sys\n"
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "PORT = int(sys.argv[1]) if len(sys.argv) > 1 else %d\n" % port
+        + "class H(BaseHTTPRequestHandler):\n"
+        "    def log_message(self, *a): pass\n"
+        'ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()\n'
+    )
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Holder",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    holder.start()
+    assert _wait_for(lambda: holder.state == "running", timeout_s=25), holder.state
+    try:
+        # No URL at all, and detection finds no port either — the port is only
+        # readable from the script's source.
+        victim = ProjectProcess(
+            sm.validate(
+                {
+                    "name": "Victim",
+                    "command": f"{sys.executable} {srv_py}",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+        assert victim.rec.get("url") == "", victim.rec
+        assert victim._expected_port() == port, victim._expected_port()
+        conflict = victim.port_conflict()
+        assert conflict, "hardcoded port holder was not detected"
+        assert conflict["port"] == port, conflict
+        assert holder.proc is not None
+        assert conflict["holders"][0]["pid"] == holder.proc.processId(), conflict
+    finally:
+        holder.stop()
+        _wait_for(lambda: holder.state == "stopped", timeout_s=30)
+
+
+def test_free_hardcoded_port_reports_no_conflict(tmp: Path) -> None:
+    """The negative control: the same detection must stay quiet when free."""
+    port = 8818
+    srv_py = tmp / "server.py"
+    srv_py.write_text(
+        "import sys\n"
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "PORT = int(sys.argv[1]) if len(sys.argv) > 1 else %d\n" % port
+        + "class H(BaseHTTPRequestHandler):\n"
+        "    def log_message(self, *a): pass\n"
+        'ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()\n'
+    )
+    proj = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Solo",
+                "command": f"{sys.executable} {srv_py}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    assert proj._expected_port() == port, proj._expected_port()
+    assert proj.port_conflict() is None, "a free port was reported as a conflict"
+
+
+def test_cli_project_has_no_expected_port(tmp: Path) -> None:
+    """A non-server script must not have a port invented for it."""
+    script = tmp / "hello.py"
+    script.write_text("print('hello')\n")
+    proj = ProjectProcess(
+        sm.validate(
+            {"name": "Hello", "command": f"{sys.executable} {script}",
+             "working_dir": str(tmp)}
+        )
+    )
+    assert proj._expected_port() is None, proj._expected_port()
+    assert proj.port_conflict() is None
+
+
+def test_port_recovered_from_a_hardcoded_script_traceback(tmp: Path) -> None:
+    """The port is recoverable from the traceback + script, not the command.
+
+    Python prints `(\"127.0.0.1\", PORT)` and never resolves the number, so the
+    command line is useless here. The traceback names the file, which is the
+    only way to learn the port.
+    """
+    port = 8819
+    srv_py = tmp / "server.py"
+    srv_py.write_text(
+        "import sys\n"
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "PORT = int(sys.argv[1]) if len(sys.argv) > 1 else %d\n" % port
+        + "class H(BaseHTTPRequestHandler):\n"
+        "    def log_message(self, *a): pass\n"
+        'ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()\n'
+    )
+    proj = ProjectProcess(
+        sm.validate(
+            {"name": "Solo", "command": f"{sys.executable} {srv_py}",
+             "working_dir": str(tmp)}
+        )
+    )
+    proj.history = deque(
+        [
+            'Traceback (most recent call last):\n'
+            f'  File "{srv_py}", line 5, in <module>\n'
+            '    ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()\n'
+            "OSError: [Errno 48] Address already in use\n"
+        ]
+    )
+    assert proj._failed_to_bind()
+    assert proj._port_from_failure_output() == port, proj._port_from_failure_output()
 
 
 if __name__ == "__main__":

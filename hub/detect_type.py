@@ -306,7 +306,34 @@ def detect(record: dict) -> Detection:
             det.evidence.append(f"python project depends on a GUI toolkit ({framework})")
             return det
 
-    # 5. A server-ish token in the command, but no framework evidence.
+    # 5. No framework dependency, but the entry script itself implements a
+    # stdlib HTTP server. This is checked BEFORE the token/name heuristics
+    # below because reading the script is stronger evidence than pattern-
+    # matching the command line: it also lets us read the script's own argparse
+    # for a no-open flag, which the heuristics cannot do.
+    #
+    # A script that subclasses BaseHTTPRequestHandler or instantiates an
+    # HTTPServer *is* a web app — the framework table simply has no name for it.
+    # This is what makes a custom server like obs_live.py or server.py
+    # detectable at all; without it the hub calls it "cli" and never looks for a
+    # URL or a no-open flag.
+    det.entry_script = _entry_script_path(command, cwd)
+    if _script_serves_http(det.entry_script):
+        det.type = WEB
+        det.confidence = 0.6
+        det.framework = ""
+        det.browser = "unknown"
+        det.display = DISPLAY[WEB]
+        det.evidence.append(
+            "entry script implements a stdlib HTTP server (BaseHTTPRequestHandler/HTTPServer)"
+        )
+        flag = _argparse_no_open_flag(det)
+        if flag:
+            det.browser = "known-suppressible"
+            det.evidence.append(f"entry script declares {flag} in its argparse")
+        return det
+
+    # A server-ish token in the command, but no framework evidence.
     if any(t in haystack for t in _SERVER_TOKENS):
         det.type = WEB
         det.confidence = 0.5
@@ -324,28 +351,6 @@ def detect(record: dict) -> Detection:
         det.browser = "unknown"
         det.display = DISPLAY[WEB]
         det.evidence.append("entry point name suggests a server")
-        return det
-
-    # 5b. No framework dependency, but the entry script itself implements a
-    # stdlib HTTP server. A script that subclasses BaseHTTPRequestHandler or
-    # instantiates an HTTPServer *is* a web app — the framework table simply has
-    # no name for it. This is what makes a custom server like obs_live.py
-    # detectable at all; without it the hub calls it "cli" and never looks for a
-    # URL or a no-open flag.
-    if _script_serves_http(_entry_script_path(command, cwd)):
-        det.type = WEB
-        det.confidence = 0.6
-        det.framework = ""
-        det.entry_script = _entry_script_path(command, cwd)
-        det.browser = "unknown"
-        det.display = DISPLAY[WEB]
-        det.evidence.append(
-            "entry script implements a stdlib HTTP server (BaseHTTPRequestHandler/HTTPServer)"
-        )
-        flag = _argparse_no_open_flag(det)
-        if flag:
-            det.browser = "known-suppressible"
-            det.evidence.append(f"entry script declares {flag} in its argparse")
         return det
 
     # 6. Nothing web-like was found. A python command running a script is
@@ -429,6 +434,31 @@ def _script_serves_http(script: str) -> bool:
     except (OSError, ValueError):
         return False
     return any(tok in source for tok in _HTTP_SERVER_TOKENS)
+
+
+def _script_default_port(script: str) -> int | None:
+    """The port a script hardcodes, when it is not on the command line.
+
+    A project like the_sphere_project's server.py binds
+    `PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8471`, so nothing the
+    user types reveals 8471. Read as text only (never imported or executed).
+    """
+    if not script:
+        return None
+    try:
+        with open(script, encoding="utf-8", errors="replace") as fh:
+            source = fh.read(256_000)
+    except (OSError, ValueError):
+        return None
+    # `PORT = 8471` on its own line...
+    m = re.search(r"^\s*(?:PORT|port)\s*=\s*(\d{2,5})\s*$", source, re.M)
+    if m:
+        return int(m.group(1))
+    # ...or the default arm of a ternary, `... else 8471`.
+    m = re.search(r"^\s*(?:PORT|port)\s*=.*?else\s+(\d{2,5})", source, re.M)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def _argparse_no_open_flag(det: Detection) -> str:

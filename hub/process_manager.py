@@ -44,18 +44,25 @@ def _looks_like_python(program: str) -> bool:
     return base in _PYTHON_NAMES
 
 
-def _find_foreign_port_holder(url: str, own_pids: set[int]) -> dict | None:
+def _find_foreign_port_holder(
+    url: str, own_pids: set[int], fallback_port: int | None = None
+) -> dict | None:
     """Shared conflict logic: None unless a process we did not launch holds it.
 
     Returns None when the port is free, when there is no URL, or when only our
     own processes still hold it (a restart, or the brief overlap while our own
     previous server shuts down). Only a genuinely foreign holder is reported,
     because that is the one case the user can meaningfully be asked about.
+
+    `fallback_port` covers a project with no URL yet whose port is hardcoded in
+    its script: without it the check has nothing to test and the start runs
+    straight into "Address already in use".
     """
-    if not url:
-        return None
     try:
-        host, port = urldetect.url_host_port(url)
+        if url:
+            _, port = urldetect.url_host_port(url)
+        else:
+            port = fallback_port
     except Exception:
         return None
     if not port or not urldetect.port_in_use(port):
@@ -76,7 +83,7 @@ def _find_foreign_port_holder(url: str, own_pids: set[int]) -> dict | None:
     details = []
     for pid in sorted(foreign):
         details.append({"pid": pid, "command": urldetect.process_command(pid)})
-    return {"port": port, "host": host, "holders": details}
+    return {"port": port, "host": "127.0.0.1", "holders": details}
 
 
 class ProjectProcess(QObject):
@@ -254,7 +261,30 @@ class ProjectProcess(QObject):
         Synchronous, and cheap when the port is free (it returns before running
         lsof). Callers on the GUI thread must only reach it on that fast path.
         """
-        return _find_foreign_port_holder(self.rec.get("url"), self._own_pids())
+        return _find_foreign_port_holder(
+            self.rec.get("url"), self._own_pids(), fallback_port=self._expected_port()
+        )
+
+    def _expected_port(self) -> int | None:
+        """The port this project will bind, even with no URL configured.
+
+        A fresh project has no URL yet, and its port is often hardcoded inside
+        the script (`PORT = ... else 8471`) so it is not on the command line
+        either. Without this the pre-start check has nothing to test, the start
+        runs into a guaranteed "Address already in use", and the hub loops
+        restarting a server that can never come up.
+        """
+        det = self.rec.get("detected") or {}
+        port = det.get("port")
+        if port:
+            return int(port)
+        # No detected port: read the entry script named on the command line.
+        from .detect_type import _entry_script_path, _script_default_port
+
+        script = _entry_script_path(
+            str(self.rec.get("command") or ""), str(self.rec.get("working_dir") or "")
+        )
+        return _script_default_port(script)
 
     def _own_pids(self) -> set[int]:
         """PIDs this object launched: the live one plus any it has retired.
@@ -387,6 +417,37 @@ class ProjectProcess(QObject):
             return int(m.group(1))
         # a URL-ish argument carrying a port: "http://127.0.0.1:8787"
         m = re.search(r":(\d{2,5})(?![\d.])", argv)
+        if m:
+            return int(m.group(1))
+        # Last resort: the entry script hardcodes its port, e.g.
+        # `PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8471`. Nothing on
+        # the command line reveals that, so read the script as TEXT (never
+        # import or execute it) and take the default. The traceback names the
+        # file, which is how we know it is safe to look.
+        return self._port_from_entry_script(text)
+
+    def _port_from_entry_script(self, text: str) -> int | None:
+        """The default port a hardcoded entry script would have bound.
+
+        Finds the .py file named in the traceback, reads it as text, and takes
+        a module-level `PORT = <number>` (or `port = <number>`). Read-only: the
+        script is never imported or run.
+        """
+        m = re.search(r'File "([^"\n]+\.py)"', text)
+        if not m:
+            return None
+        script = m.group(1)
+        try:
+            with open(script, encoding="utf-8", errors="replace") as fh:
+                source = fh.read(256_000)
+        except (OSError, ValueError):
+            return None
+        # `PORT = 8471` or `port = 8471` at module level; the ternary form in
+        # server.py ends in `else 8471`, so also accept that trailing number.
+        m = re.search(r"^\s*(?:PORT|port)\s*=\s*(\d{2,5})\s*$", source, re.M)
+        if m:
+            return int(m.group(1))
+        m = re.search(r"^\s*(?:PORT|port)\s*=.*?else\s+(\d{2,5})", source, re.M)
         if m:
             return int(m.group(1))
         return None
