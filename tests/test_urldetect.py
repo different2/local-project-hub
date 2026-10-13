@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from hub import store as sm, urldetect  # noqa: E402
-from hub.process_manager import ProjectProcess  # noqa: E402
+from hub.process_manager import ProjectProcess, _detected_suppress_flag  # noqa: E402
 from hub.window import HubWindow  # noqa: E402
 
 
@@ -1046,6 +1046,102 @@ def test_unbuffered_python_output_is_visible_to_the_hub(tmp: Path) -> None:
         pass
     _wait_for(lambda: proc.state == "stopped", timeout_s=25)
     assert got, f"URL was never detected from an unbuffered-forced child: {seen}"
+
+
+def test_detected_suppress_flag_is_applied_to_the_launch(tmp: Path) -> None:
+    """A project whose own argparse declares --no-open gets it automatically.
+
+    This is spec §2's whole point: the user should not have to know the flag
+    exists. Detection alone is not enough — the flag has to reach the launch,
+    which is the bug this test pins (detection reported known-suppressible but
+    args stayed empty, so the browser still opened).
+    """
+    port = 8822
+    srv_py = tmp / "obs_live.py"
+    srv_py.write_text(
+        "import argparse, sys\n"
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "ap = argparse.ArgumentParser()\n"
+        + ('ap.add_argument("--port", type=int, default=%d)\n' % port)
+        + 'ap.add_argument("--no-open", action="store_true")\n'
+        "args = ap.parse_args()\n"
+        "print('dashboard at http://127.0.0.1:%%d' %% args.port)\n"
+        'if not args.no_open:\n    import webbrowser\n    webbrowser.open("x")\n'
+        'ThreadingHTTPServer(("127.0.0.1", args.port), BaseHTTPRequestHandler).serve_forever()\n'
+    )
+    rec = sm.validate(
+        {
+            "name": "Obs",
+            "command": f"{sys.executable} {srv_py}",
+            "working_dir": str(tmp),
+        }
+    )
+    # detection must have found it
+    assert _detected_suppress_flag(rec) == "--no-open", rec["detected"]
+
+    proc = ProjectProcess(dict(rec))
+    proc.start()
+    started = _wait_for(lambda: proc.state == "running", timeout_s=20)
+    try:
+        assert started, f"did not start: {proc.state}"
+        assert proc.proc is not None
+        pid = proc.proc.processId()
+        argv = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True, text=True,
+        ).stdout
+        assert "--no-open" in argv, f"flag never reached the process: {argv!r}"
+    finally:
+        proc.stop()
+        _wait_for(lambda: proc.state == "stopped", timeout_s=25)
+
+
+def test_stored_detection_without_entry_script_still_yields_the_flag(tmp: Path) -> None:
+    """A record saved before entry_script existed must not lose its flag.
+
+    Detection wrote the flag into the evidence text, so a stored block naming
+    it is trustworthy. Without this, upgrading the app silently drops a flag it
+    had already discovered.
+    """
+    rec = {
+        "name": "Legacy",
+        "command": "python3 obs_live.py",
+        "args": "",
+        "url": "",
+        "detected": {
+            "type": "web",
+            "confidence": 0.6,
+            "framework": "",
+            "port": None,
+            "browser": "known-suppressible",
+            "display": "embedded web view",
+            "evidence": [
+                "entry script implements a stdlib HTTP server (BaseHTTPRequestHandler/HTTPServer)",
+                "entry script declares --no-open in its argparse",
+            ],
+        },
+    }
+    assert _detected_suppress_flag(rec) == "--no-open", rec["detected"]
+
+
+def test_user_supplied_args_are_never_overridden(tmp: Path) -> None:
+    """A deliberate configuration is never second-guessed by detection."""
+    rec = {
+        "name": "Typed",
+        "command": "python3 obs_live.py",
+        "args": "--port 9999",
+        "url": "",
+        "detected": {
+            "type": "web",
+            "browser": "known-suppressible",
+            "evidence": ["entry script declares --no-open in its argparse"],
+        },
+    }
+    proc = ProjectProcess(dict(rec))
+    # the flag helper still reports it, but start() must not append it because
+    # the user already chose the arguments
+    assert _detected_suppress_flag(rec) == "--no-open"
+    assert (rec.get("args") or "").strip() == "--port 9999"
 
 
 if __name__ == "__main__":

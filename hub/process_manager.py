@@ -86,6 +86,31 @@ def _find_foreign_port_holder(
     return {"port": port, "host": "127.0.0.1", "holders": details}
 
 
+def _detected_suppress_flag(rec: dict) -> str:
+    """The browser-suppress flag this project's own code declares, or "".
+
+    Prefers the stored detection (already computed, no re-read), and falls back
+    to running detection when a record has none — so a project added before the
+    `detected` block existed still benefits. Returns "" for anything that does
+    not declare a flag, which is what keeps spec §2's "never guess a flag"
+    honest.
+    """
+    det_block = rec.get("detected")
+    if isinstance(det_block, dict) and det_block.get("evidence"):
+        try:
+            from .detect_type import Detection, browser_suppress_args
+
+            return browser_suppress_args(Detection.from_dict(det_block))
+        except Exception:
+            return ""
+    try:
+        from .detect_type import detect, browser_suppress_args
+
+        return browser_suppress_args(detect(rec))
+    except Exception:
+        return ""
+
+
 class ProjectProcess(QObject):
     """One project's backend process + its captured output."""
 
@@ -163,6 +188,20 @@ class ProjectProcess(QObject):
         # (e.g. "--no-open" to stop a server opening its own browser, since the
         # hub already shows the dashboard in its own tab).
         extra = (self.rec.get("args") or "").strip()
+        # If nothing was typed, fall back to what detection found: a server that
+        # declares its own suppress flag in argparse gets it automatically, so
+        # the user never has to know the flag exists (spec §2). Only ever a flag
+        # the program itself declares — never a guessed one, which would break
+        # the command. Skipped entirely when the user supplied args, so a
+        # deliberate configuration is never second-guessed.
+        if not extra:
+            detected_flag = _detected_suppress_flag(self.rec)
+            if detected_flag:
+                extra = detected_flag
+                self.output.emit(
+                    f"[hub] {self.rec.get('name', 'project')} declares "
+                    f"{detected_flag}; adding it so its own browser stays closed\n"
+                )
         if extra:
             try:
                 argv = argv + split_command(extra)

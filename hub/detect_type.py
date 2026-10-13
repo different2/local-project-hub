@@ -384,12 +384,33 @@ def browser_suppress_args(det: Detection) -> str:
       1. BROWSER_FLAGS — the framework's own documented switch.
       2. The entry script's own ``argparse`` — if the script literally declares
          a no-open style flag, using it is quoting the program, not guessing.
+      3. The evidence text, for a record saved before ``entry_script`` was
+         persisted: detection already wrote the flag it found into the evidence
+         line ("entry script declares --no-open in its argparse"), so a stored
+         block that names the flag is trusted. Without this, upgrading the app
+         would silently lose a flag it had already discovered.
     """
     if not det or det.browser != "known-suppressible":
         return ""
     if det.framework in BROWSER_FLAGS:
         return BROWSER_FLAGS[det.framework]
-    return _argparse_no_open_flag(det)
+    flag = _argparse_no_open_flag(det)
+    if flag:
+        return flag
+    return _flag_from_evidence(det.evidence)
+
+
+def _flag_from_evidence(evidence: list[str] | None) -> str:
+    """A no-open flag named in a stored evidence line, or "".
+
+    Only matches the exact sentence detection itself writes, so this cannot be
+    talked into inventing a flag by unrelated evidence text.
+    """
+    for line in evidence or []:
+        m = re.search(r"declares (--[A-Za-z0-9-]+) in its argparse", line)
+        if m and any(n in m.group(1).lower() for n in _NO_OPEN_NAMES):
+            return m.group(1)
+    return ""
 
 
 # Flags that mean "do not open a browser", as a script would spell them.
