@@ -981,6 +981,73 @@ def test_port_recovered_from_a_hardcoded_script_traceback(tmp: Path) -> None:
     assert proj._port_from_failure_output() == port, proj._port_from_failure_output()
 
 
+def test_listening_ports_ignores_the_listen_column(tmp: Path) -> None:
+    """lsof's LAST field is "(LISTEN)", not the address.
+
+    Taking split()[-1] grabs "(LISTEN)", finds no colon, and silently reports
+    no ports — so URL detection by port never fires and the dashboard loads
+    with no address. The address is the second-to-last field.
+    """
+    port = 8820
+    srv_py = tmp / "server.py"
+    srv_py.write_text(_SILENT_SERVER.replace("int(sys.argv[1])", str(port)))
+    proc = subprocess.Popen(
+        [sys.executable, str(srv_py)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        _wait_for(lambda: urldetect.port_in_use(port), timeout_s=20)
+        assert urldetect.listening_ports(proc.pid) == [port], (
+            urldetect.listening_ports(proc.pid)
+        )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=6)
+        except subprocess.SubprocessError:
+            proc.kill()
+
+
+def test_unbuffered_python_output_is_visible_to_the_hub(tmp: Path) -> None:
+    """A plain `python3 server.py` must have its URL detected.
+
+    Python block-buffers stdout when it is not a tty, so the server's
+    "serving on ..." line never reaches the hub in time and the dashboard is
+    left with no address. The hub sets PYTHONUNBUFFERED=1 for the child, which
+    is what the project already does on a terminal.
+    """
+    port = 8821
+    srv_py = tmp / "server.py"
+    srv_py.write_text(
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "PORT = int(sys.argv[1]) if len(sys.argv) > 1 else %d\n" % port
+        + "class H(BaseHTTPRequestHandler):\n"
+        "    def log_message(self, *a): pass\n"
+        'print("serving on http://localhost:%%d" %% PORT, flush=False)\n'
+        'ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()\n'
+    )
+    proc = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Buffered",
+                "command": f"{sys.executable} {srv_py} {port}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    seen: list[str] = []
+    proc.url_detected.connect(seen.append)
+    proc.start()
+    got = _wait_for(lambda: bool(seen), timeout_s=20)
+    try:
+        proc.stop()
+    except Exception:
+        pass
+    _wait_for(lambda: proc.state == "stopped", timeout_s=25)
+    assert got, f"URL was never detected from an unbuffered-forced child: {seen}"
+
+
 if __name__ == "__main__":
     import inspect
 

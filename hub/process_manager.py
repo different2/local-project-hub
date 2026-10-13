@@ -199,6 +199,14 @@ class ProjectProcess(QObject):
         env = QProcess.systemEnvironment()
         for k, v in env_mods.items():
             env.append(f"{k}={v}")
+        # Python block-buffers stdout when it is not a tty, so a server launched
+        # with a plain `python3 server.py` does not print its URL until the
+        # buffer fills — long after the hub has given up looking, which leaves
+        # the dashboard with no address to load. Unbuffered output is what the
+        # project would do anyway on a terminal, so this changes no behaviour,
+        # only when we get to see it. Set only if the user has not chosen one.
+        if not any(e.startswith("PYTHONUNBUFFERED=") for e in env):
+            env.append("PYTHONUNBUFFERED=1")
         proc.setEnvironment(env)
         proc.readyReadStandardOutput.connect(self._drain)
         proc.finished.connect(self._on_finished)

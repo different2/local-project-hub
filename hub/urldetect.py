@@ -128,8 +128,11 @@ def listening_ports(pid: int) -> list[int]:
         return []
     ports: list[int] = []
     for line in out.splitlines()[1:]:
-        # NAME column looks like "localhost:8471" or "*:8787"
-        name = line.split()[-1] if line.split() else ""
+        # NAME is the address column (\"127.0.0.1:8471\"), but the LAST field on
+        # the line is \"(LISTEN)\" — taking split()[-1] grabs that instead and
+        # silently finds no ports. Take the field before it.
+        parts = line.split()
+        name = parts[-2] if len(parts) >= 2 else ""
         if ":" not in name:
             continue
         tail = name.rsplit(":", 1)[-1]
