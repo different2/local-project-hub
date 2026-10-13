@@ -1065,7 +1065,7 @@ def test_detected_suppress_flag_is_applied_to_the_launch(tmp: Path) -> None:
         + ('ap.add_argument("--port", type=int, default=%d)\n' % port)
         + 'ap.add_argument("--no-open", action="store_true")\n'
         "args = ap.parse_args()\n"
-        "print('dashboard at http://127.0.0.1:%%d' %% args.port)\n"
+        'print("dashboard at http://127.0.0.1:%d" % args.port)\n'
         'if not args.no_open:\n    import webbrowser\n    webbrowser.open("x")\n'
         'ThreadingHTTPServer(("127.0.0.1", args.port), BaseHTTPRequestHandler).serve_forever()\n'
     )
