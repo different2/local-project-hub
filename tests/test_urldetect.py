@@ -763,6 +763,13 @@ def test_about_dialog_is_closable_and_unhighlighted() -> None:
     assert not dlg.isVisible(), "Escape did not close the About box"
     # Nothing to highlight.
     assert type(dlg).__name__ == "QDialog", type(dlg).__name__
+    # Close only: the zoom button would maximise a box with nothing to enlarge,
+    # and no About window in a normal macOS app has one.
+    flags = int(dlg.windowFlags())
+    assert flags & int(Qt.WindowCloseButtonHint), "no close button"
+    assert not (flags & int(Qt.WindowMinMaxButtonsHint)), (
+        "the minimise/zoom buttons are still shown"
+    )
     labels = dlg.findChildren(QLabel)
     assert labels, "the About box shows no text"
     assert labels[0].textInteractionFlags() == Qt.NoTextInteraction, (

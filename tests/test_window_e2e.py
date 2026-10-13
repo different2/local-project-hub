@@ -64,8 +64,31 @@ def _wait_for(pred, timeout_s=20.0):
     return pred()
 
 
+def _wait_for_port_free(port: int, timeout_s: float = 15.0) -> bool:
+    """Wait until nothing is listening on `port` before a test binds it.
+
+    The OS can keep a socket for a moment after the previous suite's server
+    exited, and a suite that starts into a still-held port fails with
+    "Address already in use" for reasons that have nothing to do with the code
+    under test. Retrying the whole suite was masking that as flakiness.
+    """
+    import socket
+
+    deadline = int(timeout_s * 10)
+    for _ in range(deadline):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
+            try:
+                s.bind(("127.0.0.1", port))
+                return True
+            except OSError:
+                _spin(100)
+    return False
+
+
 def make_window(tmp: Path, key: str = "selecting") -> tuple[HubWindow, int]:
     port = _PORTS[key]
+    _wait_for_port_free(port)
     (tmp / "srv.py").write_text(_server_src(port))
     st = sm.Store(tmp / "registry.json")
     st.add(
@@ -115,6 +138,8 @@ def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
 def test_two_projects_get_two_tabs(tmp: Path) -> None:
     """Each project has its own tab; re-selecting focuses instead of duplicating."""
     port_a, port_b = _PORTS["selecting"], _PORTS["load"]
+    _wait_for_port_free(port_a)
+    _wait_for_port_free(port_b)
     st = sm.Store(tmp / "registry.json")
     for name, port in (("Proj A", port_a), ("Proj B", port_b)):
         (tmp / f"srv_{port}.py").write_text(_server_src(port))

@@ -151,6 +151,15 @@ class HubWindow(QMainWindow):
         label.setTextInteractionFlags(Qt.NoTextInteraction)
         layout.addWidget(label)
         dlg.setMinimumWidth(380)
+        # Only the close button. The zoom (green) button would maximise a box
+        # that has nothing to show bigger, and that is not how About windows
+        # behave in other macOS apps. WindowMinMaxButtonsHint is what Qt calls
+        # the pair (minimise + zoom); dropping it leaves close alone.
+        dlg.setWindowFlags(
+            (dlg.windowFlags() & ~Qt.WindowMinMaxButtonsHint)
+            | Qt.WindowCloseButtonHint
+            | Qt.Dialog
+        )
         dlg.exec()
 
     def _show_preferences(self) -> None:
