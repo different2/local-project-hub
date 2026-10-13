@@ -26,6 +26,11 @@ jobs:
   test:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Default is 6h. A WebEngine test that hangs otherwise sits on a runner for
+    # hours holding concurrency, which starves the other matrix jobs -- four
+    # such jobs piled up and blocked every subsequent run. 20 minutes is well
+    # over the ~9 minutes a healthy run takes.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
