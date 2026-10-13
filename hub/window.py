@@ -133,31 +133,25 @@ class HubWindow(QMainWindow):
         from . import __version__
         from .diagnostics import describe_platform_support
 
-        # Built explicitly rather than via the QMessageBox.about() static
-        # helper: that helper creates a parentless message box with no default
-        # button, so macOS highlights an arbitrary control and renders the text
-        # as selectable (an editable-looking caret inside an About box).
-        box = QMessageBox(self)
-        box.setWindowTitle("About Local Project Hub")
-        box.setTextFormat(Qt.RichText)
-        box.setText(
+        # A plain QDialog, not a QMessageBox: with no buttons a QMessageBox
+        # cannot be dismissed by the keyboard at all (verified — Escape leaves
+        # it open), and with a button macOS insists on highlighting it. A bare
+        # dialog gets the standard window close (X) and Escape for free, which
+        # is how About boxes behave in most macOS apps.
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About Local Project Hub")
+        layout = QVBoxLayout(dlg)
+        label = QLabel(
             f"<h3>Local Project Hub</h3>"
             f"<p>Version <b>{__version__}</b></p>"
             f"<p>A control centre for your locally hosted projects.</p>"
             f"<p style='color: gray'>Supports {describe_platform_support()}.</p>"
         )
-        box.setTextInteractionFlags(Qt.NoTextInteraction)
-        ok = box.addButton(QMessageBox.Ok)
-        # Deliberately NOT the default button. A default is painted blue by
-        # macOS, which reads as "pressed" on a purely informational box; Hermes'
-        # own About dialog does not highlight it either. The button still works
-        # on click, and Escape/Return close the box through QMessageBox's own
-        # standard roles.
-        ok.setDefault(False)
-        ok.setAutoDefault(False)
-        box.setDefaultButton(None)
-        box.setEscapeButton(ok)
-        box.exec()
+        label.setTextFormat(Qt.RichText)
+        label.setTextInteractionFlags(Qt.NoTextInteraction)
+        layout.addWidget(label)
+        dlg.setMinimumWidth(380)
+        dlg.exec()
 
     def _show_preferences(self) -> None:
         """Application preferences (release spec §4).

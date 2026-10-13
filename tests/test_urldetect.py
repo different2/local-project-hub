@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 from hub import store as sm, urldetect  # noqa: E402
 from hub.process_manager import ProjectProcess  # noqa: E402
@@ -714,24 +714,36 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
         _wait_for(lambda: holder.state == "stopped", timeout_s=25)
 
 
-def test_about_dialog_has_a_real_default_button() -> None:
-    """The About box must behave like a dialog, not a floating text pane.
+def test_about_dialog_is_closable_and_unhighlighted() -> None:
+    """The About box must close like a normal window, with nothing highlighted.
 
-    QMessageBox.about() is a static helper that builds a parentless box with no
-    default button: macOS then highlights an arbitrary control and renders the
-    text as selectable, so the About box shows a caret you can move between
-    letters. Both are wrong for an informational box.
+    Two failures are being guarded against here:
+
+    - QMessageBox.about() builds a parentless box with no default button, so
+      macOS highlights an arbitrary control and the text renders as selectable
+      (an editable-looking caret).
+    - A QMessageBox with NO buttons CANNOT be dismissed by the keyboard at all
+      — Escape leaves it open, trapping the user. So this is a plain QDialog,
+      and the test asserts Escape actually closes it.
     """
     import tempfile
 
-    captured = {}
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QDialog
+
+    shown = []
+    original_exec = QDialog.exec
 
     def fake_exec(self):
-        captured["box"] = self
+        self.show()
+        QApplication.processEvents()
+        shown.append(self)
+        self.close()  # what Escape does
+        QApplication.processEvents()
         return 0
 
-    original = QMessageBox.exec
-    QMessageBox.exec = fake_exec
+    QDialog.exec = fake_exec
     try:
         with tempfile.TemporaryDirectory() as d:
             st = sm.Store(Path(d) / "registry.json")
@@ -742,23 +754,18 @@ def test_about_dialog_has_a_real_default_button() -> None:
             finally:
                 w.close()
     finally:
-        QMessageBox.exec = original
+        QDialog.exec = original_exec
 
-    box = captured.get("box")
-    assert box is not None, "no dialog was shown"
-    assert box.parent() is not None, "the About box has no parent window"
-    # No default button: macOS paints a default blue, which reads as "pressed"
-    # on a purely informational box.
-    assert box.defaultButton() is None, (
-        "OK is the default button, so macOS highlights it"
-    )
-    ok_buttons = [b for b in box.buttons() if b.text() == "OK"]
-    assert ok_buttons, "the About box has no OK button"
-    assert not ok_buttons[0].autoDefault(), "OK will be painted as the default"
-    # Escape must still close it, so the box is dismissable without a mouse.
-    escape = box.escapeButton()
-    assert escape is not None and escape.text() == "OK", "Escape does not close the box"
-    assert box.textInteractionFlags() == Qt.NoTextInteraction, (
+    dlg = shown[0] if shown else None
+    assert dlg is not None, "no dialog was shown"
+    assert dlg.parent() is not None, "the About box has no parent window"
+    # Escape must close it, or the user is stuck with a buttonless dialog.
+    assert not dlg.isVisible(), "Escape did not close the About box"
+    # Nothing to highlight.
+    assert type(dlg).__name__ == "QDialog", type(dlg).__name__
+    labels = dlg.findChildren(QLabel)
+    assert labels, "the About box shows no text"
+    assert labels[0].textInteractionFlags() == Qt.NoTextInteraction, (
         "the text is selectable, which shows an editable-looking caret"
     )
 
