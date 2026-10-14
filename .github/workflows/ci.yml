@@ -68,16 +68,17 @@ jobs:
         '
     - name: Run the test suite
       shell: bash
-      run: "if [ \"$RUNNER_OS\" = \"Linux\" ]; then\n  xvfb-run -a python tests/run_all.py\nelse\n  python\
-        \ tests/run_all.py\nfi\n"
+      run: "# Tee to a .log so the upload step below has something to publish even when\n# the suite fails.\
+        \ Without the tee a failing run uploaded an empty artifact\n# and the failure could not be read\
+        \ offline.\nif [ \"$RUNNER_OS\" = \"Linux\" ]; then\n  xvfb-run -a python tests/run_all.py 2>&1\
+        \ | tee test-output.log\nelse\n  python tests/run_all.py 2>&1 | tee test-output.log\nfi\n# Preserve\
+        \ the suite exit code through the pipe; tee would mask it.\nexit \"${PIPESTATUS[0]}\""
     - name: Upload test log
       if: always()
       uses: actions/upload-artifact@v5
       with:
         name: test-log-${{ runner.os }}
-        path: '**/*.log
-
-          '
+        path: '**/*.log'
         if-no-files-found: ignore
         retention-days: 7
   build-macos:
