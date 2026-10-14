@@ -45,6 +45,7 @@ SUITES = [
     ("test_urldetect.py", True),
     ("test_detect_type.py", False),
     ("test_version.py", False),
+    ("test_runner_ports.py", False),
 ]
 
 # Suites whose GUI tests must each run in their own process. QtWebEngine
@@ -155,7 +156,39 @@ def port_in_use(port: int) -> bool:
 
 # Ports the GUI suites bind. Kept here so the runner can wait them out between
 # isolated tests instead of racing a predecessor's server.
-TEST_PORTS = (8790, 8791, 8792, 8793, 8794, 8782, 8783)
+#
+# This list had drifted badly: it named 7 ports while the suites actually bind
+# 21, so a predecessor's server left holding 8801-8825 was never waited out and
+# the next test failed with "readiness never fired" — a port race that reads as
+# a logic bug. Derived from the suite files by discover_test_ports() below, so
+# adding a port to a test cannot silently fall out of the list again.
+TEST_PORT_RANGE = (8782, 8830)
+
+
+def discover_test_ports() -> tuple[int, ...]:
+    """Every port the test files reference, as a sorted tuple.
+
+    Read from the suite sources rather than hand-maintained: a literal list
+    goes stale the moment a new test picks a port, and the failure it causes
+    (a port race) looks nothing like a missing entry in a list.
+    """
+    import re
+
+    lo, hi = TEST_PORT_RANGE
+    found: set[int] = set()
+    for path in HERE.glob("test_*.py"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for m in re.finditer(r"\b(\d{4,5})\b", text):
+            port = int(m.group(1))
+            if lo <= port <= hi:
+                found.add(port)
+    return tuple(sorted(found))
+
+
+TEST_PORTS = discover_test_ports()
 
 
 def wait_for_ports_free(timeout_s: float = 30.0) -> None:
