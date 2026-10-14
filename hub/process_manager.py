@@ -17,6 +17,8 @@ canonical case) need room to finish; a 3s hard kill destroys them mid-warm-up.
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import time
 from collections import deque
 
@@ -29,6 +31,13 @@ LOG_HISTORY = 500
 
 # Grace given to a project to exit after SIGTERM before we escalate to SIGKILL.
 TERM_GRACE_MS = 20_000
+
+# Windows gets a much shorter leash: terminate() posts WM_CLOSE, which a console
+# process never receives, so the full POSIX grace would stall every stop. A
+# well-behaved project still exits inside this window; a console one is killed.
+WINDOWS_TERM_GRACE_MS = 2_000
+
+IS_WINDOWS = sys.platform.startswith("win")
 
 # Names that mean "whatever Python is installed" rather than a specific file.
 _PYTHON_NAMES = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
@@ -272,6 +281,13 @@ class ProjectProcess(QObject):
         self.output.emit("[hub] terminating (waiting up to 20s for a clean exit)...\n")
         self.proc.terminate()
         self._kill_timer.start()
+        if IS_WINDOWS:
+            # On Windows terminate() posts WM_CLOSE, which a console process
+            # never receives, so waiting out the full grace would stall every
+            # stop. Escalate promptly instead: kill() is the only signal that
+            # reliably ends a Windows console child, and the shortened grace
+            # still gives a well-behaved project room to exit on its own.
+            QTimer.singleShot(WINDOWS_TERM_GRACE_MS, self._force_kill)
 
     def restart(self) -> None:
         running = self.proc is not None and self.proc.state() != QProcess.NotRunning
@@ -391,6 +407,18 @@ class ProjectProcess(QObject):
         if self.proc is None or self.proc.state() == QProcess.NotRunning:
             return
         self.output.emit("[hub] still running after the grace period, killing\n")
+        # On Windows, QProcess::terminate() posts WM_CLOSE, which a console
+        # application never receives -- `python server.py` simply ignores it and
+        # keeps holding its port. kill() alone has the same problem for anything
+        # the process spawned. taskkill /T /F is the only reliable route, and it
+        # takes the whole tree so no orphaned child keeps the port bound.
+        if IS_WINDOWS and self.proc.processId():
+            subprocess.run(
+                ["taskkill", "/PID", str(self.proc.processId()), "/T", "/F"],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
         self.proc.kill()
 
     def _on_finished(self, code: int, status) -> None:

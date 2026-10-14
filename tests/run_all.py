@@ -98,6 +98,7 @@ SUITES = [
     ("test_version.py", False),
     ("test_runner_ports.py", False),
     ("test_output_encoding.py", False),
+    ("test_windows_process_stop.py", False),
 ]
 
 # Suites whose GUI tests must each run in their own process. QtWebEngine
