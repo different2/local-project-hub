@@ -100,6 +100,7 @@ SUITES = [
     ("test_output_encoding.py", False),
     ("test_windows_process_stop.py", False),
     ("test_isolation_contract.py", False),
+    ("test_workflow_yaml.py", False),
 ]
 
 # Suites whose GUI tests must each run in their own process. QtWebEngine

@@ -1,5 +1,11 @@
 name: CI
-true:
+# NB: this key must stay spelled "on" -- quoted or not, do not let a YAML
+# round-trip rewrite it. PyYAML follows YAML 1.1, where `on` is a boolean, so
+# safe_dump() emitted the key as `true:` and GitHub rejected the whole workflow
+# with "Unexpected value 'true'". That is why runs #14 and #15 died in 0 seconds
+# with zero jobs: the file never parsed, so no runner was ever requested. The
+# failure looked exactly like an allocation refusal.
+'on':
   push:
     branches:
     - main
