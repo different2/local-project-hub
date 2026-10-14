@@ -18,6 +18,57 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+
+def _ascii_safe(text: str) -> str:
+    """Replace non-ASCII characters with ASCII equivalents.
+
+    The Windows console defaults to cp1252, which cannot encode the box-drawing
+    characters this runner used for its section rules. Printing one raised
+    UnicodeEncodeError from inside the failure path, so CI reported exit code 1
+    with a traceback and never showed which test actually failed.
+
+    Everything is mapped rather than dropped so the output stays readable:
+    box rules become '--', em dashes become '-', quotes become ASCII quotes.
+    """
+    replacements = {
+        "\u2500": "-",  # ─ box drawings light horizontal
+        "\u2501": "=",  # ━
+        "\u2502": "|",  # │
+        "\u250c": "+",  # ┌
+        "\u2514": "+",  # └
+        "\u251c": "+",  # ├
+        "\u2014": "-",  # — em dash
+        "\u2013": "-",  # – en dash
+        "\u2018": "'",  # ' left single quote
+        "\u2019": "'",  # ' right single quote
+        "\u201c": '"',  # " left double quote
+        "\u201d": '"',  # " right double quote
+        "\u2026": "...",  # … ellipsis
+        "\u00b7": "-",  # · middle dot
+        "\u2192": "->",  # → rightwards arrow
+        "\u2713": "ok",  # ✓ check mark
+        "\u2717": "x",  # ✗ ballot x
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    # Anything still outside ASCII is dropped rather than allowed to raise.
+    return text.encode("ascii", "replace").decode("ascii")
+
+
+def emit(text: str = "") -> None:
+    """Print text that cannot fail on a non-UTF-8 console.
+
+    Also tolerates a stdout that has already been closed, which happens when the
+    runner is killed mid-suite: a traceback about a closed stream would hide the
+    real result.
+    """
+    try:
+        print(_ascii_safe(text))
+    except (UnicodeEncodeError, ValueError, OSError):
+        pass
+
+
 PROJECT_ROOT = HERE.parent
 
 # `pty` is POSIX-only; importing it on Windows raises ImportError, which would
@@ -46,6 +97,7 @@ SUITES = [
     ("test_detect_type.py", False),
     ("test_version.py", False),
     ("test_runner_ports.py", False),
+    ("test_output_encoding.py", False),
 ]
 
 # Suites whose GUI tests must each run in their own process. QtWebEngine
@@ -285,13 +337,49 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
     return worst, passed, failed, "\n".join(chunks)
 
 
+def report_failure(name: str, out: str) -> None:
+    """Print the detail that explains why a suite failed.
+
+    Extracted from main() so it can be tested directly. This is the code path
+    that crashed the Windows job: it printed box-drawing characters to a cp1252
+    console, raising UnicodeEncodeError from inside the failure handler and
+    destroying the very output needed to diagnose the failure.
+    """
+    if "ModuleNotFoundError" in out and "PySide6" in out:
+        emit(
+            "           -- PySide6 is missing for the interpreter this "
+            "runner used --\n"
+            f"           interpreter: {interpreter()}\n"
+            "           fix: ./.hubenv/bin/pip install PySide6\n"
+            "           (or delete .hubenv and recreate it)\n"
+        )
+    tail = "\n".join(out.strip().splitlines()[-12:])
+    emit(f"           -- last output --\n{tail}\n")
+
+
+def report_suite(name: str, code: int, passed: int, failed: int, out: str) -> int:
+    """Print one suite's result line plus failure detail. Returns the final code.
+
+    A QtWebEngine segfault at interpreter shutdown exits non-zero even when
+    every test passed, so that case is reported as ok rather than failing CI.
+    """
+    status = "ok  " if code == 0 else "FAIL"
+    if code != 0 and failed == 0 and passed > 0:
+        status = "ok  "
+        code = 0
+    emit(f"  {status}     {name:26} {passed} passed, {failed} failed")
+    if code != 0:
+        report_failure(name, out)
+    return code
+
+
 def main() -> int:
-    print(f"Running {len(SUITES)} suites serially (GUI suites cannot overlap)\n")
+    emit(f"Running {len(SUITES)} suites serially (GUI suites cannot overlap)\n")
     results = []
     for name, needs_gui in SUITES:
         path = HERE / name
         if not path.exists():
-            print(f"  MISSING  {name}")
+            emit(f"  MISSING  {name}")
             results.append((name, 1))
             continue
         try:
@@ -305,46 +393,27 @@ def main() -> int:
                 # segfaults at Qt teardown. Without this the next view-creating
                 # suite silently turns CI red while every test passes.
                 if code != 0 and passed and not failed:
-                    print(
+                    emit(
                         f"  NOTE     {name} exited {code} with all "
-                        f"{passed} tests passing — a QtWebEngine teardown crash. "
+                        f"{passed} tests passing - a QtWebEngine teardown crash. "
                         f"Add it to ISOLATE_TESTS."
                     )
                     code = 0
                 if failed == 0 and code == 0 and "all passed" in out:
                     passed = max(passed, 1)
         except subprocess.TimeoutExpired:
-            print(f"  TIMEOUT  {name}")
+            emit(f"  TIMEOUT  {name}")
             results.append((name, 1))
             continue
-        status = "ok  " if code == 0 else "FAIL"
-        # QtWebEngine can segfault at interpreter shutdown AFTER every test has
-        # reported, which makes the suite exit non-zero with zero failures. That
-        # is a shutdown artefact, not a test failure — report it as ok so a real
-        # failure is not buried in the noise.
-        if code != 0 and failed == 0 and passed > 0:
-            status = "ok  "
-            code = 0
-        print(f"  {status}     {name:26} {passed} passed, {failed} failed")
-        if code != 0:
-            if "ModuleNotFoundError" in out and "PySide6" in out:
-                print(
-                    "           ── PySide6 is missing for the interpreter this "
-                    "runner used ──\n"
-                    f"           interpreter: {interpreter()}\n"
-                    "           fix: ./.hubenv/bin/pip install PySide6\n"
-                    "           (or delete .hubenv and recreate it)\n"
-                )
-            tail = "\n".join(out.strip().splitlines()[-12:])
-            print(f"           ── last output ──\n{tail}\n")
+        code = report_suite(name, code, passed, failed, out)
         results.append((name, code))
 
     ok = sum(1 for _, c in results if c == 0)
     total = len(results)
-    print(f"\n{ok}/{total} suites passed")
+    emit(f"\n{ok}/{total} suites passed")
     if ok != total:
-        print("A busy port is the usual cause when GUI suites fail together —")
-        print("check with: lsof -ti:8790,8791,8792,8793,8794,8782,8783,8799,8800,8801 | xargs kill")
+        emit("A busy port is the usual cause when GUI suites fail together -")
+        emit("check with: lsof -ti:8790,8791,8792,8793,8794,8782,8783,8799,8800,8801 | xargs kill")
     return 0 if ok == total else 1
 
 

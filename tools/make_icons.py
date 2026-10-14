@@ -122,7 +122,7 @@ def main() -> int:
     master_path = ASSETS / "icon_1024.png"
 
     print(f"source: {source}")
-    print("        (resize + wrap only — artwork is not cropped or recoloured)")
+    print("        (resize + wrap only - artwork is not cropped or recoloured)")
     master = build_master(source, master_path, 1024)
     print(f"master: {master_path}  {master.size[0]}x{master.size[1]}")
 

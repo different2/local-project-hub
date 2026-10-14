@@ -269,7 +269,7 @@ class ProjectProcess(QObject):
                 self.state_changed.emit("stopped")
             return
         self._user_stopped = True
-        self.output.emit("[hub] terminating (waiting up to 20s for a clean exit)…\n")
+        self.output.emit("[hub] terminating (waiting up to 20s for a clean exit)...\n")
         self.proc.terminate()
         self._kill_timer.start()
 
@@ -281,7 +281,7 @@ class ProjectProcess(QObject):
             self._user_stopped = False
             self._pending_restart = True
             self._kill_timer.stop()
-            self.output.emit("[hub] restarting…\n")
+            self.output.emit("[hub] restarting...\n")
             self.proc.terminate()
             # Escalate on schedule rather than stalling the restart; if the
             # process exits politely first, _on_finished starts the new one.
