@@ -23,8 +23,12 @@ jobs:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # A macOS job once ran 61 minutes as an orphaned runner that never reported
-    # back, consuming the concurrency that blocked every other platform.
-    timeout-minutes: 20
+    # back, consuming the concurrency that blocked every other platform. The cap
+    # has to stay generous enough for the real work, though: test_urldetect alone
+    # takes ~6 minutes because each GUI test runs in its own QtWebEngine process,
+    # and all 14 suites together ran past 20 minutes on every platform -- which
+    # killed the run before a single line of output was written.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:

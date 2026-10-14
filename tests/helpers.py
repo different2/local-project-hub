@@ -19,8 +19,13 @@ PROJECT_ROOT = TESTS_DIR.parent
 
 # Windows keeps a just-exited child's file handle open briefly, so deleting the
 # directory immediately after the process reports "stopped" still raises
-# WinError 32. Long enough to outlast the handle, short enough not to matter.
+# WinError 32.
 _HANDLE_SETTLE_S = 1.5 if sys.platform.startswith("win") else 0.0
+
+# How long stop_and_release() waits for a port to become bindable. Only Windows
+# needs this at all, and only briefly; on POSIX the socket is released before
+# the process is reaped, so waiting there is pure cost.
+_PORT_SETTLE_S = 3.0 if sys.platform.startswith("win") else 0.5
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -69,8 +74,13 @@ def stop_and_release(proc, timeout_s: float = 25.0) -> None:
         because it is being used by another process
 
     long after the test's real assertions passed, which is why this was
-    mistaken for a test failure. Waits for both, and never raises: a leftover
-    process is noise, a failed test is a lie about what was checked.
+    mistaken for a test failure.
+
+    The port wait is deliberately short and only runs when a port is known:
+    with 15 teardown sites across the GUI suites, waiting the full teardown
+    budget at each one pushed CI past its 20-minute job limit -- the suites
+    were correct, they were just slow. Most processes release immediately, so
+    this exits on the first successful probe.
     """
     if proc is None:
         return
@@ -80,23 +90,22 @@ def stop_and_release(proc, timeout_s: float = 25.0) -> None:
         return
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        state = getattr(proc, "state", None)
-        if state == "stopped":
+        if getattr(proc, "state", None) == "stopped":
             break
         time.sleep(0.2)
-    # Then the port, which is the part Qt does not tell us about.
-    port = None
+    # Then the port, which is the part Qt does not tell us about. Short cap:
+    # this is insurance against a lagging handle, not a second teardown budget.
     try:
         port = proc._expected_port()
     except Exception:
         port = None
     if not port:
         return
-    deadline = time.time() + min(timeout_s, 15.0)
+    deadline = time.time() + _PORT_SETTLE_S
     while time.time() < deadline:
         if not _port_open(port):
             return
-        time.sleep(0.25)
+        time.sleep(0.1)
 
 
 def _port_open(port: int) -> bool:
