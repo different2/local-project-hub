@@ -17,6 +17,11 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TESTS_DIR.parent
 
+# Windows keeps a just-exited child's file handle open briefly, so deleting the
+# directory immediately after the process reports "stopped" still raises
+# WinError 32. Long enough to outlast the handle, short enough not to matter.
+_HANDLE_SETTLE_S = 1.5 if sys.platform.startswith("win") else 0.0
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -101,3 +106,8 @@ class temp_project_dir:
             # suppress TemporaryDirectory's own cleanup error, then retry
             self._tmp.cleanup()
             remove_tree_retry(self.path)
+            # A child that is still exiting keeps its script file open, so even
+            # the retry can lose the race. Give the OS a moment to release the
+            # handle; the directory is already gone by now, this only stops the
+            # next test's cleanup from hitting a dying process.
+            time.sleep(_HANDLE_SETTLE_S)
