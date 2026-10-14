@@ -176,5 +176,12 @@ if __name__ == "__main__":
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
+            except Exception as e:
+                # Only AssertionError used to be caught, so any other exception
+                # killed the runner mid-suite: later tests never printed and the
+                # summary claimed "N passed, 1 failed" with no FAIL line to name
+                # the 1. An unexpected error is a failure -- report it as one.
+                fails += 1
+                print(f"ERROR {name}: {type(e).__name__}: {e}")
     print("---", "FAILURES" if fails else "all passed")
     sys.exit(1 if fails else 0)

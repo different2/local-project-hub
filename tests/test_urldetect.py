@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QMessageBox,
 )
 
+from helpers import temp_project_dir  # noqa: E402
 from hub import store as sm, urldetect  # noqa: E402
 from hub.process_manager import ProjectProcess, _detected_suppress_flag  # noqa: E402
 from hub.window import HubWindow  # noqa: E402
@@ -751,7 +752,7 @@ def test_about_dialog_is_closable_and_unhighlighted() -> None:
 
     QDialog.exec = fake_exec
     try:
-        with tempfile.TemporaryDirectory() as d:
+        with temp_project_dir() as d:
             st = sm.Store(Path(d) / "registry.json")
             w = HubWindow(st)
             w.show()
@@ -1173,7 +1174,7 @@ if __name__ == "__main__":
                 takes_arg = False
             try:
                 if takes_arg:
-                    with tempfile.TemporaryDirectory() as d:
+                    with temp_project_dir() as d:
                         fn(Path(d))
                 else:
                     fn()
@@ -1181,6 +1182,13 @@ if __name__ == "__main__":
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
+            except Exception as e:
+                # Only AssertionError used to be caught, so any other exception
+                # killed the runner mid-suite: later tests never printed and the
+                # summary claimed "N passed, 1 failed" with no FAIL line to name
+                # the 1. An unexpected error is a failure -- report it as one.
+                fails += 1
+                print(f"ERROR {name}: {type(e).__name__}: {e}")
     if only and not ran:
         # Silently running nothing would let the runner report a green suite for
         # a test name that does not exist. Say so instead.

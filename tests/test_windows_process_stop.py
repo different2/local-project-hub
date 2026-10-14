@@ -30,7 +30,9 @@ def test_windows_escalates_before_the_full_grace_period() -> None:
     Waiting would stall every stop on Windows, since terminate() cannot end a
     console child there.
     """
-    assert pm.IS_WINDOWS is False, "this test assumes it runs on a non-Windows host"
+    # Do NOT assert the host is non-Windows: this suite has to pass on the
+    # Windows runner too, and an earlier version did assert it, so the guard
+    # failed exactly on the platform it exists to protect.
     assert pm.WINDOWS_TERM_GRACE_MS < pm.TERM_GRACE_MS, (
         f"Windows grace ({pm.WINDOWS_TERM_GRACE_MS}ms) must be shorter than the "
         f"POSIX grace ({pm.TERM_GRACE_MS}ms) or every Windows stop stalls"
@@ -84,6 +86,28 @@ def test_taskkill_command_shape() -> None:
     assert "invalid" not in out, f"taskkill rejected the argv shape: {out[:200]}"
 
 
+def test_restart_waits_for_the_port_to_free() -> None:
+    """A restart must not fire while the old process still holds the port.
+
+    On Windows the terminated child keeps its listening socket briefly, so
+    restarting the instant `finished` fires makes the replacement die with
+    "Address already in use" and leaves the project stuck in 'starting'. That is
+    exactly the failure the Windows job reported: test_restart with states
+    ['starting', 'running'].
+    """
+    src = (PROJECT_ROOT / "hub" / "process_manager.py").read_text(encoding="utf-8")
+    on_finished = src[src.index("def _on_finished") :]
+    on_finished = on_finished[: on_finished.index("\n    def ", 1)]
+    assert "self.start()" not in on_finished, (
+        "_on_finished starts the replacement immediately -- the port may still "
+        "be held, so the new server fails to bind"
+    )
+    assert "_restart_after_port_free" in on_finished, (
+        "_on_finished does not route a pending restart through the port check"
+    )
+    assert "tcp_open" in src, "the restart path no longer probes the port"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
@@ -94,5 +118,14 @@ if __name__ == "__main__":
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
+            except Exception as e:
+                # Only AssertionError used to be caught, so any other exception
+                # killed the runner mid-suite: later tests never printed and the
+                # summary claimed "N passed, 1 failed" with no FAIL line to name
+                # the 1. An unexpected error is a failure -- report it as one.
+                fails += 1
+                print(f"ERROR {name}: {type(e).__name__}: {e}")
     print("---", "FAILURES" if fails else "all passed")
     sys.exit(1 if fails else 0)
+
+

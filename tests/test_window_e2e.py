@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PySide6.QtCore import QEventLoop, QTimer, QUrl  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel, QTabBar  # noqa: E402
 
+from helpers import temp_project_dir  # noqa: E402
 from hub import store as sm  # noqa: E402
 from hub.window import HubWebView, HubWindow  # noqa: E402
 from hub import __version__  # noqa: E402
@@ -517,7 +518,7 @@ if __name__ == "__main__":
             if only and name != only:
                 continue
             ran += 1
-            with tempfile.TemporaryDirectory() as d:
+            with temp_project_dir() as d:
                 try:
                     fn(Path(d))
                     print(f"PASS {name}")

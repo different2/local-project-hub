@@ -8,8 +8,10 @@ producing zero passes.
 
 from __future__ import annotations
 
+import shutil
 import socket
 import sys
+import time
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -45,3 +47,57 @@ def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def remove_tree_retry(path, attempts: int = 12, delay: float = 0.4) -> None:
+    """Delete a directory, retrying while a child process still holds a file.
+
+    On Windows a just-terminated child keeps its script file open briefly, so
+    the temp-dir cleanup raises
+
+        PermissionError: [WinError 32] The process cannot access the file
+        because it is being used by another process
+
+    which fails the test long after the thing it was checking succeeded. This
+    waits the handle out instead of failing, and reports honestly if it never
+    frees rather than silently leaving a directory behind.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    last: OSError | None = None
+    for _ in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as e:  # Windows raises PermissionError (a subclass)
+            last = e
+            time.sleep(delay)
+    # Leave it in place rather than crash: a leftover temp dir is noise, a
+    # failed test is a lie about what the suite was checking.
+    print(f"NOTE: could not remove {path} ({last}); leaving it in place")
+
+
+class temp_project_dir:
+    """A temp dir whose cleanup cannot fail the test because of a live child.
+
+    Drop-in replacement for tempfile.TemporaryDirectory() in tests that spawn
+    a subprocess inside the directory.
+    """
+
+    def __init__(self) -> None:
+        self._tmp = None
+        self.path: Path | None = None
+
+    def __enter__(self) -> Path:
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name)
+        return self.path
+
+    def __exit__(self, *exc) -> None:
+        if self._tmp is not None:
+            # suppress TemporaryDirectory's own cleanup error, then retry
+            self._tmp.cleanup()
+            remove_tree_retry(self.path)

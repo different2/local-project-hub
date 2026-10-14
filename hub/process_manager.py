@@ -25,6 +25,7 @@ from collections import deque
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from .platform import resolve_interpreter, split_command
+from .readiness import tcp_open
 from . import urldetect
 
 LOG_HISTORY = 500
@@ -36,6 +37,10 @@ TERM_GRACE_MS = 20_000
 # process never receives, so the full POSIX grace would stall every stop. A
 # well-behaved project still exits inside this window; a console one is killed.
 WINDOWS_TERM_GRACE_MS = 2_000
+
+# How often a restart re-checks whether the old process has released its port.
+# 40 attempts x 250ms = 10s, which covers the Windows socket-release lag.
+RESTART_PORT_RETRY_MS = 250
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -455,7 +460,34 @@ class ProjectProcess(QObject):
             self.state_changed.emit("error")
         if self._pending_restart:
             self._pending_restart = False
-            self.start()
+            self._restart_after_port_free()
+
+    def _restart_after_port_free(self, attempts: int = 40) -> None:
+        """Start the replacement, waiting for the old process to release the port.
+
+        On Windows a terminated child keeps its listening socket briefly, so
+        restarting the instant `finished` fires makes the new server fail with
+        "Address already in use" and die -- leaving the project stuck in
+        'starting' with nothing listening. This is why test_restart failed on
+        Windows only: the same race is invisible on POSIX, where the socket is
+        released before the process is reaped.
+
+        Bounded, and it gives up honestly: if the port never frees, the state
+        reports the failure instead of looping forever.
+        """
+        port = self._expected_port()
+        # Reuse the readiness helper rather than opening a second socket path:
+        # a busy port is a busy port, however it is probed.
+        if port and tcp_open("127.0.0.1", port):
+            if attempts > 0:
+                QTimer.singleShot(RESTART_PORT_RETRY_MS, lambda: self._restart_after_port_free(attempts - 1))
+                return
+            self.output.emit(
+                f"[hub] port {port} is still held; cannot restart\n"
+            )
+            self.state_changed.emit("error")
+            return
+        self.start()
 
     def _failed_to_bind(self) -> bool:
         """True when this process died because its port was already taken.

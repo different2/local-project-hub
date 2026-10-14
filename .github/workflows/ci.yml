@@ -1,171 +1,189 @@
 name: CI
-# NB: this key must stay spelled "on" -- quoted or not, do not let a YAML
-# round-trip rewrite it. PyYAML follows YAML 1.1, where `on` is a boolean, so
-# safe_dump() emitted the key as `true:` and GitHub rejected the whole workflow
-# with "Unexpected value 'true'". That is why runs #14 and #15 died in 0 seconds
-# with zero jobs: the file never parsed, so no runner was ever requested. The
-# failure looked exactly like an allocation refusal.
+
+# NB: this key must stay spelled "on" -- quoted, and never re-dumped through
+# PyYAML, which follows YAML 1.1 where `on` is a boolean and rewrote it as
+# `true:`. GitHub rejected the whole workflow with "Unexpected value 'true'",
+# and the resulting 0-second runs were indistinguishable from runner refusal.
 'on':
   push:
     branches:
-    - main
+      - main
     tags:
-    - v*
+      - v*
   pull_request:
     branches:
-    - main
+      - main
   workflow_dispatch: null
+
 permissions:
   contents: read
+
 jobs:
   test:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A macOS job once ran 61 minutes as an orphaned runner that never reported
+    # back, consuming the concurrency that blocked every other platform.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        # Pinned to 24.04: the ubuntu-latest label moves to Ubuntu 26, which
+        # this project has not been tested against.
         os:
-        - macos-latest
-        - windows-latest
-        - ubuntu-24.04
+          - macos-latest
+          - windows-latest
+          - ubuntu-24.04
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.11'
-    - name: Install dependencies
-      run: 'python -m pip install --upgrade pip
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
 
-        # QtWebEngineWidgets lives in the base PySide6 wheel, NOT in
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # QtWebEngineWidgets lives in the base PySide6 wheel, NOT in
+          # PySide6-Addons/Essentials. Naming only the Addons/Essentials
+          # packages installs a PySide6 that imports fine and then fails with
+          # "No module named PySide6.QtWebEngineWidgets", which makes every GUI
+          # suite exit non-zero with zero tests run.
+          #
+          # PyYAML is needed by tests/test_workflow_yaml.py, which guards this
+          # very file. Without it that guard dies with ModuleNotFoundError on
+          # every platform -- and this file is what broke silently once already,
+          # so its guard has to be able to run everywhere.
+          python -m pip install PySide6-Essentials PySide6-Addons PySide6 Pillow pytest PyYAML
 
-        # PySide6-Addons/Essentials. Naming only the Addons/Essentials
+      # Must come BEFORE the import check below: the check needs libEGL and
+      # friends, so running it first reports a missing-OS-library problem as a
+      # missing-wheel problem and sends you chasing the wrong cause.
+      - name: Install Qt runtime libraries (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # Install each package individually and tolerate a name that does not
+          # exist in this image: one wrong name must not abort the whole job and
+          # hide the real Qt error. The import guard below is the actual check.
+          for p in \
+            libegl1 libgl1 libglib2.0-0 libdbus-1-3 \
+            libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 libxcb-cursor0 libxcb-glx0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xkb1 libxext6 \
+            libxfixes3 libxi6 libxrender1 libfontconfig1 libfreetype6 libgbm1 libasound2 libnss3 \
+            libnspr4 libexpat1 ; do
+            sudo apt-get install -y --no-install-recommends "$p" \
+              || echo "::warning::$p unavailable in this image (continuing)"
+          done
+          sudo apt-get install -y --no-install-recommends xvfb
 
-        # packages installs a PySide6 that imports fine and then fails with
+      - name: Verify QtWebEngine is importable
+        shell: bash
+        run: |
+          # QtWebEngineWidgets ships in the base PySide6 wheel. Assert it imports
+          # so a resolution problem names itself here instead of surfacing later
+          # as a bare "Run the test suite" failure with no output to read.
+          python -c "import PySide6, os; d=os.path.dirname(PySide6.__file__); print('PySide6', PySide6.__version__, 'at', d)"
+          python -m pip list | grep -i pyside || true
+          python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('QtWebEngine OK', __import__('PySide6').__version__)"
 
-        # "No module named PySide6.QtWebEngineWidgets", which makes every GUI
+      - name: Run the test suite
+        shell: bash
+        run: |
+          # Tee to a .log so the upload step below has something to publish even
+          # when the suite fails. Without the tee a failing run uploaded an
+          # empty artifact and the failure could not be read offline.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python tests/run_all.py 2>&1 | tee test-output.log
+          else
+            python tests/run_all.py 2>&1 | tee test-output.log
+          fi
+          # Preserve the suite's exit code through the pipe; tee would mask it
+          # and report a red suite as green.
+          exit "${PIPESTATUS[0]}"
 
-        # suite exit non-zero with zero tests run.
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-log-${{ runner.os }}
+          path: '**/*.log'
+          if-no-files-found: ignore
+          retention-days: 7
 
-        python -m pip install PySide6-Essentials PySide6-Addons PySide6 Pillow pytest
-
-        '
-    - name: Install Qt runtime libraries (Linux only)
-      if: runner.os == 'Linux'
-      run: "sudo apt-get update\n# Install each package individually and tolerate a name that does not\n\
-        # exist in this image: one wrong name must not abort the whole job and\n# hide the real Qt error.\
-        \ The import guard below is the actual check.\nfor p in \\\n  libegl1 libgl1 libglib2.0-0 libdbus-1-3\
-        \ \\\n  libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 \\\n  libxcb-cursor0 libxcb-glx0\
-        \ libxcb-icccm4 libxcb-image0 \\\n  libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-render-util0\
-        \ \\\n  libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 \\\n  libxcb-xfixes0 libxcb-xkb1 libxext6\
-        \ libxfixes3 libxi6 libxrender1 \\\n  libfontconfig1 libfreetype6 libgbm1 libasound2 \\\n  libnss3\
-        \ libnspr4 libexpat1 ; do\n  sudo apt-get install -y --no-install-recommends \"$p\" \\\n    ||\
-        \ echo \"::warning::$p unavailable in this image (continuing)\"\ndone\nsudo apt-get install -y\
-        \ --no-install-recommends xvfb\n"
-    - name: Verify QtWebEngine is importable
-      shell: bash
-      run: 'python -c "import PySide6, os; d=os.path.dirname(PySide6.__file__); print(''PySide6'', PySide6.__version__,
-        ''at'', d)"
-
-        python -m pip list | grep -i pyside || true
-
-        python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print(''QtWebEngine OK'', __import__(''PySide6'').__version__)"
-
-        '
-    - name: Run the test suite
-      shell: bash
-      run: "# Tee to a .log so the upload step below has something to publish even when\n# the suite fails.\
-        \ Without the tee a failing run uploaded an empty artifact\n# and the failure could not be read\
-        \ offline.\nif [ \"$RUNNER_OS\" = \"Linux\" ]; then\n  xvfb-run -a python tests/run_all.py 2>&1\
-        \ | tee test-output.log\nelse\n  python tests/run_all.py 2>&1 | tee test-output.log\nfi\n# Preserve\
-        \ the suite exit code through the pipe; tee would mask it.\nexit \"${PIPESTATUS[0]}\""
-    - name: Upload test log
-      if: always()
-      uses: actions/upload-artifact@v5
-      with:
-        name: test-log-${{ runner.os }}
-        path: '**/*.log'
-        if-no-files-found: ignore
-        retention-days: 7
   build-macos:
     name: Build macOS installer
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.11'
-    - name: Install Briefcase and dependencies
-      run: 'python -m pip install --upgrade pip briefcase
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install Briefcase and dependencies
+        run: |
+          python -m pip install --upgrade pip briefcase
+          python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
+      - name: Build the .app
+        run: briefcase build macOS
+      - name: Package the .dmg
+        run: briefcase package macOS --dmg
+      - name: Collect the installer
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -name "*.dmg" -exec cp {} dist/ \;
+          ls -la dist/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LocalProjectHub-macOS
+          path: dist/*.dmg
+          if-no-files-found: error
 
-        python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
-
-        '
-    - name: Build the .app
-      run: briefcase build macOS
-    - name: Package the .dmg
-      run: briefcase package macOS --dmg
-    - name: Collect the installer
-      shell: bash
-      run: 'mkdir -p dist
-
-        find build -name "*.dmg" -exec cp {} dist/ \;
-
-        ls -la dist/
-
-        '
-    - uses: actions/upload-artifact@v5
-      with:
-        name: LocalProjectHub-macOS
-        path: dist/*.dmg
-        if-no-files-found: error
   build-windows:
     name: Build Windows installer
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.11'
-    - name: Install Briefcase and dependencies
-      run: 'python -m pip install --upgrade pip briefcase
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install Briefcase and dependencies
+        run: |
+          python -m pip install --upgrade pip briefcase
+          python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
+      - name: Build the MSI installer
+        run: briefcase package windows --msi
+      - name: Collect the installer
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -name "*.msi" -exec cp {} dist/ \;
+          ls -la dist/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LocalProjectHub-Windows
+          path: dist/*.msi
+          if-no-files-found: error
 
-        python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
-
-        '
-    - name: Build the MSI installer
-      run: briefcase package windows --msi
-    - name: Collect the installer
-      shell: bash
-      run: 'mkdir -p dist
-
-        find build -name "*.msi" -exec cp {} dist/ \;
-
-        ls -la dist/
-
-        '
-    - uses: actions/upload-artifact@v5
-      with:
-        name: LocalProjectHub-Windows
-        path: dist/*.msi
-        if-no-files-found: error
   publish:
     name: Publish to the GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs:
-    - build-macos
-    - build-windows
     runs-on: ubuntu-24.04
+    needs:
+      - build-macos
+      - build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
     environment: release
     steps:
-    - uses: actions/download-artifact@v5
-      with:
-        path: artifacts
-        merge-multiple: true
-    - name: Upload installers to the release
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: "ls -la artifacts/\ngh release upload \"${GITHUB_REF#refs/tags/}\" artifacts/* \\\n  --clobber\
-        \ --repo \"${GITHUB_REPOSITORY}\"\n"
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Upload installers to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la artifacts/
+          gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* \
+            --clobber --repo "${GITHUB_REPOSITORY}"

@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer  # noqa: E402
 
+from helpers import temp_project_dir  # noqa: E402
 from hub import store as sm  # noqa: E402
 from hub.process_manager import ProjectProcess  # noqa: E402
 from hub.readiness import ReadinessWaiter, tcp_open  # noqa: E402
@@ -171,12 +172,19 @@ if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
-            with tempfile.TemporaryDirectory() as d:
+            with temp_project_dir() as d:
                 try:
                     fn(Path(d))
                     print(f"PASS {name}")
                 except AssertionError as e:
                     fails += 1
                     print(f"FAIL {name}: {e}")
+                except Exception as e:
+                    # Only AssertionError used to be caught, so any other
+                    # exception killed the runner mid-suite: later tests never
+                    # printed and the summary lied about the counts. An
+                    # unexpected error is a failure -- report it as one.
+                    fails += 1
+                    print(f"ERROR {name}: {type(e).__name__}: {e}")
     print("---", "FAILURES" if fails else "all passed")
     sys.exit(1 if fails else 0)
