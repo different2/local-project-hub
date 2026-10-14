@@ -358,6 +358,16 @@ def report_failure(name: str, out: str) -> None:
         )
     tail = "\n".join(out.strip().splitlines()[-12:])
     emit(f"           -- last output --\n{tail}\n")
+    # A 12-line tail is not enough when the suite is long: the tests sort
+    # alphabetically, so a failure in an early test falls outside the window and
+    # the summary then reports "12 passed, 1 failed" with nothing in the output
+    # that explains the 1. Always show the failure lines themselves.
+    bad = [l for l in out.splitlines() if l.startswith(("FAIL ", "ERROR "))]
+    if bad and not any(l.startswith(("FAIL ", "ERROR ")) for l in tail.splitlines()):
+        emit("           -- failures not in the tail above --")
+        for line in bad[:20]:
+            emit(f"           {line}")
+        emit("")
 
 
 def report_suite(name: str, code: int, passed: int, failed: int, out: str) -> int:

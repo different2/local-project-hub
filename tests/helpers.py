@@ -54,6 +54,64 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def stop_and_release(proc, timeout_s: float = 25.0) -> None:
+    """Stop a ProjectProcess and wait until the OS has released its port.
+
+    Two separate things have to happen, and only the first is what Qt reports:
+
+      1. the process exits            -> proc.state == "stopped"
+      2. the OS closes its handles    -> the port is bindable again
+
+    On Windows (2) lags (1). Code that stops a process and immediately deletes
+    its working directory therefore dies with
+
+        PermissionError: [WinError 32] The process cannot access the file
+        because it is being used by another process
+
+    long after the test's real assertions passed, which is why this was
+    mistaken for a test failure. Waits for both, and never raises: a leftover
+    process is noise, a failed test is a lie about what was checked.
+    """
+    if proc is None:
+        return
+    try:
+        proc.stop()
+    except Exception:
+        return
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        state = getattr(proc, "state", None)
+        if state == "stopped":
+            break
+        time.sleep(0.2)
+    # Then the port, which is the part Qt does not tell us about.
+    port = None
+    try:
+        port = proc._expected_port()
+    except Exception:
+        port = None
+    if not port:
+        return
+    deadline = time.time() + min(timeout_s, 15.0)
+    while time.time() < deadline:
+        if not _port_open(port):
+            return
+        time.sleep(0.25)
+
+
+def _port_open(port: int) -> bool:
+    """True when something still holds the port. Bind-based, no SO_REUSEADDR."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def remove_tree_retry(path, attempts: int = 12, delay: float = 0.4) -> None:
     """Delete a directory, retrying while a child process still holds a file.
 

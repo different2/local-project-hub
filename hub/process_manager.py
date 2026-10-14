@@ -306,7 +306,14 @@ class ProjectProcess(QObject):
             self.proc.terminate()
             # Escalate on schedule rather than stalling the restart; if the
             # process exits politely first, _on_finished starts the new one.
-            QTimer.singleShot(TERM_GRACE_MS, self._force_kill)
+            # Windows gets the short leash here too: terminate() cannot reach a
+            # console process, so waiting out the full POSIX grace delays every
+            # restart by 20s -- long enough that callers time out first and
+            # report the project as stuck in 'starting'.
+            QTimer.singleShot(
+                WINDOWS_TERM_GRACE_MS if IS_WINDOWS else TERM_GRACE_MS,
+                self._force_kill,
+            )
         else:
             self.start()
 

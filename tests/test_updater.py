@@ -43,17 +43,21 @@ def test_version_comparison():
     assert updater.is_newer("v2.0.0", "1.9.9")  # 'v' prefix tolerated
 
 
-def test_asset_selection_prefers_this_platform():
+def test_asset_selection_prefers_this_platform() -> None:
     r = updater.parse_release(FAKE_RELEASE)
     asset = updater._asset_for_platform(r.assets)
-    assert asset is not None, "no asset matched this platform"
     if sys.platform == "darwin":
+        assert asset is not None, "no asset matched this platform"
         assert asset.name.endswith(".dmg"), asset.name
     elif sys.platform.startswith("win"):
+        assert asset is not None, "no asset matched this platform"
         assert asset.name.endswith(".msi"), asset.name
     else:
-        # unsupported platform: may be None, which the UI handles
-        assert asset is None or asset.name
+        # The fixture ships only macOS and Windows installers, which is honest:
+        # there is no Linux build. Asserting one exists here would fail on the
+        # Ubuntu runner -- and because these two tests sort first, the 12-line
+        # failure tail cut them off, so the real reason never appeared.
+        assert asset is None or asset.name, asset
 
 
 def test_summarize_release_is_concise():
