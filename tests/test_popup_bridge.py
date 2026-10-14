@@ -231,10 +231,23 @@ def test_target_blank_link_and_closing(tmp: Path) -> None:
 
 
 if __name__ == "__main__":
+    # Honour the runner's --test=<name> isolation flag. Without this the suite
+    # ignores it and runs every test, so one isolated process ran all three --
+    # defeating the isolation the flag exists to provide and misattributing any
+    # failure to the last test listed.
+    only = None
+    for _a in sys.argv[1:]:
+        if _a.startswith("--test="):
+            only = _a.split("=", 1)[1]
+
     app = QApplication.instance() or QApplication([])
     fails = 0
+    ran = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            if only and name != only:
+                continue
+            ran += 1
             with tempfile.TemporaryDirectory() as d:
                 try:
                     fn(Path(d))
@@ -242,5 +255,10 @@ if __name__ == "__main__":
                 except AssertionError as e:
                     fails += 1
                     print(f"FAIL {name}: {e}")
+    if only and not ran:
+        # Running nothing silently would let the runner report a green suite for
+        # a test name that does not exist.
+        print(f"ERROR no such test: {only}")
+        sys.exit(2)
     print("---", "FAILURES" if fails else "all passed")
     sys.exit(1 if fails else 0)

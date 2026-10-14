@@ -1147,10 +1147,24 @@ def test_user_supplied_args_are_never_overridden(tmp: Path) -> None:
 if __name__ == "__main__":
     import inspect
 
+    # The runner isolates GUI tests by passing --test=<name>, expecting the suite
+    # to run that one test. Without this filter the suite ignores the flag and
+    # runs everything, so each of the 31 isolated processes ran all 29 tests --
+    # 870 "passes" for a 29-test file, and a real failure attributed to whatever
+    # test happened to be listed last. Accept the flag the runner already sends.
+    only = None
+    for _a in sys.argv[1:]:
+        if _a.startswith("--test="):
+            only = _a.split("=", 1)[1]
+
     app = QApplication.instance() or QApplication([])
     fails = 0
+    ran = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            if only and name != only:
+                continue
+            ran += 1
             # Some detector tests need no tempdir; pass one only if accepted.
             try:
                 sig = inspect.signature(fn)
@@ -1167,5 +1181,10 @@ if __name__ == "__main__":
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
+    if only and not ran:
+        # Silently running nothing would let the runner report a green suite for
+        # a test name that does not exist. Say so instead.
+        print(f"ERROR no such test: {only}")
+        sys.exit(2)
     print("---", "FAILURES" if fails else "all passed")
     sys.exit(1 if fails else 0)
