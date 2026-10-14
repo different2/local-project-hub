@@ -25,7 +25,7 @@ from collections import deque
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from .platform import resolve_interpreter, split_command
-from .readiness import tcp_open
+from .readiness import tcp_open, url_host_port
 from . import urldetect
 
 LOG_HISTORY = 500
@@ -346,6 +346,18 @@ class ProjectProcess(QObject):
         port = det.get("port")
         if port:
             return int(port)
+        # The configured URL is the next-best source, and it is the common case:
+        # a project added by hand has a URL but no detected block. Without this
+        # the restart port-wait silently does nothing, and on Windows the
+        # replacement server dies with "Address already in use" because the old
+        # child still holds the socket.
+        url = str(self.rec.get("url") or "")
+        if url:
+            try:
+                _, url_port = url_host_port(url)
+                return url_port
+            except ValueError:
+                pass
         # No detected port: read the entry script named on the command line.
         from .detect_type import _entry_script_path, _script_default_port
 

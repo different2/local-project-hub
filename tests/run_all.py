@@ -385,6 +385,15 @@ def main() -> int:
             emit(f"  MISSING  {name}")
             results.append((name, 1))
             continue
+        # Wait for the PREVIOUS suite's servers to release their ports before
+        # starting this one. This has to happen between suites, not only inside
+        # an isolated suite: a GUI suite's Qt child can outlive its own exit, so
+        # the next suite's server fails to bind and every test in it reports a
+        # port-shaped failure ("readiness never fired", "a foreign holder was
+        # not reported", "dashboard did not come back") that reads like a logic
+        # bug. That is what macOS CI was hitting.
+        if results:
+            wait_for_ports_free()
         try:
             if name in ISOLATE_TESTS:
                 code, passed, failed, out = run_isolated(path)

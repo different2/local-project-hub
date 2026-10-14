@@ -32,16 +32,49 @@ def test_split_command_empty():
     assert pf.split_command("   ") == []
 
 
-def test_split_command_windows_keeps_backslashes():
+def test_split_command_windows_keeps_backslashes() -> None:
     """The bug this guards: shlex POSIX mode eats backslashes in Windows paths."""
-    # Simulate what the Windows branch does (posix=False).
     import shlex
 
-    argv = shlex.split(r"python C:\Projects\app\server.py", posix=False)
-    assert argv == ["python", r"C:\Projects\app\server.py"], argv
+    # Drive the platform helper, not shlex directly: an earlier version of this
+    # test called shlex.split(posix=False) itself and so passed while the real
+    # split_command was broken on Windows.
+    got = pf._windows_argv(r"python C:\Projects\app\server.py")
+    assert got == ["python", r"C:\Projects\app\server.py"], got
+
     # and the POSIX mode really would break it, proving the guard is needed
     broken = shlex.split(r"python C:\Projects\app\server.py", posix=True)
-    assert broken != argv, "expected posix mode to mangle the path"
+    assert broken != got, "expected posix mode to mangle the path"
+
+
+def test_split_command_windows_strips_quotes() -> None:
+    """posix=False keeps the quote characters; the child must not see them.
+
+    This is the Windows failure CI reported:
+
+        FAIL test_split_command_quoted: ['python3', '-c', '"print(1)"']
+
+    The same command on POSIX gives 'print(1)'. Left unfixed, every quoted
+    argument on Windows arrives with literal quotes attached, so
+    `python -c "print(1)"` fails with a syntax error inside the child.
+    """
+    got = pf._windows_argv('python3 -c "print(1)"')
+    assert got == ["python3", "-c", "print(1)"], got
+    # identical to what the POSIX branch produces
+    assert got == pf.split_command('python3 -c "print(1)"'), (
+        "Windows and POSIX branches disagree on a quoted argument"
+    )
+
+
+def test_windows_argv_keeps_interior_quotes_intact() -> None:
+    """Only a matching SURROUNDING pair is removed, never an interior one.
+
+    Guarded with a case that has no ambiguous escaping: a quoted argument
+    containing a single-quoted word. The important property is that the
+    surrounding double quotes go while the inner ones stay.
+    """
+    got = pf._windows_argv("python -c \"print('hi')\"")
+    assert got == ["python", "-c", "print('hi')"], got
 
 
 def test_split_command_uses_platform_mode():

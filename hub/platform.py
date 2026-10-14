@@ -24,13 +24,41 @@ def split_command(command: str) -> list[str]:
     an escape character there, so `C:\\Projects\\app\\server.py` loses its
     separators. On Windows we use posix=False, which keeps backslashes intact
     and treats only double quotes as quoting.
+
+    posix=False has one catch: it keeps the quote characters in the token, so
+    `python3 -c "print(1)"` yields '"print(1)"' rather than 'print(1)'. The
+    child then receives literal quotes as part of its argument. Strip a single
+    matching pair from each end, which is what posix=True would have produced.
     """
     command = (command or "").strip()
     if not command:
         return []
     if IS_WINDOWS:
-        return shlex.split(command, posix=False)
+        return _windows_argv(command)
     return shlex.split(command, posix=True)
+
+
+def _windows_argv(command: str) -> list[str]:
+    """Split a command line the way Windows needs it.
+
+    posix=False keeps backslashes intact, so `C:\\Projects\\app\\server.py`
+    survives. Its one catch is that it keeps the quote characters in the token,
+    so `python3 -c "print(1)"` yields '"print(1)"' rather than 'print(1)' and
+    the child receives literal quotes as part of its argument. Strip a single
+    matching pair from each end, which is what posix=True would have produced.
+
+    Split out from split_command() so a non-Windows host can test the Windows
+    path: the branch itself is platform-independent and only the choice to use
+    it is not.
+    """
+    return [_unquote(t) for t in shlex.split(command, posix=False)]
+
+
+def _unquote(token: str) -> str:
+    """Remove one matching pair of surrounding quotes, as POSIX shlex would."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
+        return token[1:-1]
+    return token
 
 
 def interpreter_candidates(explicit: str = "") -> list[str]:

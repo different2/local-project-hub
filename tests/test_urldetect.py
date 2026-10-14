@@ -165,6 +165,17 @@ def test_window_fills_in_and_saves_detected_url(tmp: Path) -> None:
         assert reloaded["url"], "detected URL was not saved to the registry"
         assert str(port) in reloaded["url"], reloaded["url"]
     finally:
+        # close() alone leaves the project's child process running, and on
+        # Windows that child still holds srv_py open -- so the temp-dir cleanup
+        # dies with WinError 32 and fails a test that had already passed. Stop
+        # every process the window owns before closing it.
+        for _proc in list(getattr(w, "procs", {}).values()):
+            try:
+                _proc.stop()
+            except Exception:
+                pass
+        for _proc in list(getattr(w, "procs", {}).values()):
+            _wait_for(lambda p=_proc: p.state == "stopped", timeout_s=25)
         w.close()
 
 
