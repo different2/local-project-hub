@@ -1200,6 +1200,52 @@ Active Connections
     assert every == [8787, 5000], every
 
 
+def test_process_command_reads_on_every_platform() -> None:
+    """The holder's command line must be readable on Windows too.
+
+    process_command() used `ps -o command=`, which does not exist on Windows, so
+    it silently returned "" for every PID there. The conflict dialog then offered
+    to end a process without naming it, and the test asserting the holder's
+    script is named failed with `{'pid': 3468, 'command': ''}`.
+
+    PowerShell's Win32_Process is the Windows equivalent. Its output can be empty
+    (a protected process, or one whose command line cannot be read), which must
+    stay "" rather than becoming an error.
+    """
+    cases = [
+        # (label, powershell stdout, expected)
+        ("full command line", "python.exe holder.py 55555", "python.exe holder.py 55555"),
+        ("empty output", "", ""),
+        ("no output at all", None, ""),
+        ("multiline", "python.exe obs.py 8471\npython.exe other.py", "python.exe obs.py 8471"),
+        ("trailing newline", "python.exe obs.py 8471\n", "python.exe obs.py 8471"),
+    ]
+
+    class _Fake:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    real_run = subprocess.run
+    real_flag = urldetect.IS_WINDOWS
+    urldetect.IS_WINDOWS = True
+    try:
+        for label, out, expected in cases:
+            subprocess.run = lambda *a, **k: _Fake(out or "")
+            got = urldetect.process_command(3468)
+            assert got == expected, f"{label}: {got!r} != {expected!r}"
+    finally:
+        subprocess.run = real_run
+        urldetect.IS_WINDOWS = real_flag
+
+    # The Unix path must be unchanged by the Windows branch.
+    urldetect.IS_WINDOWS = False
+    try:
+        subprocess.run = lambda *a, **k: _Fake("python3 obs.py 8471\n")
+        assert urldetect.process_command(3468) == "python3 obs.py 8471"
+    finally:
+        subprocess.run = real_run
+
+
 if __name__ == "__main__":
     import inspect
 

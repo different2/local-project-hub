@@ -224,11 +224,37 @@ def url_host_port(url: str) -> tuple[str, int]:
 def process_command(pid: int) -> str:
     """The command line for a PID, or "" when it cannot be read.
 
-    Used to show the user WHAT is holding a port before offering to kill it.
+    Used to show the user WHAT is holding a port before offering to kill it --
+    an empty string here makes the dialog useless ("end this process?" with no
+    indication of what it is), and it also fails the conflict tests that assert
+    the holder's script is named.
+
+    ps is Unix-only. On it, `ps -o command= -p PID` gives the full command line.
+    On Windows the equivalent is PowerShell's Win32_Process CIM class, which is
+    always present on a Windows runner where ps is not.
     """
     if not pid:
         return ""
     import subprocess
+
+    if IS_WINDOWS:
+        try:
+            out = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-CimInstance Win32_Process -Filter 'ProcessId=%d' "
+                    "| Select-Object -ExpandProperty CommandLine" % pid,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return out.splitlines()[0].strip() if out else ""
 
     try:
         out = subprocess.run(
