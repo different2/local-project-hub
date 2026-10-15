@@ -549,9 +549,28 @@ class ProjectProcess(QObject):
 
         Matched on the error text rather than a port number, because the port
         is often not recoverable from the output at all.
+
+        Every platform words this differently, and matching only the macOS/Linux
+        phrasings meant the Windows equivalent went unrecognised: the signal that
+        triggers the "end that process" offer never fired, so a project whose
+        port was taken just died silently. The three wordings, and the errno for
+        each:
+
+            macOS   OSError: [Errno 48] Address already in use
+            Linux   OSError: [Errno 98] Address already in use
+            Windows OSError: [WinError 10048] Only one usage of each socket
+                    address (protocol/network address/port) is normally permitted.
+
+        Linux is covered by the shared "Address already in use" phrase, which is
+        why this only ever bit on Windows.
         """
         text = "".join(self.history)
-        return "Address already in use" in text or "Errno 48" in text
+        return (
+            "Address already in use" in text
+            or "Errno 48" in text
+            or "WinError 10048" in text
+            or "Only one usage of each socket address" in text
+        )
 
     def _port_from_failure_output(self) -> int | None:
         """The port this server failed to bind, so the hub can offer to free it.
@@ -565,7 +584,7 @@ class ProjectProcess(QObject):
         holds the port anyway.
         """
         text = "".join(self.history)
-        if "Address already in use" not in text and "Errno 48" not in text:
+        if not self._failed_to_bind():
             return None
 
         argv = self.rec.get("command") or ""

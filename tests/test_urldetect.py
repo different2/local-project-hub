@@ -991,6 +991,52 @@ def test_port_recovered_from_a_hardcoded_script_traceback(tmp: Path) -> None:
     assert proj._port_from_failure_output() == port, proj._port_from_failure_output()
 
 
+
+def test_bind_failure_is_recognised_on_every_platform(tmp: Path) -> None:
+    """A port-taken failure must be recognised whatever the OS calls it.
+
+    _failed_to_bind() only matched macOS/Linux wording, so the Windows
+    equivalent was never seen: the signal that offers to end the holder never
+    fired, and a project whose port was taken simply died. The port could not be
+    recovered either, for the same reason. Each platform words it differently and
+    only one phrase is shared, so all three are pinned here rather than left to
+    whichever machine happens to run the suite.
+    """
+    from collections import deque
+
+    from hub.process_manager import ProjectProcess
+
+    wordings = {
+            "macOS": 'OSError: [Errno 48] Address already in use\n',
+            "Linux": 'OSError: [Errno 98] Address already in use\n',
+            "Windows": (
+                "OSError: [WinError 10048] Only one usage of each socket address\n"
+                "(protocol/network address/port) is normally permitted.\n"
+            ),
+    }
+
+    script = tmp / "srv.py"
+    script.write_text("import sys\nprint('x')\n")
+    proc = ProjectProcess(
+            sm.validate(
+                {"name": "S", "command": f"{sys.executable} {script} 8791",
+                 "working_dir": str(tmp)}
+            )
+    )
+
+    for platform, text in wordings.items():
+            proc.history = deque([text])
+            assert proc._failed_to_bind(), f"{platform} bind failure was not recognised"
+            assert proc._port_from_failure_output() == 8791, (
+                f"{platform}: port not recovered from the command line"
+            )
+
+    # Unrelated failures must not be mistaken for a bind conflict.
+    proc.history = deque(['Traceback (most recent call last):\n', "ValueError: bad\n"])
+    assert not proc._failed_to_bind(), "an unrelated error was read as a bind failure"
+    assert proc._port_from_failure_output() is None
+
+
 def test_listening_ports_ignores_the_listen_column(tmp: Path) -> None:
     """lsof's LAST field is "(LISTEN)", not the address.
 
