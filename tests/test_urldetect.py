@@ -198,8 +198,15 @@ def test_port_conflict_refuses_to_start(tmp: Path) -> None:
         )
     )
     holder.start()
+    holder_out = []
+    holder.output.connect(holder_out.append)
     started = _wait_for(lambda: holder.state == "running", timeout_s=25)
-    assert started, f"test server did not start (state={holder.state})"
+    assert started, (
+        f"test server did not start (state={holder.state}); "
+        f"port={port} in_use={urldetect.port_in_use(port)} "
+        f"owners={urldetect.port_owners(port)} "
+        f"output={''.join(holder_out)[-400:]!r}"
+    )
     try:
         rec = sm.validate(
             {

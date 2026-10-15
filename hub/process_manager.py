@@ -149,6 +149,12 @@ class ProjectProcess(QObject):
         # PIDs this object launched that have since exited, so a restart does
         # not mistake its own shutting-down server for a foreign port conflict.
         self._retired_pids: set[int] = set()
+        # PIDs of processes this object started and is still running.
+        # Kept separately from the live proc because Windows
+        # QProcess.processId() returns 0 until the started signal, so
+        # the live read alone can report nothing and our own server
+        # then looks foreign to the port-conflict check.
+        self._live_pids: set[int] = set()
         self._kill_timer = QTimer(self)
         self._kill_timer.setSingleShot(True)
         self._kill_timer.setInterval(TERM_GRACE_MS)
@@ -396,7 +402,7 @@ class ProjectProcess(QObject):
         port conflict — our own previous server may briefly still hold the port
         as it shuts down.
         """
-        mine = set(self._retired_pids)
+        mine = set(self._retired_pids) | set(self._live_pids)
         if self.proc is not None:
             try:
                 pid = self.proc.processId()
@@ -441,6 +447,19 @@ class ProjectProcess(QObject):
         # QProcess reports Running but nothing forwards it; without this the
         # window never learns the process is up, so it never starts the
         # readiness poll and the dashboard never loads ("stuck on Starting…").
+        #
+        # Also the moment to remember the PID as ours. On Windows
+        # QProcess.processId() returns 0 until this signal fires, so reading it
+        # earlier -- and anywhere in between -- would report no PID at all, and
+        # port_conflict() would then see our own running server as a foreign
+        # holder and refuse to start or prompt to kill it. Remembering it here
+        # closes that window on every platform.
+        try:
+            pid = self.proc.processId() if self.proc is not None else 0
+        except Exception:
+            pid = 0
+        if pid:
+            self._live_pids.add(pid)
         self.state_changed.emit("running")
 
     def _force_kill(self) -> None:
@@ -470,6 +489,7 @@ class ProjectProcess(QObject):
                 pid = self.proc.processId()
                 if pid:
                     self._retired_pids.add(pid)
+                    self._live_pids.discard(pid)
             except Exception:
                 pass
         # The `status` arg is unreliable in PySide6 (reports CrashExit for a
