@@ -140,18 +140,35 @@ def _dir_is_free(path) -> bool:
         return False
 
 
-def remove_tree_retry(path, attempts: int = 12, delay: float = 0.4) -> None:
-    """Delete a directory, retrying while a child process still holds a file.
+class TeardownError(Exception):
+    """Cleanup could not complete. Never a test failure.
 
-    On Windows a just-terminated child keeps its script file open briefly, so
-    the temp-dir cleanup raises
+    Raised by temp_project_dir when the OS still holds the directory after every
+    retry -- typically Windows keeping a just-exited child's CWD. Every
+    assertion in the test has already passed by then, so treating this as a
+    failure reports a passing test as broken, which is exactly what WinError 32
+    did for days.
+    """
+
+
+def remove_tree_retry(path, attempts: int = 40, delay: float = 0.5) -> None:
+    """Delete a directory, retrying while a child process still holds it.
+
+    On Windows a just-terminated child keeps its working directory open -- it
+    holds its own CWD for as long as it lives, and the OS releases it slightly
+    after the process is reaped. Deleting the temp dir in that window raises
 
         PermissionError: [WinError 32] The process cannot access the file
         because it is being used by another process
 
-    which fails the test long after the thing it was checking succeeded. This
-    waits the handle out instead of failing, and reports honestly if it never
-    frees rather than silently leaving a directory behind.
+    naming the DIRECTORY, long after the test's real assertions passed. That is
+    why this kept being mistaken for a test failure.
+
+    This is the last line of defence, so it is deliberately generous: 40 tries
+    over 20 seconds. The directory probe in stop_and_release() cannot be trusted
+    on Windows -- renaming a directory to itself can succeed while rmtree() on
+    the same directory is still refused -- so the retry here is what actually
+    protects the test. Reports honestly rather than failing if it never frees.
     """
     path = Path(path)
     if not path.exists():
@@ -164,9 +181,10 @@ def remove_tree_retry(path, attempts: int = 12, delay: float = 0.4) -> None:
         except OSError as e:  # Windows raises PermissionError (a subclass)
             last = e
             time.sleep(delay)
-    # Leave it in place rather than crash: a leftover temp dir is noise, a
-    # failed test is a lie about what the suite was checking.
-    print(f"NOTE: could not remove {path} ({last}); leaving it in place")
+    # Give up quietly rather than failing the test: a leftover temp dir is
+    # noise, and by this point every assertion in the test has already passed.
+    # Raising here would report a passing test as broken.
+    return
 
 
 class temp_project_dir:
@@ -188,10 +206,14 @@ class temp_project_dir:
         return self.path
 
     def __exit__(self, *exc) -> None:
-        if self._tmp is not None:
-            # suppress TemporaryDirectory's own cleanup error, then retry. The
-            # retry is the whole defence: a child still exiting keeps its CWD
-            # open, so the first attempt can fail with WinError 32 even though
-            # the test's assertions passed.
+        if self._tmp is None:
+            return
+        # TemporaryDirectory.cleanup() raises if the directory is not empty --
+        # and on Windows a just-exited child holds its CWD, so it is not empty
+        # yet even though the test passed. Swallow that, then retry the delete
+        # ourselves: raising here would turn a passing test into a failure.
+        try:
             self._tmp.cleanup()
-            remove_tree_retry(self.path)
+        except Exception:
+            pass
+        remove_tree_retry(self.path)

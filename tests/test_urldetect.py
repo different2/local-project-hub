@@ -1182,8 +1182,8 @@ if __name__ == "__main__":
             except Exception as e:
                 # Only AssertionError used to be caught, so any other exception
                 # killed the runner mid-suite: later tests never printed and the
-                # summary claimed "N passed, 1 failed" with no FAIL line to name
-                # the 1. An unexpected error is a failure -- report it as one.
+                # summary claimed "12 passed, 1 failed" with no FAIL line to name
+                # the 1. An unexpected error IS a failure -- report it as one.
                 fails += 1
                 print(f"ERROR {name}: {type(e).__name__}: {e}")
     if only and not ran:
