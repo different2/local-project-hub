@@ -21,9 +21,13 @@ PROJECT_ROOT = TESTS_DIR.parent
 # its working directory for as long as it lives, and the OS releases it slightly
 # after the process is reaped. Deleting the temp dir in that window raises
 # WinError 32 on the DIRECTORY, which is the failure these suites kept hitting.
-# Generous on Windows, zero cost elsewhere: on POSIX the directory is released
-# with the process, so the probe passes on the first try and returns at once.
-_HANDLE_SETTLE_S = 12.0 if sys.platform.startswith("win") else 0.0
+#
+# The budget is SHARED across every teardown in one process rather than granted
+# per call. 15 sites x a per-site cap is what pushed the Windows job past its
+# 35-minute limit; one pool means the common case (the directory is free at
+# once) costs nothing and a genuinely lagging process is still waited out.
+_HANDLE_BUDGET_S = 20.0 if sys.platform.startswith("win") else 0.0
+_handle_budget_left = _HANDLE_BUDGET_S
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -58,27 +62,27 @@ def free_port() -> int:
 
 
 def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:
-    """Stop a ProjectProcess and wait until the OS has released its port.
+    """Stop a ProjectProcess and wait until the OS has released its directory.
 
     Two separate things have to happen, and only the first is what Qt reports:
 
       1. the process exits            -> proc.state == "stopped"
-      2. the OS closes its handles    -> the port is bindable again
+      2. the OS closes its handles    -> the temp dir is deletable
 
-    On Windows (2) lags (1). Code that stops a process and immediately deletes
-    its working directory therefore dies with
+    On Windows (2) lags (1), and the handle that lags is the child's CWD, not
+    the script file. Code that stops a process and immediately deletes its
+    working directory therefore dies with
 
         PermissionError: [WinError 32] The process cannot access the file
         because it is being used by another process
 
-    long after the test's real assertions passed, which is why this was
-    mistaken for a test failure.
+    naming the TEMP DIRECTORY -- long after the test's real assertions passed,
+    which is why this was repeatedly mistaken for a test failure.
 
-    The port wait is deliberately short and only runs when a port is known:
-    with 15 teardown sites across the GUI suites, waiting the full teardown
-    budget at each one pushed CI past its 20-minute job limit -- the suites
-    were correct, they were just slow. Most processes release immediately, so
-    this exits on the first successful probe.
+    The wait is bounded and exits on the first successful probe: most processes
+    release immediately, and the cap only exists for the rare lagging case.
+    Budget matters -- with 15 teardown sites across the GUI suites, a generous
+    fixed wait per site is what pushed CI past its job limit.
     """
     if proc is None:
         return
@@ -99,11 +103,17 @@ def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:
     #
     # Renaming the directory to itself is the same probe the OS is about to
     # apply during cleanup, so it fails exactly when rmtree() would.
-    deadline = time.time() + _HANDLE_SETTLE_S
+    global _handle_budget_left
+    started = time.time()
+    deadline = started + max(_handle_budget_left, 0.0)
     while time.time() < deadline:
         if _dir_is_free(script_path):
+            _handle_budget_left = max(_handle_budget_left - (time.time() - started), 0.0)
             return
         time.sleep(0.2)
+    # Budget exhausted (or the handle never freed): zero it so the rest of the
+    # suite is not starved, and let the retrying delete cope or report honestly.
+    _handle_budget_left = 0.0
 
 
 def _dir_is_free(path) -> bool:
@@ -179,11 +189,9 @@ class temp_project_dir:
 
     def __exit__(self, *exc) -> None:
         if self._tmp is not None:
-            # suppress TemporaryDirectory's own cleanup error, then retry
+            # suppress TemporaryDirectory's own cleanup error, then retry. The
+            # retry is the whole defence: a child still exiting keeps its CWD
+            # open, so the first attempt can fail with WinError 32 even though
+            # the test's assertions passed.
             self._tmp.cleanup()
             remove_tree_retry(self.path)
-            # A child that is still exiting keeps its script file open, so even
-            # the retry can lose the race. Give the OS a moment to release the
-            # handle; the directory is already gone by now, this only stops the
-            # next test's cleanup from hitting a dying process.
-            time.sleep(_HANDLE_SETTLE_S)
