@@ -1142,6 +1142,51 @@ def test_user_supplied_args_are_never_overridden(tmp: Path) -> None:
     assert (rec.get("args") or "").strip() == "--port 9999"
 
 
+def test_netstat_parser_finds_only_listeners() -> None:
+    """The Windows port-owner parser, exercised on every platform.
+
+    lsof is not available on Windows runners, so port_owners() used to report an
+    empty set there and every conflict check concluded "cannot tell who holds
+    it" -- which read as no conflict at all. This test feeds the netstat parser
+    real output shapes so the Windows path is covered wherever it runs, instead
+    of only on the machine that has netstat.
+
+    Only LISTENING rows count. A port also appears on outbound connections whose
+    ephemeral local port can coincide with it, and a listener's own accepted
+    connections show the same port on both sides.
+    """
+    sample = """
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:8787           0.0.0.0:0              LISTENING       12345
+  TCP    [::]:8787              [::]:0                 LISTENING       12345
+  TCP    127.0.0.1:9011         127.0.0.1:8787         ESTABLISHED     22222
+  TCP    127.0.0.1:8787         127.0.0.1:9011         ESTABLISHED     12345
+  TCP    0.0.0.0:5000           0.0.0.0:0              LISTENING       33333
+  UDP    0.0.0.0:8787           *:*                                    44444
+"""
+
+    class _FakeResult:
+        stdout = sample
+
+    real_run = subprocess.run
+    subprocess.run = lambda *a, **k: _FakeResult()  # type: ignore[assignment]
+    try:
+        listeners = urldetect._port_owners_netstat(8787)
+        other = urldetect._port_owners_netstat(5000)
+        absent = urldetect._port_owners_netstat(9999)
+    finally:
+        subprocess.run = real_run  # type: ignore[assignment]
+
+    # The listener's PID only: the ESTABLISHED rows (client 22222, and the
+    # server side of its own accepted connection) and the UDP row are not
+    # holders of a TCP listener.
+    assert listeners == {12345}, listeners
+    assert other == {33333}, other
+    assert absent == set(), absent
+
+
 if __name__ == "__main__":
     import inspect
 

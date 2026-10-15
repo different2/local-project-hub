@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+from .platform import IS_WINDOWS
+
 # A URL as servers tend to print it: http(s)://host[:port][/path]
 _URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+")
 
@@ -287,10 +289,20 @@ def port_in_use(port: int) -> bool:
 
 
 def port_owners(port: int) -> set[int]:
-    """PIDs listening on the port, via lsof. Empty set when undeterminable."""
+    """PIDs listening on the port. Empty set when undeterminable.
+
+    lsof is a Unix tool and is not present on Windows runners, where the port
+    check would then always fall through to "cannot tell who holds it" and every
+    conflict would look like no conflict at all. netstat is the equivalent on
+    Windows, so each platform gets its own path rather than one command that
+    silently reports nothing.
+    """
     if not port:
         return set()
     import subprocess
+
+    if IS_WINDOWS:
+        return _port_owners_netstat(port)
 
     try:
         out = subprocess.run(
@@ -305,6 +317,49 @@ def port_owners(port: int) -> set[int]:
     for line in out.split():
         if line.strip().isdigit():
             pids.add(int(line.strip()))
+    return pids
+
+
+def _port_owners_netstat(port: int) -> set[int]:
+    """PIDs listening on the port, via `netstat -ano` (Windows).
+
+    netstat prints one row per local endpoint, with the owning PID last:
+
+        TCP    0.0.0.0:8787    0.0.0.0:0    LISTENING    12345
+
+    The local column is `host:port`, and can be IPv6 (`[::]:8787`), so the port
+    is matched after the final colon. Only LISTENING rows count: a port is also
+    used for outbound connections, whose ephemeral local port can coincide.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        if "LISTENING" not in line.upper():
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local = parts[1]
+        if ":" not in local:
+            continue
+        try:
+            if int(local.rsplit(":", 1)[1]) != port:
+                continue
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+        if pid:
+            pids.add(pid)
     return pids
 
 
