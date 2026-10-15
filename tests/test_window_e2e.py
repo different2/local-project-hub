@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PySide6.QtCore import QEventLoop, QTimer, QUrl  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel, QTabBar  # noqa: E402
 
-from helpers import temp_project_dir  # noqa: E402
+from helpers import reserve_port, temp_project_dir  # noqa: E402
 from hub import store as sm  # noqa: E402
 from hub.window import HubWebView, HubWindow  # noqa: E402
 from hub import __version__  # noqa: E402
@@ -33,10 +33,6 @@ from hub import __version__  # noqa: E402
 # Each test gets its own port: sharing one lets a previous test's server kill
 # the next with "Address already in use" (code=1), which reads as a regression
 # but is just cross-test contamination.
-_PORTS = {"selecting": 8791, "load": 8792, "restart": 8793, "stopped": 8794,
-          "stopping": 8790, "close_running": 8795}
-
-
 def _server_src(port: int) -> str:
     return f'''
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -113,16 +109,21 @@ def _who_holds(port: int) -> str:
         return ""
 
 
-def make_window(tmp: Path, key: str = "selecting") -> tuple[HubWindow, int]:
-    port = _PORTS[key]
-    _wait_for_port_free(port)
+def make_window(tmp: Path) -> tuple[HubWindow, int]:
+    """Build a window over one freshly-reserved server port.
+
+    The port comes from the OS, so no two tests or suites can contend for a fixed
+    number -- which is what produced "A's tab never got a URL" and similar
+    failures that read as logic bugs.
+    """
+    port = reserve_port()
     (tmp / "srv.py").write_text(_server_src(port))
     st = sm.Store(tmp / "registry.json")
     st.add(
         sm.validate(
             {
                 "name": "Window Test",
-                "command": f"{sys.executable} {tmp / 'srv.py'}",
+                "command": f"{sys.executable} {tmp / 'srv.py'} {port}",
                 "url": f"http://127.0.0.1:{port}/",
                 "working_dir": str(tmp),
             }
@@ -141,7 +142,7 @@ def make_window(tmp: Path, key: str = "selecting") -> tuple[HubWindow, int]:
 
 def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
     """Selecting a project opens ITS OWN tab and loads its dashboard there."""
-    w, port = make_window(tmp, "selecting")
+    w, port = make_window(tmp)
     try:
         assert w.active_id, "no project selected after open"
         proc = w._proc_for(w.store.get(w.active_id))
@@ -164,11 +165,11 @@ def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
 
 def test_two_projects_get_two_tabs(tmp: Path) -> None:
     """Each project has its own tab; re-selecting focuses instead of duplicating."""
-    port_a, port_b = _PORTS["selecting"], _PORTS["load"]
-    _wait_for_port_free(port_a)
-    _wait_for_port_free(port_b)
+    # One reserved port per project, so the two servers cannot collide with
+    # each other or with anything else running.
     st = sm.Store(tmp / "registry.json")
-    for name, port in (("Proj A", port_a), ("Proj B", port_b)):
+    for name in ("Proj A", "Proj B"):
+        port = reserve_port()
         (tmp / f"srv_{port}.py").write_text(_server_src(port))
         st.add(
             sm.validate(
@@ -238,7 +239,7 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
 
 def test_stopping_a_project_closes_its_tabs(tmp: Path) -> None:
     """Stopping must close the project's tabs, leaving no frozen pane."""
-    w, port = make_window(tmp, "stopping")
+    w, port = make_window(tmp)
     try:
         assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
         pid = w.active_id
@@ -261,7 +262,7 @@ def test_load_finishes_ok(tmp: Path) -> None:
     # class this waits for the tab to exist and THEN connects, before the URL
     # has been assigned to it. The window is built with a URL the server has not
     # started for, so no load can complete before the slot is attached.
-    w, port = make_window(tmp, "load")
+    w, port = make_window(tmp)
     try:
         assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
         done = {"ok": None}
@@ -287,7 +288,7 @@ def test_load_finishes_ok(tmp: Path) -> None:
 
 def test_restart_reloads_dashboard(tmp: Path) -> None:
     """Restart must bring the dashboard back, not leave the placeholder up."""
-    w, port = make_window(tmp, "restart")
+    w, port = make_window(tmp)
     try:
         url = f"http://127.0.0.1:{port}/"
         assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
@@ -353,7 +354,7 @@ def test_log_drawer_can_be_resized_and_collapsed(tmp: Path) -> None:
 
 def test_erroring_project_logs_the_error(tmp: Path) -> None:
     """A project that dies right away is reported, not left spinning."""
-    port = _PORTS["stopped"]
+    port = reserve_port()
     st = sm.Store(tmp / "registry2.json")
     st.add(
         sm.validate(
@@ -482,8 +483,7 @@ def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
     `if proc is not None`) and was swallowed by the Qt signal, so the click
     silently did nothing.
     """
-    port = _PORTS["close_running"]
-    _wait_for_port_free(port)
+    port = reserve_port()
     srv = tmp / "srv.py"
     srv.write_text(_server_src(port))
     st = sm.Store(tmp / "registry.json")

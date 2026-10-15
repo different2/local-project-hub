@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QMessageBox,
 )
 
-from helpers import stop_and_release, temp_project_dir  # noqa: E402
+from helpers import reserve_port, stop_and_release, temp_project_dir  # noqa: E402
 from hub import store as sm, urldetect  # noqa: E402
 from hub.process_manager import ProjectProcess, _detected_suppress_flag  # noqa: E402
 from hub.window import HubWindow  # noqa: E402
@@ -110,7 +110,7 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 
 
 def test_process_detects_url_from_output(tmp: Path) -> None:
-    port = 8801
+    port = reserve_port()
     srv_py = tmp / "announce.py"
     srv_py.write_text(_ANNOUNCING_SERVER)
     rec = sm.validate(
@@ -132,7 +132,7 @@ def test_process_detects_url_from_output(tmp: Path) -> None:
 
 
 def test_window_fills_in_and_saves_detected_url(tmp: Path) -> None:
-    port = 8802
+    port = reserve_port()
     srv_py = tmp / "announce2.py"
     srv_py.write_text(_ANNOUNCING_SERVER)
     st = sm.Store(tmp / "registry.json")
@@ -185,7 +185,7 @@ def test_port_conflict_refuses_to_start(tmp: Path) -> None:
     the hub then reports the OTHER process's page as this project's dashboard,
     which reads as a success.
     """
-    port = 8814
+    port = reserve_port()
     srv_py = tmp / "holder.py"
     srv_py.write_text(_SILENT_SERVER)
     holder = ProjectProcess(
@@ -232,7 +232,7 @@ def test_port_conflict_is_reported_with_command(tmp: Path) -> None:
     it is another copy of this project or something unrelated before deciding
     to end it.
     """
-    port = 8814
+    port = reserve_port()
     srv_py = tmp / "holder.py"
     srv_py.write_text(_SILENT_SERVER)
     holder = ProjectProcess(
@@ -278,7 +278,7 @@ def test_own_process_is_not_a_conflict(tmp: Path) -> None:
     This is the restart case: if it were reported, every restart would prompt
     the user to kill a process the hub itself started.
     """
-    port = 8815
+    port = reserve_port()
     srv_py = tmp / "mine.py"
     srv_py.write_text(_SILENT_SERVER)
     proc = ProjectProcess(
@@ -307,7 +307,7 @@ def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
     argument. The pre-start check cannot help (no URL to inspect), so the port
     has to come from the command or from what is actually holding a port.
     """
-    port = 8817
+    port = reserve_port()
     srv_py = tmp / "obs.py"
     srv_py.write_text(_SILENT_SERVER)
     holder = ProjectProcess(
@@ -407,7 +407,7 @@ def test_removing_a_project_closes_its_tab(tmp: Path) -> None:
     Without this, a removed project leaves a live dashboard tab behind that
     nothing can restart or close — the tab outlives the thing it belongs to.
     """
-    port = 8819
+    port = reserve_port()
     srv_py = tmp / "srv.py"
     srv_py.write_text(_SILENT_SERVER)
     st = sm.Store(tmp / "registry.json")
@@ -461,7 +461,7 @@ def test_opening_the_hub_does_not_start_anything(tmp: Path) -> None:
     selected it. The user hit this: opening the hub fired obs_live, which then
     opened Firefox.
     """
-    port = 8821
+    port = reserve_port()
     srv_py = tmp / "srv.py"
     srv_py.write_text(_SILENT_SERVER)
     st = sm.Store(tmp / "registry.json")
@@ -493,7 +493,7 @@ def test_opening_the_hub_does_not_start_anything(tmp: Path) -> None:
 
 def test_autostart_project_still_starts(tmp: Path) -> None:
     """The fix must not break the autostart checkbox that IS ticked."""
-    port = 8822
+    port = reserve_port()
     srv_py = tmp / "srv.py"
     srv_py.write_text(_SILENT_SERVER)
     st = sm.Store(tmp / "registry.json")
@@ -523,7 +523,7 @@ def test_autostart_project_still_starts(tmp: Path) -> None:
 
 def test_clicking_a_project_still_starts_it(tmp: Path) -> None:
     """Selecting a project by hand must still launch it (the normal path)."""
-    port = 8823
+    port = reserve_port()
     srv_py = tmp / "srv.py"
     srv_py.write_text(_SILENT_SERVER)
     st = sm.Store(tmp / "registry.json")
@@ -562,7 +562,7 @@ def test_listening_ports_all_actually_finds_ports(tmp: Path) -> None:
     parser read the LAST column, which on macOS is "(LISTEN)" rather than the
     address. A helper that quietly finds nothing is worse than one that fails.
     """
-    port = 8824
+    port = reserve_port()
     srv_py = tmp / "obs.py"
     srv_py.write_text(_SILENT_SERVER)
     holder = ProjectProcess(
@@ -595,7 +595,7 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
     inside the script. Nothing in the command or registry names the port, so
     the holder has to be found by matching the script against listening ports.
     """
-    port = 8825
+    port = reserve_port()
     # A server whose port is a DEFAULT INSIDE the script, not an argument —
     # exactly like obs_live.py. That is the whole difficulty: nothing in the
     # command line names the port, so the holder can only be found by matching
@@ -665,7 +665,7 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
     It must NOT be blocked before starting: scanning unrelated ports would
     refuse legitimate starts, which is worse than one failed attempt.
     """
-    port = 8818
+    port = reserve_port()
     # The port is a default INSIDE the script, like obs_live.py — nothing in
     # the command line names it.
     srv_py = tmp / "obs_live.py"
@@ -832,7 +832,7 @@ def test_about_box_hides_extra_window_buttons() -> None:
 
 def test_configured_url_is_never_overridden(tmp: Path) -> None:
     """A URL the user typed themselves always wins over detection."""
-    port = 8803
+    port = reserve_port()
     srv_py = tmp / "announce3.py"
     srv_py.write_text(_ANNOUNCING_SERVER)
     rec = sm.validate(
@@ -861,7 +861,7 @@ def test_hardcoded_port_conflict_is_detected_without_a_url(tmp: Path) -> None:
     check had nothing to test, the start ran straight into "Address already in
     use", and the hub looped restarting a server that could never come up.
     """
-    port = 8817
+    port = reserve_port()
     srv_py = tmp / "server.py"
     # a hardcoded default port, exactly the sphere shape
     srv_py.write_text(
@@ -908,7 +908,7 @@ def test_hardcoded_port_conflict_is_detected_without_a_url(tmp: Path) -> None:
 
 def test_free_hardcoded_port_reports_no_conflict(tmp: Path) -> None:
     """The negative control: the same detection must stay quiet when free."""
-    port = 8818
+    port = reserve_port()
     srv_py = tmp / "server.py"
     srv_py.write_text(
         "import sys\n"
@@ -952,7 +952,7 @@ def test_port_recovered_from_a_hardcoded_script_traceback(tmp: Path) -> None:
     command line is useless here. The traceback names the file, which is the
     only way to learn the port.
     """
-    port = 8819
+    port = reserve_port()
     srv_py = tmp / "server.py"
     srv_py.write_text(
         "import sys\n"
@@ -987,7 +987,7 @@ def test_listening_ports_ignores_the_listen_column(tmp: Path) -> None:
     no ports — so URL detection by port never fires and the dashboard loads
     with no address. The address is the second-to-last field.
     """
-    port = 8820
+    port = reserve_port()
     srv_py = tmp / "server.py"
     srv_py.write_text(_SILENT_SERVER.replace("int(sys.argv[1])", str(port)))
     proc = subprocess.Popen(
@@ -1016,7 +1016,7 @@ def test_unbuffered_python_output_is_visible_to_the_hub(tmp: Path) -> None:
     left with no address. The hub sets PYTHONUNBUFFERED=1 for the child, which
     is what the project already does on a terminal.
     """
-    port = 8821
+    port = reserve_port()
     srv_py = tmp / "server.py"
     srv_py.write_text(
         "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
@@ -1055,7 +1055,7 @@ def test_detected_suppress_flag_is_applied_to_the_launch(tmp: Path) -> None:
     which is the bug this test pins (detection reported known-suppressible but
     args stayed empty, so the browser still opened).
     """
-    port = 8822
+    port = reserve_port()
     srv_py = tmp / "obs_live.py"
     srv_py.write_text(
         "import argparse, sys\n"
