@@ -34,8 +34,14 @@ jobs:
       matrix:
         # Pinned to 24.04: the ubuntu-latest label moves to Ubuntu 26, which
         # this project has not been tested against.
+        #
+        # No macOS entry, deliberately. The user develops on macOS and runs this
+        # suite locally, so a macOS runner tests a platform that is already
+        # covered -- while competing for the scarce macos arm64 capacity that
+        # Windows and Ubuntu need. Both of those earn their place: there is no
+        # Windows machine here to run the suite on, and QtWebEngine-on-Linux is
+        # the configuration that cannot be reproduced locally at all.
         os:
-          - macos-latest
           - windows-latest
           - ubuntu-24.04
     steps:
