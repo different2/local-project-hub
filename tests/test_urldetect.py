@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from helpers import reserve_port, start_holder, stop_and_release, temp_project_dir  # noqa: E402
 from hub import store as sm, urldetect  # noqa: E402
+from hub.window import _entry_script  # noqa: E402
 from hub.process_manager import ProjectProcess, _detected_suppress_flag  # noqa: E402
 from hub.window import HubWindow  # noqa: E402
 
@@ -639,16 +640,21 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
         w.show()
         offered = []
         w._offer_to_free_port = lambda r, p, c: offered.append(c)
+        holder_pid = holder.proc.processId() if holder.proc else None
         try:
             w.active_id = rec["id"]
             w._on_select()
             ok = _wait_for(lambda: offered, timeout_s=30)
             assert ok, (
                 "a bare-command project whose port was taken got no conflict "
-                "offer (it just died with 'Address already in use')"
+                "offer (it just died with 'Address already in use'); "
+                f"port={port} in_use={urldetect.port_in_use(port)} "
+                f"owners={urldetect.port_owners(port)} "
+                f"listening={urldetect.listening_ports_all()[:8]} "
+                f"script={_entry_script(rec)!r} "
+                f"holder_cmd={urldetect.process_command(holder_pid)!r}"
             )
             assert offered[0]["holders"], offered[0]
-            holder_pid = holder.proc.processId() if holder.proc else None
             assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
         finally:
             w.close()
@@ -705,16 +711,21 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
         w.show()
         offered = []
         w._offer_to_free_port = lambda rec, proc, conflict: offered.append(conflict)
+        holder_pid = holder.proc.processId() if holder.proc else None
         try:
             w.active_id = no_url["id"]
             w._on_select()
             ok = _wait_for(lambda: offered, timeout_s=30)
             assert ok, (
                 "a no-URL project whose port was taken got no conflict offer — "
-                "it just died with 'Address already in use' and nothing was said"
+                "it just died with 'Address already in use' and nothing was said; "
+                f"port={port} in_use={urldetect.port_in_use(port)} "
+                f"owners={urldetect.port_owners(port)} "
+                f"listening={urldetect.listening_ports_all()[:8]} "
+                f"script={_entry_script(no_url)!r} "
+                f"holder_cmd={urldetect.process_command(holder_pid)!r}"
             )
             assert offered[0]["holders"], offered[0]
-            holder_pid = holder.proc.processId() if holder.proc else None
             assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
         finally:
             w.close()
@@ -1085,10 +1096,10 @@ def test_detected_suppress_flag_is_applied_to_the_launch(tmp: Path) -> None:
         assert started, f"did not start: {proc.state}"
         assert proc.proc is not None
         pid = proc.proc.processId()
-        argv = subprocess.run(
-            ["ps", "-o", "command=", "-p", str(pid)],
-            capture_output=True, text=True,
-        ).stdout
+        # Use the platform-aware helper rather than calling `ps` directly: ps
+        # does not exist on Windows, so a direct call returns "" there and this
+        # assertion would fail for a reason that has nothing to do with the flag.
+        argv = urldetect.process_command(pid)
         assert "--no-open" in argv, f"flag never reached the process: {argv!r}"
     finally:
         stop_and_release(proc, srv_py)
