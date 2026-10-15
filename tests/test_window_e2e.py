@@ -17,6 +17,7 @@ Run:  QT_QPA_PLATFORM=offscreen python3 tests/test_window_e2e.py
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -67,26 +68,49 @@ def _wait_for(pred, timeout_s=20.0):
     return pred()
 
 
-def _wait_for_port_free(port: int, timeout_s: float = 15.0) -> bool:
+def _wait_for_port_free(port: int, timeout_s: float = 15.0) -> None:
     """Wait until nothing is listening on `port` before a test binds it.
 
     The OS can keep a socket for a moment after the previous suite's server
     exited, and a suite that starts into a still-held port fails with
     "Address already in use" for reasons that have nothing to do with the code
     under test. Retrying the whole suite was masking that as flakiness.
+
+    Raises rather than returning False. Returning a bool let callers ignore it,
+    so a port held by a leftover process silently became "A's tab never got a
+    URL" three tests later -- the same contamination, blamed on the code.
     """
     import socket
 
-    deadline = int(timeout_s * 10)
-    for _ in range(deadline):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.2)
             try:
                 s.bind(("127.0.0.1", port))
-                return True
+                return
             except OSError:
                 _spin(100)
-    return False
+    holders = _who_holds(port)
+    raise SystemExit(
+        f"Port {port} is still held after {timeout_s}s -- a leftover process from "
+        f"an earlier run, not a code fault.{holders}\n"
+        f"    lsof -ti:{port} | xargs kill\n"
+        f"Then re-run this suite on its own."
+    )
+
+
+def _who_holds(port: int) -> str:
+    """Best-effort description of what is holding a port, for the message above."""
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["lsof", "-ti", str(port)], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        return f" (pids: {out.replace(chr(10), ' ')})" if out else ""
+    except Exception:
+        return ""
 
 
 def make_window(tmp: Path, key: str = "selecting") -> tuple[HubWindow, int]:
@@ -162,11 +186,22 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
         ids = [r["id"] for r in st.ordered()]
         w._select_id(ids[0])
         assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
-        # let A's dashboard actually load before switching
+        # Wait for A's page to FINISH loading, not merely for a URL to appear.
+        # url() != "" is set the moment setUrl() is called, which is before the
+        # child server has necessarily bound its port -- so this check can pass
+        # while the load is still failing. That is the intermittent failure:
+        # whether it passes depends on how fast the child starts, which is why
+        # it looked like flakiness and passed 2 runs out of 3.
+        a_view = w.tabs.widget(1)
+        assert isinstance(a_view, HubWebView), type(a_view).__name__
+        a_done = {"ok": None}
+        a_view.loadFinished.connect(lambda ok: a_done.update(ok=ok))
         assert _wait_for(
-            lambda: isinstance(w.tabs.widget(1), HubWebView)
-            and w.tabs.widget(1).url().toString() != ""
-        ), "A's tab never loaded"
+            lambda: a_view.url().toString() != ""
+        ), "A's tab never got a URL"
+        assert _wait_for(lambda: a_done["ok"] is not None, timeout_s=30), (
+            f"A's page never finished loading (url={a_view.url().toString()!r})"
+        )
 
         w._select_id(ids[1])
         assert _wait_for(lambda: w.tabs.count() == 3), f"second project got no tab: {w.tabs.count()}"
