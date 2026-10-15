@@ -297,7 +297,7 @@ def test_own_process_is_not_a_conflict(tmp: Path) -> None:
     try:
         assert proc.port_conflict() is None, "our own server was flagged as foreign"
     finally:
-        stop_and_release(proc)
+        stop_and_release(proc, srv_py)
 
 
 def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
@@ -1091,7 +1091,7 @@ def test_detected_suppress_flag_is_applied_to_the_launch(tmp: Path) -> None:
         ).stdout
         assert "--no-open" in argv, f"flag never reached the process: {argv!r}"
     finally:
-        stop_and_release(proc)
+        stop_and_release(proc, srv_py)
 
 
 def test_stored_detection_without_entry_script_still_yields_the_flag(tmp: Path) -> None:

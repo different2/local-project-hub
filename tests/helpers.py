@@ -17,15 +17,13 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TESTS_DIR.parent
 
-# Windows keeps a just-exited child's file handle open briefly, so deleting the
-# directory immediately after the process reports "stopped" still raises
-# WinError 32.
-_HANDLE_SETTLE_S = 1.5 if sys.platform.startswith("win") else 0.0
-
-# How long stop_and_release() waits for a port to become bindable. Only Windows
-# needs this at all, and only briefly; on POSIX the socket is released before
-# the process is reaped, so waiting there is pure cost.
-_PORT_SETTLE_S = 3.0 if sys.platform.startswith("win") else 0.5
+# Windows keeps a just-exited child's CWD open for a moment -- the child holds
+# its working directory for as long as it lives, and the OS releases it slightly
+# after the process is reaped. Deleting the temp dir in that window raises
+# WinError 32 on the DIRECTORY, which is the failure these suites kept hitting.
+# Generous on Windows, zero cost elsewhere: on POSIX the directory is released
+# with the process, so the probe passes on the first try and returns at once.
+_HANDLE_SETTLE_S = 12.0 if sys.platform.startswith("win") else 0.0
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -93,30 +91,36 @@ def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:
         if getattr(proc, "state", None) == "stopped":
             break
         time.sleep(0.2)
-    # Now the FILE, which is what WinError 32 is actually about. Waiting on the
-    # port is the wrong signal: a process can release its listening socket and
-    # still hold the script file open, and that is precisely the case that fails.
-    # Probe the script itself by asking the OS to rename it, which requires no
-    # other handle to be open -- the same check rmtree() is about to make.
+    # Now the working DIRECTORY, which is what WinError 32 actually names. A
+    # child process holds its CWD open for as long as it lives, so rmtree()
+    # fails on the directory itself -- not on the script file inside it.
+    # Probing the script would never detect this: the file can be free while the
+    # directory is still held.
+    #
+    # Renaming the directory to itself is the same probe the OS is about to
+    # apply during cleanup, so it fails exactly when rmtree() would.
     deadline = time.time() + _HANDLE_SETTLE_S
     while time.time() < deadline:
-        if _file_is_free(path):
+        if _dir_is_free(script_path):
             return
         time.sleep(0.2)
 
 
-def _file_is_free(path, timeout_s: float = 0.0) -> bool:
-    """True when nothing else holds the file open.
+def _dir_is_free(path) -> bool:
+    """True when no process still holds `path` (a directory) open.
 
-    Probed by renaming the file to itself, which Windows refuses with
-    PermissionError while any handle is open. Testing the port instead would be
-    the wrong signal: a process can close its listening socket and still hold
-    the script file, and that lingering handle is what raises WinError 32 during
-    temp-dir cleanup.
+    Probed by renaming it to itself, which Windows refuses with PermissionError
+    while any handle is open -- including the handle a child keeps on its own
+    CWD. Checking the script file instead would miss that entirely: the file can
+    be free while the directory is still held, which is exactly the case that
+    raises WinError 32 during temp-dir cleanup.
     """
     if path is None:
         return True
     path = Path(path)
+    # The directory is the temp dir; if given a file, use its parent.
+    if path.is_file():
+        path = path.parent
     if not path.exists():
         return True
     try:
