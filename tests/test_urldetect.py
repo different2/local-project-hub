@@ -126,7 +126,7 @@ def test_process_detects_url_from_output(tmp: Path) -> None:
     p.url_detected.connect(lambda u: got.append(u))
     p.start()
     ok = _wait_for(lambda: bool(got), timeout_s=25)
-    stop_and_release(p)
+    stop_and_release(p, srv_py)
     assert ok, f"no URL detected from output; got={got}"
     assert got[0] == f"http://127.0.0.1:{port}", got[0]
 
@@ -222,7 +222,7 @@ def test_port_conflict_refuses_to_start(tmp: Path) -> None:
         text = "".join(out)
         assert "already in use" in text, text
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_port_conflict_is_reported_with_command(tmp: Path) -> None:
@@ -269,7 +269,7 @@ def test_port_conflict_is_reported_with_command(tmp: Path) -> None:
             "holder.py" in (h["command"] or "") for h in conflict["holders"]
         ), conflict
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_own_process_is_not_a_conflict(tmp: Path) -> None:
@@ -354,7 +354,7 @@ def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
         assert holder.proc is not None
         assert holder.proc.processId() in urldetect.port_owners(port)
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_extra_args_reach_the_command(tmp: Path) -> None:
@@ -384,7 +384,7 @@ def test_extra_args_reach_the_command(tmp: Path) -> None:
         assert got, f"server never reported its argv: {''.join(out)!r}"
         assert "--no-open" in "".join(out), "".join(out)
     finally:
-        stop_and_release(p)
+        stop_and_release(p, echo_py)
 
 
 def test_dialog_exposes_an_args_field() -> None:
@@ -517,7 +517,7 @@ def test_autostart_project_still_starts(tmp: Path) -> None:
         assert started, "an autostart project was not started"
     finally:
         p = w._proc_for(st.get(rec["id"]))
-        stop_and_release(p)
+        stop_and_release(p, srv_py)
         w.close()
 
 
@@ -551,7 +551,7 @@ def test_clicking_a_project_still_starts_it(tmp: Path) -> None:
         assert started, "clicking a project did not start it"
     finally:
         p = w._proc_for(st.get(rec["id"]))
-        stop_and_release(p)
+        stop_and_release(p, srv_py)
         w.close()
 
 
@@ -585,7 +585,7 @@ def test_listening_ports_all_actually_finds_ports(tmp: Path) -> None:
             "address or the state on this platform)"
         )
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_bare_command_conflict_is_offered(tmp: Path) -> None:
@@ -651,7 +651,7 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
         finally:
             w.close()
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
@@ -718,7 +718,7 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
         finally:
             w.close()
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_about_dialog_is_closable_and_unhighlighted() -> None:
@@ -848,7 +848,7 @@ def test_configured_url_is_never_overridden(tmp: Path) -> None:
     p.url_detected.connect(lambda u: got.append(u))
     p.start()
     _wait_for(lambda: bool(got), timeout_s=25)
-    stop_and_release(p)
+    stop_and_release(p, srv_py)
     # detection must not fire at all when a URL is already configured
     assert got == [], f"detection ran despite a configured URL: {got}"
 
@@ -903,7 +903,7 @@ def test_hardcoded_port_conflict_is_detected_without_a_url(tmp: Path) -> None:
         assert holder.proc is not None
         assert conflict["holders"][0]["pid"] == holder.proc.processId(), conflict
     finally:
-        stop_and_release(holder)
+        stop_and_release(holder, srv_py)
 
 
 def test_free_hardcoded_port_reports_no_conflict(tmp: Path) -> None:

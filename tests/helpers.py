@@ -59,7 +59,7 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def stop_and_release(proc, timeout_s: float = 25.0) -> None:
+def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:
     """Stop a ProjectProcess and wait until the OS has released its port.
 
     Two separate things have to happen, and only the first is what Qt reports:
@@ -93,32 +93,37 @@ def stop_and_release(proc, timeout_s: float = 25.0) -> None:
         if getattr(proc, "state", None) == "stopped":
             break
         time.sleep(0.2)
-    # Then the port, which is the part Qt does not tell us about. Short cap:
-    # this is insurance against a lagging handle, not a second teardown budget.
-    try:
-        port = proc._expected_port()
-    except Exception:
-        port = None
-    if not port:
-        return
-    deadline = time.time() + _PORT_SETTLE_S
+    # Now the FILE, which is what WinError 32 is actually about. Waiting on the
+    # port is the wrong signal: a process can release its listening socket and
+    # still hold the script file open, and that is precisely the case that fails.
+    # Probe the script itself by asking the OS to rename it, which requires no
+    # other handle to be open -- the same check rmtree() is about to make.
+    deadline = time.time() + _HANDLE_SETTLE_S
     while time.time() < deadline:
-        if not _port_open(port):
+        if _file_is_free(path):
             return
-        time.sleep(0.1)
+        time.sleep(0.2)
 
 
-def _port_open(port: int) -> bool:
-    """True when something still holds the port. Bind-based, no SO_REUSEADDR."""
-    import socket
+def _file_is_free(path, timeout_s: float = 0.0) -> bool:
+    """True when nothing else holds the file open.
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        try:
-            s.bind(("127.0.0.1", port))
-            return False
-        except OSError:
-            return True
+    Probed by renaming the file to itself, which Windows refuses with
+    PermissionError while any handle is open. Testing the port instead would be
+    the wrong signal: a process can close its listening socket and still hold
+    the script file, and that lingering handle is what raises WinError 32 during
+    temp-dir cleanup.
+    """
+    if path is None:
+        return True
+    path = Path(path)
+    if not path.exists():
+        return True
+    try:
+        path.rename(path)
+        return True
+    except OSError:
+        return False
 
 
 def remove_tree_retry(path, attempts: int = 12, delay: float = 0.4) -> None:
