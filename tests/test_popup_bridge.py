@@ -25,17 +25,20 @@ from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from hub import store as sm  # noqa: E402
+from helpers import reserve_port  # noqa: E402
 from hub.window import HubWindow, HubWebView  # noqa: E402
 
-PORT = 8782
-
-PAGE_HTML = """<!doctype html>
+# No hardcoded port. The page has to know the server's address, so it is built
+# per test from the port helpers.reserve_port() handed out -- two suites can then
+# never contend for the same number.
+def page_html(port: int) -> str:
+    return """<!doctype html>
 <html><head><title>popup host</title></head><body>
 <h1>popup test</h1>
 <button id="b" onclick='window.open("http://127.0.0.1:%d/via-open/", "_blank")'>go</button>
 <a id="l" href="http://127.0.0.1:%d/via-link/" target="_blank">blank link</a>
 </body></html>
-""" % (PORT, PORT)
+""" % (port, port)
 
 
 def _spin(ms=100) -> None:
@@ -52,8 +55,14 @@ def _wait_for(pred, timeout_s=20.0) -> bool:
     return pred()
 
 
-def _start_server(dirpath: Path) -> subprocess.Popen:
-    (dirpath / "index.html").write_text(PAGE_HTML)
+def _start_server(dirpath: Path) -> tuple[subprocess.Popen, int]:
+    """Start one static-file server and return it with its assigned port.
+
+    Reserving the port here means the page, the server and every client all use
+    the same number, and no two tests or suites can collide on a fixed one.
+    """
+    port = reserve_port()
+    (dirpath / "index.html").write_text(page_html(port))
     server = (
         "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
         "class H(BaseHTTPRequestHandler):\n"
@@ -68,33 +77,34 @@ def _start_server(dirpath: Path) -> subprocess.Popen:
         "            self.send_error(404)\n"
         "    def log_message(self, *a):\n"
         "        pass\n"
-        f"HTTPServer(('127.0.0.1', {PORT}), H).serve_forever()\n"
+        f"HTTPServer(('127.0.0.1', {port}), H).serve_forever()\n"
     )
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         [sys.executable, "-c", server],
         cwd=str(dirpath),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    return proc, port
 
 
-def _await_server() -> None:
+def _await_server(port: int) -> None:
     for _ in range(50):
         try:
-            with socket.create_connection(("127.0.0.1", PORT), 0.4):
+            with socket.create_connection(("127.0.0.1", port), 0.4):
                 return
         except OSError:
             time.sleep(0.2)
 
 
-def _make_window(tmp: Path) -> HubWindow:
+def _make_window(tmp: Path, port: int) -> HubWindow:
     st = sm.Store(tmp / "registry.json")
     st.add(
         sm.validate(
             {
                 "name": "Popup Host",
                 "command": f'{sys.executable} -c "pass"',
-                "url": f"http://127.0.0.1:{PORT}/",
+                "url": f"http://127.0.0.1:{port}/",
                 "working_dir": str(tmp),
             }
         )
@@ -106,15 +116,15 @@ def _make_window(tmp: Path) -> HubWindow:
 
 def test_createwindow_returns_a_view(tmp: Path) -> None:
     """Low-level contract: createWindow yields a view that navigates."""
-    srv = _start_server(tmp)
+    srv, port = _start_server(tmp)
     try:
-        _await_server()
+        _await_server(port)
         view = HubWebView()
         popups = []
         view.popup_opened.connect(lambda v: popups.append(v))
         loaded = {"ok": None}
         view.loadFinished.connect(lambda ok: loaded.update(ok=ok))
-        view.setUrl(f"http://127.0.0.1:{PORT}/")
+        view.setUrl(f"http://127.0.0.1:{port}/")
         assert _wait_for(lambda: loaded["ok"] is True, timeout_s=25), "page never loaded"
 
         done = {"ok": None}
@@ -122,12 +132,12 @@ def test_createwindow_returns_a_view(tmp: Path) -> None:
             lambda v: v.loadFinished.connect(lambda ok: done.update(ok=ok))
         )
         view.page().runJavaScript(
-            f'window.open("http://127.0.0.1:{PORT}/via-open/", "_blank")'
+            f'window.open("http://127.0.0.1:{port}/via-open/", "_blank")'
         )
         assert _wait_for(lambda: popups), "window.open produced no view (dropped)"
         first = popups[0]
         assert _wait_for(
-            lambda: first.url().toString() == f"http://127.0.0.1:{PORT}/via-open/"
+            lambda: first.url().toString() == f"http://127.0.0.1:{port}/via-open/"
         ), f"did not navigate: {first.url().toString()!r}"
         _wait_for(lambda: done["ok"] is not None, timeout_s=20)
         assert done["ok"] is True, f"popup page failed to load: {done['ok']}"
@@ -141,10 +151,10 @@ def test_createwindow_returns_a_view(tmp: Path) -> None:
 
 def test_window_open_becomes_a_tab(tmp: Path) -> None:
     """window.open(..., '_blank') adds a tab INSIDE the hub window."""
-    srv = _start_server(tmp)
+    srv, port = _start_server(tmp)
     try:
-        _await_server()
-        win = _make_window(tmp)
+        _await_server(port)
+        win = _make_window(tmp, port)
         try:
             loaded = {"ok": None}
             win.web.loadFinished.connect(lambda ok: loaded.update(ok=ok))
@@ -155,7 +165,7 @@ def test_window_open_becomes_a_tab(tmp: Path) -> None:
             assert base_tabs == 2, f"expected starter + 1 project tab, got {base_tabs}"
 
             win.web.page().runJavaScript(
-                f'window.open("http://127.0.0.1:{PORT}/via-open/", "_blank")'
+                f'window.open("http://127.0.0.1:{port}/via-open/", "_blank")'
             )
             # starter + project tab + the new popup tab
             assert _wait_for(lambda: win.tabs.count() == 3), (
@@ -164,7 +174,7 @@ def test_window_open_becomes_a_tab(tmp: Path) -> None:
 
             new_view = win.tabs.widget(2)
             assert _wait_for(
-                lambda: new_view.url().toString() == f"http://127.0.0.1:{PORT}/via-open/"
+                lambda: new_view.url().toString() == f"http://127.0.0.1:{port}/via-open/"
             ), f"tab did not navigate: {new_view.url().toString()!r}"
             # Selected, and re-parented into the tab widget's internal stack
             # (QTabWidget reparents pages into its own QStackedWidget, so the
@@ -188,10 +198,10 @@ def test_window_open_becomes_a_tab(tmp: Path) -> None:
 
 def test_target_blank_link_and_closing(tmp: Path) -> None:
     """target='_blank' links open tabs; popup tabs close; dashboard tab does not."""
-    srv = _start_server(tmp)
+    srv, port = _start_server(tmp)
     try:
-        _await_server()
-        win = _make_window(tmp)
+        _await_server(port)
+        win = _make_window(tmp, port)
         try:
             loaded = {"ok": None}
             win.web.loadFinished.connect(lambda ok: loaded.update(ok=ok))
@@ -201,7 +211,7 @@ def test_target_blank_link_and_closing(tmp: Path) -> None:
             win.web.page().runJavaScript("document.getElementById('l').click()")
             assert _wait_for(lambda: win.tabs.count() == 3), f"tabs={win.tabs.count()}"
             view = win.tabs.widget(2)
-            _wait_for(lambda: view.url().toString() == f"http://127.0.0.1:{PORT}/via-link/")
+            _wait_for(lambda: view.url().toString() == f"http://127.0.0.1:{port}/via-link/")
 
             # closing the popup tab leaves the project tab intact
             win._close_tab(2)

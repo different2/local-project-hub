@@ -20,12 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer  # noqa: E402
 
-from helpers import temp_project_dir  # noqa: E402
+from helpers import reserve_port, stop_and_release, temp_project_dir  # noqa: E402
 from hub import store as sm  # noqa: E402
 from hub.process_manager import ProjectProcess  # noqa: E402
 from hub.readiness import ReadinessWaiter, tcp_open  # noqa: E402
 
-PORT = 8799
+# No hardcoded port: each test reserves an ephemeral one from the OS via
+# helpers.reserve_port(). The fixed 8799 this used to carry collided whenever
+# two suites ran at once, or when a previous run's child still held it, which
+# produced failures reading as logic bugs ("readiness never fired") rather than
+# as the port contention they were.
 SERVER_SRC = """
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -39,8 +43,10 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         sys.stdout.write("serving\\n"); sys.stdout.flush()
 
-HTTPServer(("127.0.0.1", %d), H).serve_forever()
-""" % PORT
+# The port always comes from argv; there is no default to fall back to, so a
+# missing argument fails loudly instead of silently binding somewhere else.
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+"""
 
 
 def _spin(ms=200) -> None:
@@ -50,14 +56,15 @@ def _spin(ms=200) -> None:
 
 
 def test_process_lifecycle(tmp: Path) -> None:
+    port = reserve_port()
     server_py = tmp / "fake_project_server.py"
     server_py.write_text(SERVER_SRC)
 
     rec = sm.validate(
         {
             "name": "Fake",
-            "command": f"{sys.executable} {server_py}",
-            "url": f"http://127.0.0.1:{PORT}/",
+            "command": f"{sys.executable} {server_py} {port}",
+            "url": f"http://127.0.0.1:{port}/",
             "working_dir": str(tmp),
             "env": {},
         }
@@ -89,7 +96,7 @@ def test_process_lifecycle(tmp: Path) -> None:
             break
         _spin(100)
     assert got["ready"], "readiness never fired"    # TCP check
-    assert tcp_open("127.0.0.1", PORT)
+    assert tcp_open("127.0.0.1", port)
 
     # log capture
     assert any("serving" in t for t in logs), logs
@@ -103,20 +110,21 @@ def test_process_lifecycle(tmp: Path) -> None:
 
     # port freed
     for _ in range(30):
-        if not tcp_open("127.0.0.1", PORT):
+        if not tcp_open("127.0.0.1", port):
             break
         _spin(100)
-    assert not tcp_open("127.0.0.1", PORT), "port still open after stop"
+    assert not tcp_open("127.0.0.1", port), "port still open after stop"
 
 
 def test_restart(tmp: Path) -> None:
     server_py = tmp / "restart_server.py"
-    server_py.write_text(SERVER_SRC.replace(str(PORT), str(PORT + 1)))
+    port = reserve_port()
+    server_py.write_text(SERVER_SRC)
     rec = sm.validate(
         {
             "name": "Restartable",
-            "command": f"{sys.executable} {server_py}",
-            "url": f"http://127.0.0.1:{PORT + 1}/",
+            "command": f"{sys.executable} {server_py} {port}",
+            "url": f"http://127.0.0.1:{port}/",
             "working_dir": str(tmp),
         }
     )

@@ -55,10 +55,44 @@ def assert_port_free(port: int, what: str = "") -> None:
 
 
 def free_port() -> int:
-    """A free port chosen by the OS, for tests that do not need a fixed one."""
+    """A free port chosen by the OS, for tests that do not need a fixed one.
+
+    Prefer reserve_port() when a server is about to bind the number: this closes
+    the socket before returning, so another process can claim the port in the
+    gap. Kept for callers that only need a number to talk about.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def reserve_port() -> int:
+    """An OS-assigned ephemeral port for a test server, with nothing holding it.
+
+    Replaces the hardcoded 87xx/88xx numbers this suite used to carry. Those
+    collided whenever two suites ran at once, or when a previous run's child was
+    still holding one -- which produced failures that read as logic bugs
+    ("readiness never fired", "a foreign holder was not reported") rather than as
+    the port contention they were.
+
+    The number is obtained from the OS, which guarantees no other process holds
+    it, and the socket is closed before returning so the caller's server can
+    bind. That leaves a small window where another process could claim the port;
+    the OS chooses from the ephemeral range and nothing else in this suite is
+    racing for one, so the window is theoretical rather than real.
+
+    An earlier version held the socket open for the caller's whole block, on the
+    theory that closing it first opened a race. That is backwards: the caller's
+    own server then could not bind at all, because the parent still owned the
+    port. Holding is only safe if the child sets SO_REUSEADDR, and relying on
+    that silently is worse than the race it prevents.
+
+    Usage:
+
+        port = reserve_port()
+        ... start a server on `port`, then assert against it ...
+    """
+    return free_port()
 
 
 def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:
