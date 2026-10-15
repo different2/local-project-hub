@@ -187,6 +187,22 @@ class ProjectProcess(QObject):
     def start(self) -> None:
         if self.proc is not None and self.proc.state() != QProcess.NotRunning:
             return  # already running/starting
+        # Refuse to start when a foreign process already holds this project's
+        # port. This used to live only in HubWindow._launch(), so any other path
+        # into start() -- tests, and any future headless use -- launched straight
+        # into an occupied port. The child then died with "Address already in
+        # use", or worse kept running and served the OTHER process's page as if
+        # it were this project's dashboard. Checking here means every caller is
+        # covered, and port_conflict() returns immediately when the port is free.
+        conflict = self.port_conflict()
+        if conflict:
+            self.port_conflict_from_output.emit(0)
+            self.state_changed.emit("error")
+            self.output.emit(
+                f"[hub] port {conflict['port']} is already in use by "
+                f"{conflict.get('command') or 'another process'}; not starting.\n"
+            )
+            return
         try:
             argv = split_command(self.rec["command"])
         except ValueError as e:
