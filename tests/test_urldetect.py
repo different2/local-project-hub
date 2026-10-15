@@ -1160,7 +1160,7 @@ def test_netstat_parser_finds_only_listeners() -> None:
 
     Only LISTENING rows count. A port also appears on outbound connections whose
     ephemeral local port can coincide with it, and a listener's own accepted
-    connections show the same port on both sides.
+    connections show that port on both sides.
     """
     sample = """
 Active Connections
@@ -1178,13 +1178,20 @@ Active Connections
         stdout = sample
 
     real_run = subprocess.run
+    real_flag = urldetect.IS_WINDOWS
     subprocess.run = lambda *a, **k: _FakeResult()  # type: ignore[assignment]
+    urldetect.IS_WINDOWS = True  # the branch a Windows runner actually takes
     try:
+        rows = urldetect._netstat_listening_rows()
         listeners = urldetect._port_owners_netstat(8787)
         other = urldetect._port_owners_netstat(5000)
         absent = urldetect._port_owners_netstat(9999)
+        by_pid = urldetect.listening_ports(12345)
+        established_only = urldetect.listening_ports(22222)
+        every = urldetect.listening_ports_all()
     finally:
         subprocess.run = real_run  # type: ignore[assignment]
+        urldetect.IS_WINDOWS = real_flag
 
     # The listener's PID only: the ESTABLISHED rows (client 22222, and the
     # server side of its own accepted connection) and the UDP row are not
@@ -1192,6 +1199,12 @@ Active Connections
     assert listeners == {12345}, listeners
     assert other == {33333}, other
     assert absent == set(), absent
+    assert 12345 in {r[1] for r in rows}, rows
+    # IPv4 and IPv6 rows for the same listener are one port, not two.
+    assert by_pid == [8787], by_pid
+    # A PID with only outbound connections holds nothing.
+    assert established_only == [], established_only
+    assert every == [8787, 5000], every
 
 
 if __name__ == "__main__":

@@ -115,12 +115,27 @@ def _is_plausible(url: str) -> bool:
 def listening_ports(pid: int) -> list[int]:
     """TCP ports a process is listening on, per platform.
 
-    Uses `lsof` because it ships with macOS and is available on most Linux
-    boxes, avoiding a psutil dependency. Returns [] if it cannot be determined
-    — callers must treat detection as best-effort, never as a guarantee.
+    lsof ships with macOS and is on most Linux boxes, so it is used there; on
+    Windows it does not exist at all, and netstat -ano is the equivalent. Using
+    one command that only exists on half the platforms made this return [] on
+    Windows for every caller — including the tests that start a real server and
+    assert it shows up.
+
+    Returns [] when it cannot be determined — callers must treat detection as
+    best-effort, never as a guarantee.
     """
     if not pid:
         return []
+    if IS_WINDOWS:
+        ports = []
+        for local, owner in _netstat_listening_rows():
+            if owner != pid:
+                continue
+            port = _netstat_local_port(local)
+            if port and port not in ports and port not in _UNLIKELY_PORTS:
+                ports.append(port)
+        return ports
+
     import subprocess
 
     cmd = ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", str(pid)]
@@ -146,12 +161,21 @@ def listening_ports(pid: int) -> list[int]:
 
 
 def listening_ports_all() -> list[int]:
-    """Every TCP port something is listening on, via lsof.
+    """Every TCP port something is listening on, per platform.
 
-    Used to find a stray copy of a project when nothing in the registry names
-    a port. Returns [] when it cannot be determined — callers must treat this
-    as best-effort.
+    lsof on macOS/Linux, netstat -ano on Windows, where lsof does not exist.
+    Used to find a stray copy of a project when nothing in the registry names a
+    port. Returns [] when it cannot be determined — callers must treat this as
+    best-effort.
     """
+    if IS_WINDOWS:
+        ports: list[int] = []
+        for local, _owner in _netstat_listening_rows():
+            port = _netstat_local_port(local)
+            if port and port not in ports and port not in _UNLIKELY_PORTS:
+                ports.append(port)
+        return ports
+
     import subprocess
 
     try:
@@ -320,16 +344,22 @@ def port_owners(port: int) -> set[int]:
     return pids
 
 
-def _port_owners_netstat(port: int) -> set[int]:
-    """PIDs listening on the port, via `netstat -ano` (Windows).
+def _netstat_listening_rows() -> list[tuple[str, int]]:
+    """(local_address, owning_pid) for every LISTENING TCP row, via netstat.
 
-    netstat prints one row per local endpoint, with the owning PID last:
+    netstat -ano is present on every Windows machine and is the equivalent of
+    lsof, which is not. Without it the listening-port helpers all return [] on
+    Windows, and every caller then concludes nothing is listening -- which turns
+    a detected port conflict into a silent one.
 
-        TCP    0.0.0.0:8787    0.0.0.0:0    LISTENING    12345
+    One parse serves all three callers (find the holder, the ports for one PID,
+    every listening port), because running netstat per call would repeat the same
+    table scan several times per start.
 
-    The local column is `host:port`, and can be IPv6 (`[::]:8787`), so the port
-    is matched after the final colon. Only LISTENING rows count: a port is also
-    used for outbound connections, whose ephemeral local port can coincide.
+    Local addresses look like `0.0.0.0:8787` or `[::]:8787`; the port is after
+    the final colon so both forms parse. Only LISTENING rows are wanted: TCP also
+    shows outbound connections whose ephemeral local port can coincide with a
+    server's.
     """
     import subprocess
 
@@ -341,8 +371,8 @@ def _port_owners_netstat(port: int) -> set[int]:
             timeout=8,
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return set()
-    pids = set()
+        return []
+    rows: list[tuple[str, int]] = []
     for line in out.splitlines():
         if "LISTENING" not in line.upper():
             continue
@@ -353,14 +383,33 @@ def _port_owners_netstat(port: int) -> set[int]:
         if ":" not in local:
             continue
         try:
-            if int(local.rsplit(":", 1)[1]) != port:
-                continue
             pid = int(parts[-1])
         except ValueError:
             continue
-        if pid:
-            pids.add(pid)
-    return pids
+        rows.append((local, pid))
+    return rows
+
+
+def _netstat_local_port(local: str) -> int | None:
+    """The port in a netstat local address, handling `[::]:8787` and `0.0.0.0:8787`."""
+    if ":" not in local:
+        return None
+    tail = local.rsplit(":", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def _port_owners_netstat(port: int) -> set[int]:
+    """PIDs listening on the port, via `netstat -ano` (Windows).
+
+    netstat prints one row per local endpoint, with the owning PID last:
+
+        TCP    0.0.0.0:8787    0.0.0.0:0    LISTENING    12345
+
+    The local column is `host:port`, and can be IPv6 (`[::]:8787`), so the port
+    is matched after the final colon. Only LISTENING rows count: a port is also
+    used for outbound connections, whose ephemeral local port can coincide.
+    """
+    return {pid for local, pid in _netstat_listening_rows() if _netstat_local_port(local) == port}
 
 
 if __name__ == "__main__":
