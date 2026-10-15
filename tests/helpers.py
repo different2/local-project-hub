@@ -17,6 +17,27 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TESTS_DIR.parent
 
+# The suites append the project root to sys.path when they import hub.*; doing
+# it here lets these helpers check ports without every test repeating the dance.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from hub import urldetect  # noqa: E402
+
+
+def _spin_qt(ms: float) -> None:
+    """Pump the Qt event loop for `ms`, letting QProcess signals land.
+
+    QProcess only advances out of "starting" while the event loop runs, so any
+    helper that polls a QProcess-derived value must spin one rather than sleep.
+    Mirrors the suites' own _spin()/_wait_for().
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    QTimer.singleShot(int(ms), loop.quit)
+    loop.exec()
+
 # Windows keeps a just-exited child's CWD open for a moment -- the child holds
 # its working directory for as long as it lives, and the OS releases it slightly
 # after the process is reaped. Deleting the temp dir in that window raises
@@ -93,6 +114,60 @@ def reserve_port() -> int:
         ... start a server on `port`, then assert against it ...
     """
     return free_port()
+
+
+def _wait_for(pred, timeout_s: float = 20.0) -> bool:
+    """Poll a predicate until it holds, pumping the Qt event loop each tick.
+
+    The spin matters: QProcess only advances out of "starting" while the event
+    loop runs, so a plain time.sleep() would wait forever on a state that can
+    never update. This mirrors the suites' own _spin()/_wait_for() so a shared
+    helper behaves identically to an inline one.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if pred():
+            return True
+        _spin_qt(10)
+    return pred()
+
+
+def wait_for_port_bound(port: int, timeout_s: float = 20.0) -> bool:
+    """Block until something is actually listening on the port.
+
+    A test that starts a server and then immediately probes the port cannot rely
+    on ProjectProcess.state == "running": that state means the QProcess spawned,
+    not that the server bound. Measured gap on macOS is 30-50ms (spawn at ~10ms,
+    bound at ~50ms) because the child still has to import http.server and bind
+    before it listens -- and a cold Windows runner is much slower, so the gap is
+    wide enough there that tests probing the port inside it see no listener and
+    fail.
+
+    A readiness poll is not a sleep: it returns the instant the port answers, so
+    the common case costs nothing and the slow case simply waits as long as it
+    needs to.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if urldetect.port_in_use(port):
+            return True
+        time.sleep(0.02)
+    return urldetect.port_in_use(port)
+
+
+def start_holder(proc, port: int, timeout_s: float = 25.0) -> bool:
+    """Start a ProjectProcess and return True once it is genuinely listening.
+
+    Pairs "the process spawned" (state == "running") with "the server bound"
+    (the port answers), which are different moments and not close together. Every
+    test that then probes the port -- for a conflict, a holder, or a listening
+    port -- needs both, or it races the child's startup.
+    """
+    proc.start()
+    started = _wait_for(lambda: proc.state == "running", timeout_s=timeout_s)
+    if not started:
+        return False
+    return wait_for_port_bound(port, timeout_s=timeout_s)
 
 
 def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:

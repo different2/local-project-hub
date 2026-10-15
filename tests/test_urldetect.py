@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QMessageBox,
 )
 
-from helpers import reserve_port, stop_and_release, temp_project_dir  # noqa: E402
+from helpers import reserve_port, start_holder, stop_and_release, temp_project_dir  # noqa: E402
 from hub import store as sm, urldetect  # noqa: E402
 from hub.process_manager import ProjectProcess, _detected_suppress_flag  # noqa: E402
 from hub.window import HubWindow  # noqa: E402
@@ -197,10 +197,9 @@ def test_port_conflict_refuses_to_start(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
+    started = start_holder(holder, port)
     holder_out = []
     holder.output.connect(holder_out.append)
-    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
     assert started, (
         f"test server did not start (state={holder.state}); "
         f"port={port} in_use={urldetect.port_in_use(port)} "
@@ -251,8 +250,7 @@ def test_port_conflict_is_reported_with_command(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
-    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    started = start_holder(holder, port)
     assert started, f"test server did not start (state={holder.state})"
     try:
         other = ProjectProcess(
@@ -326,8 +324,7 @@ def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
-    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    started = start_holder(holder, port)
     assert started, f"test server did not start (state={holder.state})"
     try:
         # no url at all, and the port is only implied by the command
@@ -581,8 +578,7 @@ def test_listening_ports_all_actually_finds_ports(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
-    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    started = start_holder(holder, port)
     assert started, f"test server did not start (state={holder.state})"
     try:
         found = urldetect.listening_ports_all()
@@ -625,8 +621,7 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
-    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    started = start_holder(holder, port)
     assert started, f"test server did not start (state={holder.state})"
     try:
         st = sm.Store(tmp / "registry.json")
@@ -693,8 +688,7 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
-    started = _wait_for(lambda: holder.state == "running", timeout_s=25)
+    started = start_holder(holder, port)
     assert started, f"test server did not start (state={holder.state})"
     try:
         st = sm.Store(tmp / "registry.json")
@@ -888,8 +882,7 @@ def test_hardcoded_port_conflict_is_detected_without_a_url(tmp: Path) -> None:
             }
         )
     )
-    holder.start()
-    assert _wait_for(lambda: holder.state == "running", timeout_s=25), holder.state
+    assert start_holder(holder, port), holder.state
     try:
         # No URL at all, and detection finds no port either — the port is only
         # readable from the script's source.
