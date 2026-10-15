@@ -22,13 +22,15 @@ jobs:
   test:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # A macOS job once ran 61 minutes as an orphaned runner that never reported
-    # back, consuming the concurrency that blocked every other platform. The cap
-    # has to stay generous enough for the real work, though: test_urldetect alone
-    # takes ~6 minutes because each GUI test runs in its own QtWebEngine process,
-    # and all 14 suites together ran past 20 minutes on every platform -- which
-    # killed the run before a single line of output was written.
-    timeout-minutes: 35
+    # The cap has to cover the real work, and that is dominated by one suite:
+    # test_urldetect takes ~6 minutes because 9 of its tests create a real
+    # QtWebEngine window and each is isolated into its own process (running the
+    # file in a single process segfaults at Qt shutdown with zero tests
+    # reported -- that is what the isolation is for, so it cannot simply be
+    # dropped). 14 suites together land near 30 minutes on this Mac and more on
+    # a CI runner, so a 35-minute cap killed the job before any output was
+    # written, twice.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       # max-parallel: 1 -- the suites bind fixed ports on 127.0.0.1, so two
