@@ -336,7 +336,10 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
         )
         if code != 0 and not crashed_after_pass:
             worst = code
-            chunks.append("\n".join(out.strip().splitlines()[-8:]))
+            # 8 lines is too few for a test whose failure message is the only
+            # useful evidence, and the Windows conflict failures needed the whole
+            # message to be diagnosable from the artifact.
+            chunks.append("\n".join(out.strip().splitlines()[-25:]))
     return worst, passed, failed, "\n".join(chunks)
 
 
@@ -356,18 +359,24 @@ def report_failure(name: str, out: str) -> None:
             "           fix: ./.hubenv/bin/pip install PySide6\n"
             "           (or delete .hubenv and recreate it)\n"
         )
-    tail = "\n".join(out.strip().splitlines()[-12:])
-    emit(f"           -- last output --\n{tail}\n")
-    # A 12-line tail is not enough when the suite is long: the tests sort
-    # alphabetically, so a failure in an early test falls outside the window and
-    # the summary then reports "12 passed, 1 failed" with nothing in the output
-    # that explains the 1. Always show the failure lines themselves.
-    bad = [l for l in out.splitlines() if l.startswith(("FAIL ", "ERROR "))]
-    if bad and not any(l.startswith(("FAIL ", "ERROR ")) for l in tail.splitlines()):
-        emit("           -- failures not in the tail above --")
-        for line in bad[:20]:
+    # Keep every failure line, not just the ones that survived into the tail.
+    # The isolated path attributes a single test's FAIL message to its
+    # neighbours in the printed order, and a tail of 12 lines can drop the only
+    # line that names the actual error, leaving "rc=1 (0 passed, 1 failed)" and
+    # nothing to diagnose from. Full failure lines plus a generous tail make the
+    # artifact self-explanatory without a rerun.
+    bad = [
+        l
+        for l in out.splitlines()
+        if l.startswith(("FAIL ", "ERROR ", "Traceback")) or "AssertionError" in l
+    ]
+    if bad:
+        emit("           -- failures --")
+        for line in bad[:40]:
             emit(f"           {line}")
         emit("")
+    tail = "\n".join(out.strip().splitlines()[-25:])
+    emit(f"           -- last output --\n{tail}\n")
 
 
 def report_suite(name: str, code: int, passed: int, failed: int, out: str) -> int:
