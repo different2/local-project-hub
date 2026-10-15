@@ -31,6 +31,14 @@ jobs:
     timeout-minutes: 35
     strategy:
       fail-fast: false
+      # max-parallel: 1 -- the suites bind fixed ports on 127.0.0.1, so two
+      # platforms could not collide even if they shared a machine (they do not:
+      # each matrix job gets its own runner). Serialising is about runner
+      # ALLOCATION, not isolation: parallel GUI jobs contend for the account's
+      # capacity, and a platform that needs a slot can sit queued behind one
+      # that is only slow. One at a time gets the scarce runner to the platform
+      # that needs it.
+      max-parallel: 1
       matrix:
         # Pinned to 24.04: the ubuntu-latest label moves to Ubuntu 26, which
         # this project has not been tested against.

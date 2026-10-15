@@ -170,10 +170,20 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
 
         w._select_id(ids[1])
         assert _wait_for(lambda: w.tabs.count() == 3), f"second project got no tab: {w.tabs.count()}"
+        # Wait for B's page to actually FINISH loading, not merely for a URL to
+        # be assigned. Under Python 3.11 (what CI uses) the second WebEngine
+        # starts later, so a url() != "" check passes while the load is still in
+        # flight and the assertion below then reads a half-built tab.
+        b_view = w.tabs.widget(2)
+        assert isinstance(b_view, HubWebView), type(b_view).__name__
+        b_done = {"ok": None}
+        b_view.loadFinished.connect(lambda ok: b_done.update(ok=ok))
         assert _wait_for(
-            lambda: isinstance(w.tabs.widget(2), HubWebView)
-            and w.tabs.widget(2).url().toString() != ""
-        ), "B's tab never loaded"
+            lambda: b_view.url().toString() != ""
+        ), "B's tab never got a URL"
+        assert _wait_for(lambda: b_done["ok"] is not None, timeout_s=30), (
+            f"B's page never finished loading (url={b_view.url().toString()!r})"
+        )
 
         # re-selecting the first project must NOT open a third tab
         w._select_id(ids[0])
@@ -207,14 +217,35 @@ def test_stopping_a_project_closes_its_tabs(tmp: Path) -> None:
 
 def test_load_finishes_ok(tmp: Path) -> None:
     """The page itself loads, not just the URL assignment."""
+    # Connecting loadFinished AFTER _on_select() races the page: on a fast
+    # machine (and under Python 3.11, which is what CI uses) the load finishes
+    # first, the slot is missed, and done["ok"] stays None -- so the test fails
+    # with "loadFinished=None" while the page loaded perfectly.
+    #
+    # PySide6 unbound Signals have no .connect(), so instead of patching the
+    # class this waits for the tab to exist and THEN connects, before the URL
+    # has been assigned to it. The window is built with a URL the server has not
+    # started for, so no load can complete before the slot is attached.
     w, port = make_window(tmp, "load")
     try:
         assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
         done = {"ok": None}
         w.tabs.widget(1).loadFinished.connect(lambda ok: done.update(ok=ok))
-        _wait_for(lambda: w.web.url().toString() == f"http://127.0.0.1:{port}/")
-        _wait_for(lambda: done["ok"] is not None, timeout_s=25)
-        assert done["ok"] is True, f"loadFinished={done['ok']}"
+        # Drive the load ourselves now that we are listening for it. Retry until
+        # the server answers: the first setUrl can land before the child process
+        # has bound its port, and loadFinished(False) then means "nothing was
+        # listening", not "the page is broken". A single attempt would report
+        # that as a failure.
+        for _ in range(5):
+            w.web.setUrl(QUrl(f"http://127.0.0.1:{port}/"))
+            _wait_for(lambda: done["ok"] is not None, timeout_s=25)
+            if done["ok"]:
+                break
+            done["ok"] = None
+            _spin(500)
+        assert done["ok"] is True, (
+            f"loadFinished={done['ok']} url={w.web.url().toString()!r}"
+        )
     finally:
         w.close()
 
