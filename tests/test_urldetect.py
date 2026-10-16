@@ -592,6 +592,30 @@ def test_listening_ports_all_actually_finds_ports(tmp: Path) -> None:
         stop_and_release(holder, srv_py)
 
 
+def _conflict_debug(w, pid, holder_pid, port) -> str:
+    """Why the port-conflict offer never appeared, for assertion messages.
+
+    Each field names one link in the chain from "child died" to "offer shown",
+    so a failing run says exactly where it broke instead of forcing another
+    blind guess. Read-only: it never changes what the test asserts.
+    """
+    parts = [
+        f"port={port} in_use={urldetect.port_in_use(port)}",
+        f"owners={urldetect.port_owners(port)}",
+        f"listening={urldetect.listening_ports_all()[:8]}",
+        f"holder_cmd={urldetect.process_command(holder_pid)!r}",
+    ]
+    proc = w.procs.get(pid)
+    if proc is None:
+        parts.append("proc=<none in w.procs>")
+    else:
+        history = "".join(proc.history)
+        parts.append(f"state={proc.state}")
+        parts.append(f"signal={getattr(proc, '_dbg_conflict_signal', None)!r}")
+        parts.append(f"history_tail={history[-700:]!r}")
+    return " ".join(parts)
+
+
 def test_bare_command_conflict_is_offered(tmp: Path) -> None:
     """A project with NO url and NO port in its command still gets the dialog.
 
@@ -641,6 +665,14 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
         offered = []
         w._offer_to_free_port = lambda r, p, c: offered.append(c)
         holder_pid = holder.proc.processId() if holder.proc else None
+        # Record what the failing project actually reported, so the assertion
+        # below can say which link broke instead of just "no offer".
+        _p = w.procs.get(rec["id"])
+        if _p is not None:
+            _p._dbg_conflict_signal = None
+            _p.port_conflict_from_output.connect(
+                lambda value, _proc=_p: setattr(_proc, "_dbg_conflict_signal", value)
+            )
         try:
             w.active_id = rec["id"]
             w._on_select()
@@ -648,11 +680,7 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
             assert ok, (
                 "a bare-command project whose port was taken got no conflict "
                 "offer (it just died with 'Address already in use'); "
-                f"port={port} in_use={urldetect.port_in_use(port)} "
-                f"owners={urldetect.port_owners(port)} "
-                f"listening={urldetect.listening_ports_all()[:8]} "
-                f"script={_entry_script(rec)!r} "
-                f"holder_cmd={urldetect.process_command(holder_pid)!r}"
+                f"{_conflict_debug(w, rec['id'], holder_pid, port)}"
             )
             assert offered[0]["holders"], offered[0]
             assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
@@ -712,6 +740,12 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
         offered = []
         w._offer_to_free_port = lambda rec, proc, conflict: offered.append(conflict)
         holder_pid = holder.proc.processId() if holder.proc else None
+        _p = w.procs.get(no_url["id"])
+        if _p is not None:
+            _p._dbg_conflict_signal = None
+            _p.port_conflict_from_output.connect(
+                lambda value, _proc=_p: setattr(_proc, "_dbg_conflict_signal", value)
+            )
         try:
             w.active_id = no_url["id"]
             w._on_select()
@@ -719,11 +753,7 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
             assert ok, (
                 "a no-URL project whose port was taken got no conflict offer — "
                 "it just died with 'Address already in use' and nothing was said; "
-                f"port={port} in_use={urldetect.port_in_use(port)} "
-                f"owners={urldetect.port_owners(port)} "
-                f"listening={urldetect.listening_ports_all()[:8]} "
-                f"script={_entry_script(no_url)!r} "
-                f"holder_cmd={urldetect.process_command(holder_pid)!r}"
+                f"{_conflict_debug(w, no_url['id'], holder_pid, port)}"
             )
             assert offered[0]["holders"], offered[0]
             assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
