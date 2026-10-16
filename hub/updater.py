@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -106,10 +107,9 @@ def parse_release(payload: dict) -> Release:
                 name=a.get("name", ""),
                 url=a.get("browser_download_url") or a.get("url", ""),
                 size=a.get("size", 0) or 0,
+                sha256=_sha256_from_asset(a),
             )
         )
-    # A checksums file (SHA256SUMS or similar) is common; attach any digests.
-    _attach_checksums(assets, payload)
     return Release(
         version=version,
         notes=(payload.get("body") or "").strip(),
@@ -118,12 +118,27 @@ def parse_release(payload: dict) -> Release:
     )
 
 
-def _attach_checksums(assets: list[Asset], payload: dict) -> None:
-    """If the release lists a digest next to an asset, keep it."""
-    for a in assets:
-        digest = payload.get("_digests", {}).get(a.name) if isinstance(payload.get("_digests"), dict) else None
-        if digest:
-            a.sha256 = digest
+def _sha256_from_asset(a: dict) -> str:
+    """The sha256 for a release asset, or "" when the API supplied none.
+
+    GitHub reports the digest of an uploaded asset under `digest` as
+    `"sha256:<64 hex chars>"`. This is the only checksum a release carries
+    unless a separate SHA256SUMS file is published alongside the installers.
+
+    Reading it is what makes the integrity check real. `_download_update` only
+    verifies when `asset.sha256` is non-empty, so a release with no digest and
+    no SHA256SUMS file meant EVERY update installed an unverified download
+    while the code looked like it was checking. The previous implementation
+    read a `_digests` key that the GitHub API never returns, so the check could
+    not have fired even once.
+    """
+    digest = str(a.get("digest") or "").strip()
+    if not digest.lower().startswith("sha256:"):
+        return ""
+    hexdigest = digest.split(":", 1)[1].strip()
+    if re.fullmatch(r"[0-9a-fA-F]{64}", hexdigest):
+        return hexdigest.lower()
+    return ""
 
 
 def fetch_latest_release(timeout: float = 12.0) -> Release:

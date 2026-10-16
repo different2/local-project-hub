@@ -68,6 +68,65 @@ def test_summarize_release_is_concise():
     assert len(text) < 600, f"summary too long: {len(text)}"
 
 
+def test_asset_digest_is_read_from_the_release_payload():
+    """The update's integrity check must actually run, not silently skip.
+
+    `_download_update` verifies the download only when `asset.sha256` is set,
+    so if the digest is never read from the API the app installs an unverified
+    download while looking like it checked. GitHub reports it per asset as
+    `digest: "sha256:<64 hex>"` — the previous implementation read a `_digests`
+    key the API never sends, which made the check unreachable. Real digests
+    from the v0.3.8 release are used so this stays the true API shape.
+    """
+    payload = {
+        "tag_name": "v0.3.8",
+        "assets": [
+            {
+                "name": "Local.Project.Hub-0.3.8.dmg",
+                "browser_download_url": "https://example.com/a.dmg",
+                "size": 262231688,
+                "digest": "sha256:e53ef349066681fb7c9f8af078a1820844867b433e66d0bcdcf7da49a26c15bc",
+            },
+            {
+                "name": "Local.Project.Hub-0.3.8.msi",
+                "browser_download_url": "https://example.com/b.msi",
+                "size": 108675375,
+                "digest": "sha256:a5181244a81ff4411813fad9c74774fcabae250011384774d8b10b611b8dbea7",
+            },
+        ],
+    }
+    rel = updater.parse_release(payload)
+    digests = {a.name: a.sha256 for a in rel.assets}
+    for name, got in digests.items():
+        assert len(got) == 64, f"{name} has no usable digest: {got!r}"
+        int(got, 16)  # must be hex
+    assert digests["Local.Project.Hub-0.3.8.dmg"] == (
+        "e53ef349066681fb7c9f8af078a1820844867b433e66d0bcdcf7da49a26c15bc"
+    )
+
+
+def test_absent_or_junk_digest_means_no_verification_not_a_crash():
+    """Missing or malformed digests are tolerated: the check is skipped.
+
+    A release published before digests existed, or one where a future API
+    changes the field, must not break updating — but it also must not let a
+    malformed string be treated as a checksum that then fails every download.
+    """
+    for junk in (None, "", "md5:abc", "sha256:not-hex", "sha256:" + "a" * 63):
+        payload = {
+            "tag_name": "v9.9.9",
+            "assets": [
+                {
+                    "name": f"thing-{junk}.dmg",
+                    "browser_download_url": "https://example.com/a.dmg",
+                    "digest": junk,
+                }
+            ],
+        }
+        asset = updater.parse_release(payload).assets[0]
+        assert asset.sha256 == "", f"{junk!r} should not be treated as a checksum"
+
+
 def test_sha256_verification():
     import hashlib
 

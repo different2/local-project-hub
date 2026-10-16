@@ -145,6 +145,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Check the tag matches the app version
+        # Runs before the build so a forgotten version bump fails in seconds
+        # instead of after ten minutes of packaging. Only on tags: a manual
+        # dispatch has a branch name here, not a version.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/check_tag_version.py "${GITHUB_REF_NAME}"
       - name: Install Briefcase and dependencies
         run: |
           python -m pip install --upgrade pip briefcase
@@ -185,6 +191,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/check_tag_version.py "${GITHUB_REF_NAME}"
       - name: Install Briefcase and dependencies
         run: |
           python -m pip install --upgrade pip briefcase
