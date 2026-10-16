@@ -337,7 +337,11 @@ class HubWindow(QMainWindow):
                     "Install the update",
                     "The disk image has been opened.\n\n"
                     "Drag Local Project Hub over your existing copy to replace it, "
-                    "then reopen it. Your projects and settings are untouched.",
+                    "then reopen it. Your projects and settings are untouched.\n\n"
+                    "If macOS refuses to open the new copy — \"Apple cannot check "
+                    "it for malicious software\" — Control-click the app and choose "
+                    "Open once to allow it. This build is not notarised, so macOS "
+                    "asks the first time it sees a new copy.",
                 )
             elif IS_WINDOWS:
                 # .msi/.exe installers elevate themselves when needed.
