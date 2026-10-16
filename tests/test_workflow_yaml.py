@@ -104,6 +104,46 @@ def test_every_job_has_runnable_steps() -> None:
             )
 
 
+def test_manual_dispatch_builds_but_never_publishes() -> None:
+    """A manual run may exercise packaging, but must never cut a release.
+
+    The build jobs are tag-gated, which made them unreachable until a release
+    was actually being cut — that is how a `--msi` typo sat in the workflow
+    unnoticed: nothing could run the command to find out. They now also accept
+    `workflow_dispatch`, so packaging changes can be tested on demand.
+
+    The safety half matters more than the convenience half. `publish` creates
+    the GitHub release and attaches installers; if a dispatch could reach it, a
+    stray click would publish a release from whatever the branch happened to
+    contain. It must stay tag-gated, and this test is what stops a future edit
+    from quietly widening it.
+    """
+    import yaml
+
+    d = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    jobs = d["jobs"]
+
+    def condition(name):
+        return str(jobs[name].get("if") or "")
+
+    for name in ("build-macos", "build-windows"):
+        assert "workflow_dispatch" in condition(name), (
+            f"{name!r} cannot be run on demand, so a packaging change is still "
+            "only testable by cutting a release"
+        )
+        assert "refs/tags/v" in condition(name), (
+            f"{name!r} must still build on a version tag"
+        )
+
+    assert "workflow_dispatch" not in condition("publish"), (
+        "publish must never run on a manual dispatch — that would let a stray "
+        "click create a release; it is tag-gated on purpose"
+    )
+    assert "refs/tags/v" in condition("publish"), (
+        "publish must run on a version tag"
+    )
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):

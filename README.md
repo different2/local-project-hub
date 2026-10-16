@@ -74,6 +74,18 @@ git tag v0.2.0 && git push origin v0.2.0
 The tagged release builds the macOS `.dmg` and Windows `.msi` in parallel and
 attaches them to the release, which is also what the in-app updater checks.
 
+To test packaging **without** cutting a release, run the workflow by hand:
+
+```bash
+gh workflow run CI --ref main
+```
+
+Both platform builds run and upload their installers as downloadable artifacts.
+Nothing is published: only a `v*` tag creates a release, so a manual run can
+never ship anything. This exists because the build jobs were previously
+reachable only via a tag, which meant a broken packaging change could not be
+discovered except by spending a release on it.
+
 To build locally on macOS:
 
 ```bash

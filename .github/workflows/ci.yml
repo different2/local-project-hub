@@ -130,10 +130,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The two build jobs run on a version tag OR on a manual dispatch. Dispatch
+  # exists because these jobs are otherwise unreachable until a release is cut,
+  # so a broken packaging change could only be discovered by spending a tag on
+  # it — which is exactly how the `--msi` and `--dmg` typos survived unnoticed.
+  # A dispatch run builds and uploads artifacts and NEVER publishes: `publish`
+  # below stays tag-gated, so a manual click cannot cut a release.
   build-macos:
     name: Build macOS installer
     runs-on: macos-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -173,7 +179,7 @@ jobs:
   build-windows:
     name: Build Windows installer
     runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -210,6 +216,11 @@ jobs:
       # shipping a release one platform cannot update from.
       - build-macos
       - build-windows
+    # TAGS ONLY — never add `|| github.event_name == 'workflow_dispatch'` here.
+    # The build jobs above accept a manual dispatch so packaging can be tested
+    # without cutting a release; this job is what actually creates the release
+    # and attaches installers, so a manual run must not be able to do that.
+    # tests/test_workflow_yaml.py asserts this stays true.
     if: startsWith(github.ref, 'refs/tags/v')
     environment: release
     # The workflow sets `contents: read` for everything, which is right for the
