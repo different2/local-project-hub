@@ -1,5 +1,5 @@
 [tool.briefcase]
-project_name = "Local Project Hub"
+project_name = "local-project-hub"
 bundle = "local.projecthub"
 version = "0.3.8"
 url = "https://github.com/different2/local-project-hub"
