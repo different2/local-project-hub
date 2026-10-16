@@ -153,7 +153,11 @@ jobs:
           python -m pip install --upgrade pip briefcase
           python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
       - name: Build the MSI installer
-        run: briefcase package windows --msi
+        # `--msi` was never a valid flag — this job is tag-gated and the repo had
+        # no tags until v0.3.7, so the command had never once been executed and
+        # the typo went unnoticed. The flag is -p/--packaging-format, which is
+        # what both the runner's Briefcase and the local .buildenv (0.4.5) accept.
+        run: briefcase package windows -p msi
       - name: Collect the installer
         shell: bash
         run: |
