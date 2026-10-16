@@ -25,6 +25,39 @@ if str(PROJECT_ROOT) not in sys.path:
 from hub import urldetect  # noqa: E402
 
 
+def victim_server_source(port: int) -> str:
+    """Script text for a project that must FAIL to bind an occupied port.
+
+    Every port-conflict test needs a victim: a server whose bind is refused, so
+    the hub's failure path runs and an offer can appear. Plain `HTTPServer`
+    cannot be that victim on Windows.
+
+    `HTTPServer.allow_reuse_address` is 1, and on Windows SO_REUSEADDR permits a
+    SECOND socket to bind an address:port that is already bound by another
+    SO_REUSEADDR socket -- the opposite of what POSIX does, where two live
+    listeners on the same endpoint need SO_REUSEPORT. So a victim built on plain
+    HTTPServer does not fail next to a holder that is also an HTTPServer: it
+    binds alongside it and runs forever, silently. That is exactly what Windows
+    CI reported -- `state=running`, `signal=None`, `history_tail=''`, and two
+    owner PIDs on the port. The test was vacuous there while passing on macOS.
+
+    Binding exclusively is what a normal server does, so this subclass is the
+    honest fixture: on both platforms it raises OSError when the port is taken,
+    which is the only way the hub ever sees the failure it is meant to handle.
+    """
+    return (
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class H(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200); self.end_headers()\n"
+        "    def log_message(self, *a): pass\n"
+        "class Exclusive(HTTPServer):\n"
+        # The whole point: refuse to share the port with anything already on it.
+        "    allow_reuse_address = False\n"
+        f"Exclusive(('127.0.0.1', {port}), H).serve_forever()\n"
+    )
+
+
 def _spin_qt(ms: float) -> None:
     """Pump the Qt event loop for `ms`, letting QProcess signals land.
 

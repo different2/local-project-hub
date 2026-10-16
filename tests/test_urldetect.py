@@ -28,7 +28,13 @@ from PySide6.QtWidgets import (  # noqa: E402
     QMessageBox,
 )
 
-from helpers import reserve_port, start_holder, stop_and_release, temp_project_dir  # noqa: E402
+from helpers import (  # noqa: E402
+    reserve_port,
+    start_holder,
+    stop_and_release,
+    temp_project_dir,
+    victim_server_source,
+)
 from hub import store as sm, urldetect  # noqa: E402
 from hub.window import _entry_script  # noqa: E402
 from hub.process_manager import ProjectProcess, _detected_suppress_flag  # noqa: E402
@@ -627,16 +633,11 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
     # A server whose port is a DEFAULT INSIDE the script, not an argument —
     # exactly like obs_live.py. That is the whole difficulty: nothing in the
     # command line names the port, so the holder can only be found by matching
-    # the script against what is actually listening.
+    # the script against what is actually listening. The victim must bind
+    # exclusively or the conflict never happens on Windows (see
+    # victim_server_source).
     srv_py = tmp / "obs_live.py"
-    srv_py.write_text(
-        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
-        "class H(BaseHTTPRequestHandler):\n"
-        "    def do_GET(self):\n"
-        "        self.send_response(200); self.end_headers(); self.wfile.write(b'OK')\n"
-        "    def log_message(self,*a): pass\n"
-        f"HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
-    )
+    srv_py.write_text(victim_server_source(port))
     holder = ProjectProcess(
         sm.validate(
             {
@@ -703,16 +704,10 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
     """
     port = reserve_port()
     # The port is a default INSIDE the script, like obs_live.py — nothing in
-    # the command line names it.
+    # the command line names it. The victim must bind exclusively or the
+    # conflict never happens on Windows (see victim_server_source).
     srv_py = tmp / "obs_live.py"
-    srv_py.write_text(
-        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
-        "class H(BaseHTTPRequestHandler):\n"
-        "    def do_GET(self):\n"
-        "        self.send_response(200); self.end_headers(); self.wfile.write(b'OK')\n"
-        "    def log_message(self,*a): pass\n"
-        f"HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
-    )
+    srv_py.write_text(victim_server_source(port))
     holder = ProjectProcess(
         sm.validate(
             {
@@ -1192,6 +1187,65 @@ def test_finish_time_output_is_drained_before_deciding_conflict(tmp: Path) -> No
             w.close()
     finally:
         stop_and_release(holder, srv_py)
+
+
+def test_conflict_victim_actually_fails_to_bind(tmp: Path) -> None:
+    """The victim fixture must be unable to bind a port that is already held.
+
+    Windows CI exposed a vacuous test. A victim built on plain `HTTPServer`
+    (`allow_reuse_address = 1`) does not fail next to a holder that is also an
+    HTTPServer, because on Windows SO_REUSEADDR lets a second socket bind an
+    endpoint an existing SO_REUSEADDR socket holds -- POSIX would require
+    SO_REUSEPORT for that. The victim therefore bound alongside the holder,
+    ran forever, and printed nothing, so no test ever failed: the diagnostic was
+    `state=running`, `signal=None`, `history_tail=''`, and two owner PIDs on one
+    port. On macOS the same fixture behaves correctly, which is why the suite
+    looked green locally while asserting nothing at all on Windows.
+
+    This pins the property that makes the conflict tests real. It is portable:
+    an exclusive bind of a held endpoint is refused on both platforms, whereas a
+    reusing bind is refused only on one. If that ever stops holding, this test
+    fails instead of the conflict tests silently going quiet again.
+    """
+    from http.server import HTTPServer
+
+    assert int(HTTPServer.allow_reuse_address) != 0, (
+        "the stdlib HTTPServer now binds exclusively, so the fixture override is "
+        "no longer needed -- this test should then assert the fixture matches it"
+    )
+    port = reserve_port()
+    srv_py = tmp / "obs_live.py"
+    srv_py.write_text(victim_server_source(port))
+
+    # Occupy the port the way a holder does, then ask the victim for it.
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        blocker.bind(("127.0.0.1", port))
+        blocker.listen(1)
+        try:
+            done = subprocess.run(
+                [sys.executable, str(srv_py)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError(
+                "the victim script is still running on a port that was already "
+                "held -- it never hit the conflict, so this test cannot test "
+                "the hub's handling of one"
+            )
+        combined = (done.stdout or "") + (done.stderr or "")
+        assert done.returncode != 0, (
+            "the victim started happily on an occupied port; the conflict path "
+            "it exists to exercise never ran"
+        )
+        assert "OSError" in combined or "Errno" in combined or "WinError" in combined, (
+            f"the victim failed, but not by failing to bind: ...{combined[-300:]}"
+        )
+    finally:
+        blocker.close()
 
 
 def test_port_is_recovered_from_the_traceback_not_the_script(tmp: Path) -> None:
