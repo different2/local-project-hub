@@ -1,5 +1,11 @@
 [tool.briefcase]
 project_name = "local-project-hub"
+# DO NOT change `bundle` or the app key (`hub`, set in [tool.briefcase.app.hub])
+# without understanding this: the Windows MSI's UpgradeCode is derived
+# deterministically from the bundle identifier, and that GUID is what lets a
+# new MSI replace an older install. Change it and Windows updates stop
+# upgrading — each release installs alongside the last instead of over it,
+# with no error to explain why. The same applies to renaming the app key.
 bundle = "local.projecthub"
 version = "0.3.8"
 url = "https://github.com/different2/local-project-hub"
