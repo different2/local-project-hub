@@ -177,6 +177,13 @@ jobs:
       - build-windows
     if: startsWith(github.ref, 'refs/tags/v')
     environment: release
+    # The workflow sets `contents: read` for everything, which is right for the
+    # test and build jobs. Creating a release and attaching an asset needs write,
+    # so it is granted here — to this job only, never workflow-wide. Without it
+    # the token is read-only and GitHub answers
+    # "HTTP 403: Resource not accessible by integration".
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v5
         with:
