@@ -1,7 +1,7 @@
 [tool.briefcase]
 project_name = "Local Project Hub"
 bundle = "local.projecthub"
-version = "0.3.7"
+version = "0.3.8"
 url = "https://github.com/different2/local-project-hub"
 license = "MIT"
 license-files = ["LICENSE"]

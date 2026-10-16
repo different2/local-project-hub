@@ -78,8 +78,13 @@ To build locally on macOS:
 
 ```bash
 pip install briefcase
-briefcase create macOS && briefcase build macOS && briefcase package macOS --dmg
+briefcase create macOS && briefcase build macOS && briefcase package macOS -p dmg
 ```
+
+`-p dmg` is the packaging format (`-p/--packaging-format` takes `zip`, `dmg` or
+`pkg`). A GUI app already defaults to `dmg`, but state it so the command does
+not depend on that default. Note there is no `--dmg` flag — briefcase rejects
+it, and a build script that used it would fail.
 
 Icons are regenerated from source art with:
 
@@ -92,8 +97,11 @@ python3 tools/make_icons.py path/to/artwork.png
 Unsigned builds work but trigger OS trust warnings. For a signed release you
 need:
 
-- **macOS** — an Apple Developer account (paid), plus notarization through
-  `briefcase package macOS --notarize`
+- **macOS** — an Apple Developer account (paid). Sign with
+  `briefcase package macOS -i "Developer ID Application: …"`; notarization
+  then runs as part of packaging once credentials are configured. There is no
+  `--notarize` flag — `--no-notarize` opts out, which is the default when no
+  identity is available.
 - **Windows** — an Authenticode code-signing certificate (paid)
 
 Certificates and passwords must never be committed; they belong in CI secrets.
