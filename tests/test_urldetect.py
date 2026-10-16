@@ -1037,6 +1037,78 @@ def test_bind_failure_is_recognised_on_every_platform(tmp: Path) -> None:
     assert proc._port_from_failure_output() is None
 
 
+def test_port_is_recovered_from_the_traceback_not_the_script(tmp: Path) -> None:
+    """The port must come from the traceback when the script never assigns one.
+
+    The case that kept Windows red: a project is `python3 obs_live.py` with no
+    URL, and the script hardcodes its listener as
+    `HTTPServer(('127.0.0.1', 60168), H).serve_forever()`. There is no `PORT =`
+    line to find and no port on the command line, so the old recovery path
+    (`_port_from_entry_script`) returned None on EVERY platform. The signal then
+    fired with port 0, and the offer depended on `listening_ports_all()`
+    happening to list the port in netstat order — which it did on macOS and did
+    not on Windows. Python echoes the failing source line, so the number is
+    right there; it just had to be read.
+
+    This is why the failure looked Windows-specific and kept coming back: the
+    Windows run had no working path at all, while macOS survived on the fragile
+    fallback. All three platforms are pinned so the difference cannot depend on
+    which machine runs the suite.
+    """
+    from collections import deque
+
+    from hub.process_manager import ProjectProcess, _port_from_traceback
+
+    # The real Windows traceback from the failing CI run, with its 8.3 paths.
+    windows = "\n".join([
+        "Traceback (most recent call last):",
+        '  File "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tmpd3roi4eg\\obs_live.py",'
+        " line 6, in <module>",
+        "    HTTPServer(('127.0.0.1',60168),H).serve_forever()",
+        '  File "C:\\...\\socketserver.py", line 466, in server_bind',
+        "    self.socket.bind(self.server_address)",
+        "OSError: [WinError 10048] Only one usage of each socket address "
+        "(protocol/network address/port) is normally permitted.",
+    ])
+    assert _port_from_traceback(windows) == 60168, (
+        "the Windows traceback names 60168 in the failing call"
+    )
+
+    # A script exactly like the failing one: the port is only in the traceback.
+    port = reserve_port()
+    srv_py = tmp / "obs_live.py"
+    srv_py.write_text(
+        "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+        "class H(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200); self.end_headers()\n"
+        "    def log_message(self,*a): pass\n"
+        f"HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+    )
+    proc = ProjectProcess(
+        sm.validate(
+            {
+                "name": "obsv",
+                # No port on the command line — the whole point.
+                "command": f"{sys.executable} {srv_py}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    assert proc._port_from_entry_script(windows) is None, (
+        "this script has no `PORT =` line, so the entry-script fallback cannot "
+        "find the port either — the traceback is the only source"
+    )
+    # The same traceback, built for THIS run's port, so the assertion is about
+    # the recovery rule and not about the number 60168 specifically.
+    own = windows.replace(f"'127.0.0.1',60168", f"'127.0.0.1',{port}")
+    proc.history = deque([own])
+    assert proc._failed_to_bind()
+    assert proc._port_from_failure_output() == port, (
+        "the port was recoverable from the traceback but recovery still failed"
+    )
+
+
 def test_listening_ports_ignores_the_listen_column(tmp: Path) -> None:
     """lsof's LAST field is "(LISTEN)", not the address.
 

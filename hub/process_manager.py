@@ -58,6 +58,35 @@ def _looks_like_python(program: str) -> bool:
     return base in _PYTHON_NAMES
 
 
+def _port_from_traceback(text: str) -> int | None:
+    """The port named in a server's own traceback source line.
+
+    A script that hardcodes its listener writes the port into the call that
+    failed, and Python echoes that source line verbatim:
+
+        HTTPServer(('127.0.0.1', 8787), H).serve_forever()
+        self.socket.bind(('0.0.0.0', 8787))
+
+    The address tuple is matched because that is what every socket-opening call
+    in the stdlib and in the usual frameworks looks like. The same tuple can
+    appear in two frames, and that is harmless: the first hit is the user's own
+    frame (the outermost), which is the one that failed.
+
+    Deliberately NOT matched: any bare number, which would match a line number.
+
+    Guessing a port is safe by construction: the caller only acts on one that
+    `_conflict_for_port()` confirms a FOREIGN process still holds, so a wrong
+    number simply produces no offer rather than a wrong one.
+    """
+    m = re.search(r"\(\s*['\"][\da-fA-F.:\[\]]*['\"]\s*,\s*(\d{2,5})\s*\)", text)
+    if m:
+        return int(m.group(1))
+    # Keyword form: `app.run(host="0.0.0.0", port=8481)`. Only in a traceback,
+    # where the echoed source line is the failing call itself.
+    m = re.search(r"\bport\s*=\s*(\d{2,5})\b", text)
+    return int(m.group(1)) if m else None
+
+
 def _find_foreign_port_holder(
     url: str, own_pids: set[int], fallback_port: int | None = None
 ) -> dict | None:
@@ -600,6 +629,16 @@ class ProjectProcess(QObject):
         m = re.search(r":(\d{2,5})(?![\d.])", argv)
         if m:
             return int(m.group(1))
+        # The traceback itself. A script that hardcodes its listener writes it
+        # into the call that failed, and Python echoes that source line:
+        #     HTTPServer(('127.0.0.1', 8787), H).serve_forever()
+        # so the number IS recoverable — the entry-script scan below only looks
+        # for an assigned `PORT =`, which such a script never has. Without this
+        # the port came back None on every platform, the signal fired with 0,
+        # and the offer depended on netstat ordering happening to list the port.
+        port = _port_from_traceback(text)
+        if port:
+            return port
         # Last resort: the entry script hardcodes its port, e.g.
         # `PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8471`. Nothing on
         # the command line reveals that, so read the script as TEXT (never
