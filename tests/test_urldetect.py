@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QEventLoop, Qt, QTimer  # noqa: E402
+from PySide6.QtCore import QEventLoop, QProcess, Qt, QTimer  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
@@ -1035,6 +1035,133 @@ def test_bind_failure_is_recognised_on_every_platform(tmp: Path) -> None:
     proc.history = deque(['Traceback (most recent call last):\n', "ValueError: bad\n"])
     assert not proc._failed_to_bind(), "an unrelated error was read as a bind failure"
     assert proc._port_from_failure_output() is None
+
+
+def test_finish_time_output_is_drained_before_deciding_conflict(tmp: Path) -> None:
+    """The traceback still in the pipe when `finished` fires must still count.
+
+    QProcess emits `finished` without promising every `readyRead` has arrived.
+    The child's final write — for a dying Python server, the whole
+    "Address already in use" traceback — can be sitting in the pipe at that
+    moment. `_on_finished()` used to look at `self.history` before reading it,
+    so on a machine that loses that race the traceback was simply absent:
+    `_failed_to_bind()` returned False, no `port_conflict_from_output` fired,
+    and the user got a silent 'Address already in use' with no offer to free
+    the port. macOS won the race and Windows lost it, which is why this looked
+    like a Windows-only bug for days.
+
+    The test refuses the timing argument by NOT racing at all: the fake process
+    hands over the bytes only when its output is read, and never emits a
+    readyRead at all — the exact state at the moment `finished` fires.
+    """
+
+    class BufferedAtFinish:
+        """A QProcess whose last write is still unread when it finishes."""
+
+        def __init__(self, text: str):
+            self._text = text.encode()
+            self._handed_over = False
+
+        # readyReadStandardOutput is deliberately NEVER emitted for this data.
+        def readAllStandardOutput(self):
+            data, self._text = self._text, b""
+            self._handed_over = True
+            return data
+
+        def processId(self):
+            return 4242
+
+        def handed_over(self):
+            return self._handed_over
+
+    port = reserve_port()
+    srv_py = tmp / "obs_live.py"
+    srv_py.write_text(
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class H(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200); self.end_headers()\n"
+        "    def log_message(self,*a): pass\n"
+        f"HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+    )
+    # The holder that keeps the port, so the offer has a real foreign owner.
+    holder = ProjectProcess(
+        sm.validate(
+            {
+                "name": "Stray",
+                "command": f"{sys.executable} {srv_py}",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    started = start_holder(holder, port)
+    assert started, f"test server did not start (state={holder.state})"
+    try:
+        # A real holder is on `port`; the failing project binds the same one.
+        srv_py_bad = tmp / "obs_live.py"
+        traceback = (
+            "Traceback (most recent call last):\n"
+            f'  File "{srv_py_bad}", line 6, in <module>\n'
+            f"    HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+            "  File \"socketserver.py\", line 466, in server_bind\n"
+            "    self.socket.bind(self.server_address)\n"
+            "OSError: [WinError 10048] Only one usage of each socket address "
+            "(protocol/network address/port) is normally permitted.\n"
+        )
+        st = sm.Store(tmp / "registry.json")
+        rec = st.add(
+            sm.validate(
+                {
+                    "name": "obs",
+                    "command": f"{sys.executable} {srv_py_bad}",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+        proc = ProjectProcess(rec)
+        fake = BufferedAtFinish(traceback)
+        proc.proc = fake
+        assert not fake.handed_over(), "the bytes must still be in the pipe"
+
+        emitted = []
+        proc.port_conflict_from_output.connect(emitted.append)
+
+        w = HubWindow(st)
+        w.show()
+        offered = []
+        w._offer_to_free_port = lambda r, p, c: offered.append(c)
+        try:
+            w.active_id = rec["id"]
+            w._on_select()
+            # Wire it exactly as the window does: the signal carries only the
+            # port, and the handler wants (pid, port).
+            proc.port_conflict_from_output.connect(
+                lambda port, p=rec["id"]: w._on_port_conflict_from_output(p, port)
+            )
+
+            # The whole point: nothing drained, then the child "finishes".
+            proc._user_stopped = False
+            proc._on_finished(1, QProcess().exitStatus())
+
+            assert emitted, (
+                "no port_conflict_from_output signal was emitted; the "
+                "traceback never reached history so the failure was not "
+                "recognised as a bind failure at all"
+            )
+            assert emitted[0] == port, (
+                "the signal carried a different port than the traceback's "
+                f"port: {emitted[0]} != {port}"
+            )
+            assert offered, (
+                "the window handler received the signal but offered nothing; "
+                f"signal={emitted[0]}"
+            )
+            holder_pid = holder.proc.processId() if holder.proc else None
+            assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
+        finally:
+            w.close()
+    finally:
+        stop_and_release(holder, srv_py)
 
 
 def test_port_is_recovered_from_the_traceback_not_the_script(tmp: Path) -> None:

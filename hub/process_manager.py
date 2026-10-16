@@ -510,6 +510,17 @@ class ProjectProcess(QObject):
         self.proc.kill()
 
     def _on_finished(self, code: int, status) -> None:
+        # Pull whatever the process wrote last before looking at anything.
+        # QProcess emits `finished` without promising that every
+        # readyRead arrived first: the child's final write (for a dying Python
+        # server, the whole "Address already in use" traceback) can still be in
+        # the pipe. Reading it here is the only way to know it will not be
+        # lost — and if it IS lost, `_failed_to_bind()` sees an empty
+        # `history`, returns False, no conflict signal fires, and the user gets
+        # a silent 'Address already in use' with no offer to free the port.
+        # That race is lost on Windows and won on macOS, which is why this
+        # looked like a Windows-only bug for days.
+        self._drain()
         # Remember the PID so port_conflict() does not mistake our own
         # just-exited server for a foreign process holding the port. This is
         # what keeps a normal restart from prompting the user to kill anything.
