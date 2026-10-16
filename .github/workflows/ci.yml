@@ -182,6 +182,19 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      - name: Create the release if it does not exist
+        # `gh release upload` only attaches to a release that already exists —
+        # nothing in this workflow ever created one, so the first tag that
+        # reached this job died with "release not found" after successfully
+        # downloading a 104 MB installer. The release is the thing users land
+        # on, so it has to be created before anything is attached to it.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" \
+              --title "$tag" --generate-notes
       - name: Upload installers to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
