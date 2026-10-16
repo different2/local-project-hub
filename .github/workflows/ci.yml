@@ -130,34 +130,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  build-macos:
-    name: Build macOS installer
-    runs-on: macos-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Install Briefcase and dependencies
-        run: |
-          python -m pip install --upgrade pip briefcase
-          python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
-      - name: Build the .app
-        run: briefcase build macOS
-      - name: Package the .dmg
-        run: briefcase package macOS --dmg
-      - name: Collect the installer
-        shell: bash
-        run: |
-          mkdir -p dist
-          find build -name "*.dmg" -exec cp {} dist/ \;
-          ls -la dist/
-      - uses: actions/upload-artifact@v5
-        with:
-          name: LocalProjectHub-macOS
-          path: dist/*.dmg
-          if-no-files-found: error
+  # macOS is NOT built here. CI is Windows-only on purpose: the maintainer
+  # builds and tests macOS on his own machine, and a second full Briefcase
+  # build per tag only duplicates that. The `[tool.briefcase.app.hub.macOS]`
+  # config in pyproject.toml is untouched, so `briefcase build macOS` still
+  # works locally — this job was removed rather than the build config.
+  # If a macOS build is ever needed on CI again, it should NOT be added back to
+  # `publish`'s needs list: `needs` makes every listed job a hard requirement,
+  # so one failing platform build silently blocks the release for the other.
 
   build-windows:
     name: Build Windows installer
@@ -190,7 +170,6 @@ jobs:
     name: Publish to the GitHub release
     runs-on: ubuntu-24.04
     needs:
-      - build-macos
       - build-windows
     if: startsWith(github.ref, 'refs/tags/v')
     environment: release
