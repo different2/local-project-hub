@@ -147,10 +147,17 @@ jobs:
         run: briefcase build macOS
       - name: Package the .dmg
         # `-p dmg`, not `--dmg`: briefcase has no `--dmg` flag (it takes
-        # -p/--packaging-format with zip|dmg|pkg). The old `--dmg` here had the
-        # same defect as the Windows job's `--msi` and would have failed on its
-        # first run — this job is tag-gated, so it had never run to find out.
-        run: briefcase package macOS -p dmg
+        # -p/--packaging-format with zip|dmg|pkg).
+        #
+        # `--adhoc-sign` is required for CI, not cosmetic. With no identity
+        # configured, briefcase PROMPTS ("Select application signing identity
+        # to use:") and there is no terminal to answer, so it aborts with exit
+        # 214 — the first run of this job died exactly that way. Passing the
+        # flag skips the prompt and ad-hoc signs, which is what a local build
+        # produces anyway when the prompt is answered with its default. The
+        # result is unsigned-in-practice: Gatekeeper needs right-click → Open
+        # on first launch, the same as the local .dmg.
+        run: briefcase package macOS -p dmg --adhoc-sign
       - name: Collect the installer
         shell: bash
         run: |
