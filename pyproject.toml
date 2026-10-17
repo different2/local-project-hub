@@ -54,6 +54,7 @@ minimum_system_version = "12.0"
 universal_build = false
 
 [tool.briefcase.app.hub.windows]
-# Notarisation/signing are off until certificates exist; see README "Signing".
+# Notarisation/signing are off until certificates exist; see DEVELOPMENT.md
+# "Signing" for what that involves.
 # The installer format matches what the in-app updater expects to hand off to.
 installer_license = "LICENSE"
