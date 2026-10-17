@@ -153,7 +153,13 @@ jobs:
         run: python tools/check_tag_version.py "${GITHUB_REF_NAME}"
       - name: Install Briefcase and dependencies
         run: |
-          python -m pip install --upgrade pip briefcase
+          python -m pip install --upgrade pip
+          # Pinned deliberately: briefcase produces the release artifacts, so a
+          # new version arriving silently is a change to the release path we did
+          # not ask for. 0.4.6 is the version v0.3.7 and v0.3.8 were built with.
+          # Bump this pin as a reviewed, standalone change —
+          # tests/test_workflow_yaml.py fails if it goes unpinned again.
+          python -m pip install "briefcase==0.4.6"
           python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
       - name: Build the .app
         run: briefcase build macOS
@@ -196,7 +202,13 @@ jobs:
         run: python tools/check_tag_version.py "${GITHUB_REF_NAME}"
       - name: Install Briefcase and dependencies
         run: |
-          python -m pip install --upgrade pip briefcase
+          python -m pip install --upgrade pip
+          # Pinned deliberately: briefcase produces the release artifacts, so a
+          # new version arriving silently is a change to the release path we did
+          # not ask for. 0.4.6 is the version v0.3.7 and v0.3.8 were built with.
+          # Bump this pin as a reviewed, standalone change —
+          # tests/test_workflow_yaml.py fails if it goes unpinned again.
+          python -m pip install "briefcase==0.4.6"
           python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
       - name: Build the MSI installer
         # `--msi` was never a valid flag — this job is tag-gated and the repo had

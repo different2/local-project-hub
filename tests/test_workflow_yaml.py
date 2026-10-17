@@ -144,6 +144,32 @@ def test_manual_dispatch_builds_but_never_publishes() -> None:
     )
 
 
+def test_briefcase_is_pinned() -> None:
+    """The release toolchain must not float to whatever PyPI serves that day.
+
+    briefcase produces the release artifacts, so an unpinned install lets a new
+    version silently change (or break) packaging while nothing in the repository
+    changed — the same class of from-outside risk the tag/version guard exists
+    for. The pin turns an upgrade into a deliberate, reviewed change.
+    """
+    lines = [
+        line.strip()
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if "briefcase" in line and not line.strip().startswith("#")
+    ]
+    installs = [ln for ln in lines if "pip install" in ln]
+    assert installs, (
+        "no briefcase install line found in the workflow — the release build "
+        "would fail, or the toolchain step changed shape"
+    )
+    for ln in installs:
+        assert "briefcase==" in ln, (
+            f"unpinned briefcase install: {ln!r}\n"
+            "A bare 'briefcase' lets a new version change the release build "
+            "silently; pin it (briefcase==<version>) and bump deliberately."
+        )
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):
