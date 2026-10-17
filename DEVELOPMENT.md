@@ -14,9 +14,11 @@ Or set up the venv once (recommended — avoids PATH surprises):
 
 ```bash
 python3 -m venv .hubenv
-.hubenv/bin/pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
+.hubenv/bin/pip install "PySide6==6.7.3" "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "Pillow==11.3.0"
 .hubenv/bin/python main.py
 ```
+
+(Those are the project's pinned versions — see "Dependency versions" below.)
 
 Notes:
 
@@ -26,6 +28,50 @@ Notes:
 - The packaged app runs Python 3.11+ (wheels for arm64 macOS); this checkout
   also runs on the dev interpreter (3.9.6 on the author's machine), and the
   suite is kept green on both 3.9 and 3.11.
+
+## Dependency versions (updated deliberately)
+
+The GUI stack is pinned to **one coordinated set** — CI, the packaged app, and
+both local venvs must all use exactly these:
+
+```
+PySide6==6.7.3
+PySide6-Essentials==6.7.3   # the trio ships in lockstep; always the same version
+PySide6-Addons==6.7.3
+Pillow==11.3.0
+```
+
+Where the pins live (they move together):
+
+| File | Pins |
+|---|---|
+| `.github/workflows/ci.yml` | the whole set, in the test job and both build jobs |
+| `pyproject.toml` → `requires` | the two PySide6 packages briefcase bundles into the app |
+| local venvs (`.hubenv`, `.buildenv`) | the whole set, installed by hand |
+
+**Why 6.7.3 and not the latest:** briefcase installs the bundle's dependencies
+with `pip --platform macosx_11_0_{arch}` (its macOS target comes from the
+support settings), and PySide6 moved its macOS wheels to macOS-12+ tags in
+6.8, macOS-13+ in 6.10 and macOS-14+ in 6.12. So 6.7.3 is the newest PySide6
+the app bundle can actually install — and it is what the shipped builds
+contain. Choosing newer Qt means changing what macOS the app targets, which
+is a product decision, not a dependency bump. (6.12 also requires Python
+≥3.10, which the 3.9 dev venv cannot take.)
+
+**To update the set, deliberately, as one change:**
+
+1. Pick the version; check it against every consumer: the 3.9 dev venv, CI's
+   3.11, Windows wheels, and the bundle (`pip --platform macosx_11_0_*`).
+2. Bump every pin together: the three install lines in `ci.yml`, `requires`
+   in `pyproject.toml`, and both venvs —
+   `.hubenv/bin/pip install "PySide6==X" …`, same for `.buildenv`.
+3. Run the suite (`python3 tests/run_all.py`); `test_workflow_yaml.py` also
+   fails if the pins drift apart or go unpinned.
+4. Exercise packaging without releasing: `gh workflow run CI --ref main`.
+5. Release as usual.
+
+`pytest` and `PyYAML` are test-only tools and deliberately not part of the
+set — they never ship.
 
 ## Tests
 

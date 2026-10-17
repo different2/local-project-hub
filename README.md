@@ -24,8 +24,6 @@ and Windows.
   Nothing is killed without asking.
 - **Remembers each project.** Folder, command, environment, options — saved
   per project and reused on every launch.
-- **Updates itself.** The Hub checks for new releases in the background and
-  tells you when one exists; installing is always your call.
 
 Your projects stay exactly where they are. The Hub runs the startup command
 you configure, from the folder you point it at, and never touches your
