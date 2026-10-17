@@ -325,6 +325,16 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
         code, out, n_pass, n_fail = run_isolated_test(path, test_name)
         passed += n_pass
         failed += n_fail
+        if code != 0 and not (n_pass or n_fail):
+            # Retries exhausted and this test never reported at all. That is not
+            # the known teardown crash (which happens AFTER a test prints PASS
+            # and surfaces as a signal-kill), it is a crash the runner would
+            # otherwise count as neither passed nor failed — and report_suite's
+            # teardown-crash rule (nonzero exit, failed == 0, passed > 0) would
+            # then quietly turn the suite green, hiding whatever broke. Count it
+            # as a failure; the output, which includes the traceback, is
+            # appended below.
+            failed += 1
         # A negative code is a signal-kill (SIGSEGV = -11). QtWebEngine crashes
         # during interpreter shutdown even when the test itself passed, so a
         # signal-kill AFTER a clean PASS is a known Qt teardown crash, not a

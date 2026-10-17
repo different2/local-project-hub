@@ -168,8 +168,10 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
     # One reserved port per project, so the two servers cannot collide with
     # each other or with anything else running.
     st = sm.Store(tmp / "registry.json")
+    ports = []
     for name in ("Proj A", "Proj B"):
         port = reserve_port()
+        ports.append(port)
         (tmp / f"srv_{port}.py").write_text(_server_src(port))
         st.add(
             sm.validate(
@@ -232,7 +234,7 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
             v = w.tabs.widget(i)
             if isinstance(v, HubWebView):
                 urls.add(v.url().toString())
-        assert urls == {f"http://127.0.0.1:{port_a}/", f"http://127.0.0.1:{port_b}/"}, urls
+        assert urls == {f"http://127.0.0.1:{p}/" for p in ports}, urls
     finally:
         w.close()
 
