@@ -412,6 +412,28 @@ def test_dialog_exposes_an_args_field() -> None:
     assert d.args.text().strip() == "--no-open"
 
 
+def test_add_dialog_suggests_the_command_from_the_folder() -> None:
+    """Choosing a folder fills in the command — but never over a written one.
+
+    The folder detector (detect_command) is only an offer: it fills an empty
+    command field, and it must leave alone a command the record (or user)
+    already carries (spec §6: commands are never rewritten).
+    """
+    from hub.project_dialog import ProjectDialog
+
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "package.json").write_text(
+            '{"scripts": {"dev": "vite"}}', encoding="utf-8"
+        )
+        filled = ProjectDialog(base_dir=d)
+        assert filled.command.text().strip() == "npm run dev", filled.command.text()
+
+        kept = ProjectDialog(record={"command": "python3 mine.py", "working_dir": d})
+        assert kept.command.text().strip() == "python3 mine.py", (
+            "the folder detector rewrote a command the record already had"
+        )
+
+
 def test_removing_a_project_closes_its_tab(tmp: Path) -> None:
     """Removing a project must take its tab with it.
 

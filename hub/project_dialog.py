@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import store as store_mod
+from .detect_command import suggest_command as _suggest_command
 from .detect_type import DISPLAY, detect as _detect_type
 
 _ICONS = ["🌐", "🧪", "📈", "🎮", "🎨", "🧭", "🛠️", "📚", "🤖", "⬜"]
@@ -91,8 +92,9 @@ class ProjectDialog(QDialog):
         form.addRow("Startup command", self.command)
 
         cmd_help = QLabel(
-            "Runs from the project folder. Python, Node, Go, Rust, a shell script — "
-            "whatever starts your dashboard."
+            "Runs from the project folder. When the Hub recognises the project's "
+            "files it fills this in for you — Python, Node, Go, Rust, or a shell "
+            "script. Edit freely."
         )
         cmd_help.setWordWrap(True)
         cmd_help.setStyleSheet("color: gray; font-size: 11px;")
@@ -189,7 +191,18 @@ class ProjectDialog(QDialog):
         self.args.textChanged.connect(self._refresh_detection)
         self.wd.textChanged.connect(self._refresh_detection)
         self.type_override.currentIndexChanged.connect(self._refresh_detection)
+
+        # The chosen folder can suggest the command (detect_command). textEdited
+        # fires only for user typing, so a filled-in suggestion never counts as
+        # the user having "written" the command.
+        self._suggestion = None
+        self._suggested_interpreter = ""
+        self._command_touched = False
+        self.command.textEdited.connect(self._mark_command_touched)
+        self.wd.textChanged.connect(self._maybe_suggest_from_folder)
+
         self._refresh_detection()
+        self._maybe_suggest_from_folder()
 
     def _refresh_detection(self) -> None:
         """Show what the Hub currently believes about this project."""
@@ -210,7 +223,9 @@ class ProjectDialog(QDialog):
         if manual:
             kind = override
             self.detection.setText(
-                f"Using your choice: {kind}. Will be shown as {_display_for(kind)}."
+                self._with_suggestion_note(
+                    f"Using your choice: {kind}. Will be shown as {_display_for(kind)}."
+                )
             )
             return
         if not self.command.text().strip():
@@ -224,7 +239,61 @@ class ProjectDialog(QDialog):
         bits.append(f"will be shown as {det.display}")
         if det.type == "unknown":
             bits.append("— the Hub could not tell; it will just run this command")
-        self.detection.setText(" · ".join(bits))
+        self.detection.setText(self._with_suggestion_note(" · ".join(bits)))
+
+    def _mark_command_touched(self) -> None:
+        """The user has written their own command; stop offering suggestions."""
+        self._command_touched = True
+
+    def _maybe_suggest_from_folder(self) -> None:
+        """Fill the command in from the chosen folder, when nothing is lost.
+
+        Only ever fills an EMPTY command field — or replaces a previous
+        suggestion of our own when the folder changes (so picking the wrong
+        folder first costs nothing). A command the user typed, or one an
+        existing project already carries, is never rewritten (spec §6).
+        """
+        if self._command_touched:
+            return
+        current = self.command.text().strip()
+        old = self._suggestion
+        if current and (old is None or current != old.command):
+            return  # a real user command is never replaced
+        folder = self.wd.text().strip()
+        if not folder:
+            return
+        try:
+            sug = _suggest_command(folder)
+        except Exception:
+            return  # a suggestion is advisory; it must never break the dialog
+        self._suggestion = sug
+        self._clear_suggested_interpreter()
+        if sug is None:
+            if current:
+                # Our previous suggestion no longer fits this folder.
+                self.command.setText("")
+            return
+        self.command.setText(sug.command)
+        if sug.interpreter and not self.interp.text().strip():
+            self.interp.setText(sug.interpreter)
+            self._suggested_interpreter = sug.interpreter
+        self._refresh_detection()
+
+    def _clear_suggested_interpreter(self) -> None:
+        """Remove an interpreter WE filled in, unless the user changed it."""
+        if (
+            self._suggested_interpreter
+            and self.interp.text().strip() == self._suggested_interpreter
+        ):
+            self.interp.setText("")
+        self._suggested_interpreter = ""
+
+    def _with_suggestion_note(self, text: str) -> str:
+        """Credit the folder detector while its suggestion is still intact."""
+        s = self._suggestion
+        if s and self.command.text().strip() == s.command:
+            return f"{text} · command suggested from {s.source}"
+        return text
 
     @staticmethod
     def _wrap(layout) -> QWidget:
