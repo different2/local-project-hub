@@ -16,13 +16,11 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
 - Latest CI runs on `main`: green — including a workflow-dispatch run that
   verified the pinned build path end-to-end — apart from three one-off flaky
   Windows failures, explained in the open threads.
-- Full local suite: **14/14 green** (exit 0, finished this evening) on the
-  pre-feature tree; the scratch briefcase build also finished green with the
-  pinned requires (PySide6 6.7.3 trio + pyobjc 12.2.2 — exactly what v0.3.8
-  ships). The suite is now **15 suites**: `tests/test_detect_command.py`
-  (18 tests) covers the command detector below — a full 15-suite run on this
-  tree was still executing at writing
-  (`~/.hermes/cache/scratch/lph-verify/full-suite-3.out`).
+- Full local suite: **14/14 green** (exit 0) on the pre-feature tree, and
+  **15/15 green** (exit 0) on the current tree — the new
+  `tests/test_detect_command.py` (18 tests) covers the command detector
+  below. The scratch briefcase build also finished green with the pinned
+  requires (PySide6 6.7.3 trio + pyobjc 12.2.2 — exactly what v0.3.8 ships).
 - **Pinned dependency sets** (move together — see DEVELOPMENT.md
   "Dependency versions"):
   - `briefcase==0.4.6` — CI build jobs; local `.buildenv` matches
