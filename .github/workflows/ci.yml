@@ -72,7 +72,12 @@ jobs:
           # very file. Without it that guard dies with ModuleNotFoundError on
           # every platform -- and this file is what broke silently once already,
           # so its guard has to be able to run everywhere.
-          python -m pip install PySide6-Essentials PySide6-Addons PySide6 Pillow pytest PyYAML
+          #
+          # The GUI set is pinned; it must match the app bundle and the local
+          # venvs (see DEVELOPMENT.md "Dependency versions"), and a test fails
+          # if the pins drift or go unpinned.
+          python -m pip install "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "PySide6==6.7.3" "Pillow==11.3.0"
+          python -m pip install pytest PyYAML
 
       # Must come BEFORE the import check below: the check needs libEGL and
       # friends, so running it first reports a missing-OS-library problem as a
@@ -160,7 +165,10 @@ jobs:
           # Bump this pin as a reviewed, standalone change —
           # tests/test_workflow_yaml.py fails if it goes unpinned again.
           python -m pip install "briefcase==0.4.6"
-          python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
+          # The GUI set, pinned to what the suite runs and the bundle ships
+          # (see DEVELOPMENT.md "Dependency versions" — 6.7.3 is the newest
+          # PySide6 the app bundle can take while it targets older macOS).
+          python -m pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "PySide6-Essentials==6.7.3" "Pillow==11.3.0"
       - name: Build the .app
         run: briefcase build macOS
       - name: Package the .dmg
@@ -209,7 +217,10 @@ jobs:
           # Bump this pin as a reviewed, standalone change —
           # tests/test_workflow_yaml.py fails if it goes unpinned again.
           python -m pip install "briefcase==0.4.6"
-          python -m pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
+          # The GUI set, pinned to what the suite runs and the bundle ships
+          # (see DEVELOPMENT.md "Dependency versions" — 6.7.3 is the newest
+          # PySide6 the app bundle can take while it targets older macOS).
+          python -m pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "PySide6-Essentials==6.7.3" "Pillow==11.3.0"
       - name: Build the MSI installer
         # `--msi` was never a valid flag — this job is tag-gated and the repo had
         # no tags until v0.3.7, so the command had never once been executed and

@@ -170,6 +170,57 @@ def test_briefcase_is_pinned() -> None:
         )
 
 
+def test_gui_dependency_pins_are_coordinated() -> None:
+    """The GUI stack must be pinned to ONE version, everywhere.
+
+    PySide6 ships as three distributions in lockstep (PySide6, -Essentials,
+    -Addons); mixing them is unsupported, and the packaged app must run exactly
+    the version the suite is tested against — otherwise CI quietly tests a
+    different Qt than users get. The pins live in the workflow (what CI
+    installs) and in pyproject's `requires` (what briefcase bundles); this
+    test fails when they drift apart or go unpinned. See DEVELOPMENT.md
+    "Dependency versions" for how to bump them deliberately.
+    """
+    import re
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    cmd = "\n".join(
+        ln for ln in text.splitlines()
+        if "pip install" in ln and not ln.strip().startswith("#")
+    )
+
+    versions = sorted(set(
+        re.findall(r"PySide6(?:-(?:Essentials|Addons))?==([0-9][0-9.]*)", cmd)
+    ))
+    assert versions, "no pinned PySide6 packages found in the workflow"
+    assert len(versions) == 1, (
+        f"the PySide6 trio is pinned to different versions: {versions} — it "
+        "ships in lockstep and mixing versions is unsupported"
+    )
+    version = versions[0]
+
+    for name in ("PySide6", "PySide6-Essentials", "PySide6-Addons", "Pillow"):
+        assert f"{name}==" in cmd, f"{name} must be pinned in the workflow"
+
+    for name in ("PySide6-Essentials", "PySide6-Addons", "Pillow"):
+        assert not re.search(re.escape(name) + r"(?!==)", cmd), (
+            f"{name} appears unpinned somewhere in the workflow — pin it "
+            "like the rest of the set"
+        )
+    assert not re.search(r"(?<![\w\-])PySide6(?![\w=\-])", cmd), (
+        "a bare PySide6 appears unpinned in the workflow"
+    )
+
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    req = sorted(set(
+        re.findall(r'"PySide6-(?:Essentials|Addons)==([0-9][0-9.]*)"', pyproject)
+    ))
+    assert req == [version], (
+        f"pyproject `requires` pins {req} but CI pins {version} — the packaged "
+        "app would not run the version the suite was tested against"
+    )
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):

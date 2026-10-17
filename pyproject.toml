@@ -19,9 +19,15 @@ author = "Local Project Hub contributors"
 # Briefcase appends the extension itself, so the value must NOT include it.
 icon = "assets/icon"
 
+# Pinned, coordinated set — DO NOT float these. The trio ships in lockstep
+# (mixing versions is unsupported), and the packaged app must run exactly the
+# PySide6 version the suite is tested against. 6.7.3 is the newest PySide6
+# the app bundle can install while it targets older macOS; see DEVELOPMENT.md
+# "Dependency versions" before touching any of these — ci.yml, this file, and
+# the local venvs must move together.
 requires = [
-    "PySide6-Essentials",
-    "PySide6-Addons",
+    "PySide6-Essentials==6.7.3",
+    "PySide6-Addons==6.7.3",
     # macOS only: the About box's traffic lights cannot be controlled through Qt
     # (every window-button hint combination yields some set of buttons, never
     # close alone), so the real AppKit buttons are hidden via pyobjc. Guarded at
