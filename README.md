@@ -1,57 +1,90 @@
 # Local Project Hub
 
-A cross-platform desktop app that registers local projects, launches their
-backends, and shows their web dashboards in one window (PySide6 + QtWebEngine).
-
-Any project works: **Python, Node, Go, Rust, or a shell script** — the hub runs
-the startup command you configure and waits for the dashboard URL to answer.
-
-Your projects stay exactly where they are. The Hub never touches their source,
-their virtual environments, or their dependencies.
+A desktop app that keeps your local projects in one window: register a folder,
+press start, and its web dashboard opens in a tab. Works with anything
+launchable — **Python, Node, Go, Rust, or a shell script** — and runs on macOS
+and Windows.
 
 [![CI](https://github.com/different2/local-project-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/different2/local-project-hub/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+## What it does
+
+- **One window for every dashboard.** Each project gets its own tab — select
+  one in the sidebar, then start, stop, restart, or open it in a real browser
+  from the toolbar.
+- **Waits until the dashboard actually answers.** The Hub polls the URL until
+  the server responds, then shows the page — no blank pane, no guessed
+  success.
+- **Finds the dashboard URL for you.** Most servers print their address when
+  they start; the Hub reads it from the output and fills it in. Leave the URL
+  field blank and it looks after itself.
+- **Handles port conflicts.** If another program already holds a project's
+  port, the Hub spots it and offers to end that process — or leaves it alone.
+  Nothing is killed without asking.
+- **Remembers each project.** Folder, command, environment, options — saved
+  per project and reused on every launch.
+- **Updates itself.** The Hub checks for new releases in the background and
+  tells you when one exists; installing is always your call.
+
+Your projects stay exactly where they are. The Hub runs the startup command
+you configure, from the folder you point it at, and never touches your
+projects' source, virtual environments, or dependencies.
 
 ## Download
 
 Grab the latest installer from
 [Releases](https://github.com/different2/local-project-hub/releases):
 
-| Platform | File | Notes |
+| Platform | File | Install |
 |---|---|---|
-| macOS | `LocalProjectHub-macOS-*.dmg` | Open the disk image, drag the app to Applications |
-| Windows | `LocalProjectHub-Windows-*.msi` | Double-click to install |
+| macOS 12+ | `Local.Project.Hub-<version>.dmg` | Open the disk image, drag the app to Applications |
+| Windows | `Local.Project.Hub-<version>.msi` | Double-click the installer |
 
-No Python installation is needed to *run* the Hub. You do need the relevant
-runtime installed for the projects you register (Python for Python projects,
-Node for Node projects).
+> **Read this before your first launch.** The installers are not code-signed
+> yet — that needs paid certificates — so your OS will warn the first time:
+>
+> - **macOS:** if macOS says it cannot check the app for malicious software,
+>   Control-click (right-click) the app and choose **Open → Open**. This is
+>   needed once; it can come back after an update.
+> - **Windows:** if SmartScreen shows *"Windows protected your PC"*, click
+>   **More info → Run anyway**.
 
-> **Windows note:** the installer is not code-signed yet, so SmartScreen shows
-> "Windows protected your PC". Click **More info → Run anyway**. Code signing
-> needs a paid certificate; see [Signing](#signing) below.
+## Requirements
 
-## Run from source
+- The Hub itself needs **nothing installed** — no Python, no runtimes.
+- Your projects need their own tooling, as usual: the Hub runs the command
+  you give it and does not install or manage dependencies.
+- The macOS build needs macOS 12 or newer.
 
-```bash
-./run.sh          # uses ./.hubenv if present, else $PATH python3
-```
+## Using it
 
-Or set up the venv once (recommended — avoids PATH surprises):
+1. **Add a project** — press **+ Add** in the toolbar. Give it a display name,
+   the project folder, and the startup command (for example
+   `python3 server.py 8471`, `npm run dev`, or `go run .`). Leave **Dashboard
+   URL** blank for most projects: if the server prints its address, the Hub
+   detects it.
+2. **Open it** — click the project in the sidebar. If it isn't running, the
+   Hub starts it, and the dashboard opens in a tab once the server answers.
+3. **Drive it** — **Start**, **Stop**, **Restart**, and **Open in browser**
+   act on the project you are viewing. Everything a project prints appears in
+   the **log drawer** at the bottom; toggle it with **Logs**.
 
-```bash
-python3 -m venv .hubenv
-.hubenv/bin/pip install PySide6 PySide6-Addons PySide6-Essentials Pillow
-.hubenv/bin/python main.py
-```
+Worth knowing:
 
-## Tests
+- Adding a project never starts it, and opening the Hub never starts anything
+  by itself. A project runs when you click it, press Start, or tick **Start
+  automatically when the hub opens** on it.
+- Desktop apps get launched in their own window instead of a tab.
+- The Hub's own tab is a short getting-started page; reopen it via the app
+  menu's **Show Overview** if you close it.
 
-```bash
-python3 tests/run_all.py
-```
+## Updating
 
-53 tests across 6 suites. The GUI suites bind fixed ports, so they run
-serially — `run_all.py` handles that and is what CI calls.
+**Help → Check for Updates…** shows the newest release; **Download and
+Install** fetches the installer, verifies the download against its published
+checksum, and opens it. On macOS, drag the new copy over the old one; on
+Windows, the installer runs. Your projects and settings are untouched.
 
 ## Where your data lives
 
@@ -62,92 +95,14 @@ serially — `run_all.py` handles that and is what CI calls.
 
 Updating or uninstalling the Hub never modifies a registered project.
 
-## Building the installers
+## Problems or feedback
 
-Briefcase builds each platform on its own OS, so the Windows installer is
-produced by GitHub Actions rather than locally:
-
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-The tagged release builds the macOS `.dmg` and Windows `.msi` in parallel and
-attaches them to the release, which is also what the in-app updater checks.
-
-To test packaging **without** cutting a release, run the workflow by hand:
-
-```bash
-gh workflow run CI --ref main
-```
-
-Both platform builds run and upload their installers as downloadable artifacts.
-Nothing is published: only a `v*` tag creates a release, so a manual run can
-never ship anything. This exists because the build jobs were previously
-reachable only via a tag, which meant a broken packaging change could not be
-discovered except by spending a release on it.
-
-To build locally on macOS:
-
-```bash
-pip install briefcase
-briefcase create macOS && briefcase build macOS && briefcase package macOS -p dmg
-```
-
-`-p dmg` is the packaging format (`-p/--packaging-format` takes `zip`, `dmg` or
-`pkg`). A GUI app already defaults to `dmg`, but state it so the command does
-not depend on that default. Note there is no `--dmg` flag — briefcase rejects
-it, and a build script that used it would fail.
-
-Icons are regenerated from source art with:
-
-```bash
-python3 tools/make_icons.py path/to/artwork.png
-```
-
-## Signing
-
-Unsigned builds work but trigger OS trust warnings. For a signed release you
-need:
-
-- **macOS** — an Apple Developer account (paid). Sign with
-  `briefcase package macOS -i "Developer ID Application: …"`; notarization
-  then runs as part of packaging once credentials are configured. There is no
-  `--notarize` flag — `--no-notarize` opts out, which is the default when no
-  identity is available.
-- **Windows** — an Authenticode code-signing certificate (paid)
-
-Certificates and passwords must never be committed; they belong in CI secrets.
-
-## Contributing
-
-Contributions are welcome. Please run `python3 tests/run_all.py` before opening
-a pull request, and keep platform-specific code inside `hub/platform.py` so the
-rest of the app stays OS-agnostic.
-
-Found a bug? Use **Help → Report a Problem** in the app — it writes a report
-with the version and your OS, and deliberately contains none of your project
-data. Or open an
-[issue](https://github.com/different2/local-project-hub/issues/new).
-
-## Layout
-
-```
-main.py                app entry point
-hub/
-  store.py             project registry (JSON) + validation
-  process_manager.py   process spawn / stop / status / log capture
-  readiness.py         TCP + HTTP readiness polling
-  window.py            main window: sidebar, tabs, log drawer
-  project_dialog.py    add/edit project form
-  platform.py          every OS difference, isolated here
-  updater.py           in-app update check against GitHub Releases
-  diagnostics.py       error reports (no project data by design)
-  launch_at_login.py   opt-in launch at login, per platform
-tools/
-  make_icons.py        resize + wrap the approved artwork
-tests/                 run with python3 tests/run_all.py
-```
+**Help → Report a Problem…** builds a report with the app version, your OS,
+and the recent log — deliberately none of your project data — and can save it
+or open a pre-filled issue. Or open an
+[issue](https://github.com/different2/local-project-hub/issues/new) directly.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Working on the Hub itself (running from source, tests,
+packaging, releases)? See [DEVELOPMENT.md](DEVELOPMENT.md).
