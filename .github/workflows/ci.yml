@@ -27,7 +27,7 @@ jobs:
     # QtWebEngine window and each is isolated into its own process (running the
     # file in a single process segfaults at Qt shutdown with zero tests
     # reported -- that is what the isolation is for, so it cannot simply be
-    # dropped). 14 suites together land near 30 minutes on this Mac and more on
+    # dropped). 15 suites together land near 30 minutes on this Mac and more on
     # a CI runner, so a 35-minute cap killed the job before any output was
     # written, twice.
     timeout-minutes: 50

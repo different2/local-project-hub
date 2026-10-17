@@ -79,7 +79,7 @@ set — they never ship.
 python3 tests/run_all.py
 ```
 
-- **14 suites, run serially**: the GUI suites bind fixed ports on 127.0.0.1
+- **15 suites, run serially**: the GUI suites bind fixed ports on 127.0.0.1
   and cannot run concurrently — `run_all.py` serialises them and is what CI
   calls. A full run takes about half an hour on the author's Mac, more on CI
   runners.
@@ -101,6 +101,7 @@ hub/
   readiness.py           TCP + HTTP readiness polling
   urldetect.py           reads the dashboard URL from a server's output
   detect_type.py         project type detection (web/static/desktop/cli)
+  detect_command.py      proposes a start command by reading a project folder
   window.py              main window: sidebar, tabs, log drawer
   project_dialog.py      add/edit project form
   platform.py            every OS difference, isolated here
