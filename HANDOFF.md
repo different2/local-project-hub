@@ -22,6 +22,20 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
   tests and `test_urldetect` by 2, see below). The scratch briefcase build
   also finished green with the pinned requires (PySide6 6.7.3 trio + pyobjc
   12.2.2 — exactly what v0.3.8 ships).
+- **v0.4.0 release in progress (2026-10-17, evening)**: `main` at `b184bdd`
+  carries the command auto-detection + File… flow + dialog text diet, and
+  the fix for a newly-found silent bug — "Check for Updates" died as a
+  TypeError inside a Qt slot and did nothing on every branch, in every
+  build so far (found by a real user click; `test_window_e2e.py`'s
+  `test_check_for_updates_always_reports` reproduced it before the fix).
+  Commits pushed; the CI test run was in flight at writing — **the v0.4.0
+  tag was NOT pushed yet: push it once that run is green** (`git tag v0.4.0
+  && git push origin v0.4.0`), then the tag build publishes both
+  installers. The user must install 0.4.0 **manually** once: the app he
+  runs (0.3.7) contains the broken check and can never offer him anything;
+  from 0.4.0 onward the in-app check works. Release notes: see the draft in
+  `~/.hermes/cache/scratch/lph-verify/release-notes-0.4.0.md` (still to be
+  applied to the release after publish).
 - **Pinned dependency sets** (move together — see DEVELOPMENT.md
   "Dependency versions"):
   - `briefcase==0.4.6` — CI build jobs; local `.buildenv` matches
