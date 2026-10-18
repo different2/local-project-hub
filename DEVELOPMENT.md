@@ -101,7 +101,7 @@ hub/
   readiness.py           TCP + HTTP readiness polling
   urldetect.py           reads the dashboard URL from a server's output
   detect_type.py         project type detection (web/static/desktop/cli)
-  detect_command.py      proposes a start command by reading a project folder
+  detect_command.py      proposes a start command by reading a folder or file
   window.py              main window: sidebar, tabs, log drawer
   project_dialog.py      add/edit project form
   platform.py            every OS difference, isolated here

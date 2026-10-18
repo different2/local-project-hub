@@ -13,10 +13,10 @@ and Windows.
 - **One window for every dashboard.** Each project gets its own tab — select
   one in the sidebar, then start, stop, restart, or open it in a real browser
   from the toolbar.
-- **Fills in the startup command.** Point the Hub at a project folder and it
-  recognises the common project types — Node, Python, Go, Rust, a plain HTML
-  site — and fills in the command that starts them. You can always edit what
-  it suggests.
+- **Fills in the startup command.** Point the Hub at a project folder — or at
+  the file that starts it — and it fills in the command that runs the project
+  (Node, Python, Go, Rust, a plain HTML page). You can always edit what it
+  suggests.
 - **Waits until the dashboard actually answers.** The Hub polls the URL until
   the server responds, then shows the page — no blank pane, no guessed
   success.
@@ -62,10 +62,10 @@ Grab the latest installer from
 ## Using it
 
 1. **Add a project** — press **+ Add** in the toolbar and give it a display
-   name and the project folder. The Hub reads the folder and fills in the
-   startup command for the project types it recognises (Node, Python, Go,
-   Rust, plain HTML) — adjust it if needed. Leave **Dashboard URL** blank for
-   most projects: if the server prints its address, the Hub detects it.
+   name and the project folder — or press **File…** and pick the script that
+   starts it. The Hub reads what you chose and fills in the startup command —
+   adjust it if needed. Leave **Dashboard URL** blank for most projects: if
+   the server prints its address, the Hub detects it.
 2. **Open it** — click the project in the sidebar. If it isn't running, the
    Hub starts it, and the dashboard opens in a tab once the server answers.
 3. **Drive it** — **Start**, **Stop**, **Restart**, and **Open in browser**

@@ -1,12 +1,12 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-16, late night. A fresh session should start from this
+_Last written: 2026-10-17, evening. A fresh session should start from this
 file alone: read it, run `git log --oneline -15`, then work the open threads
 below. Long sessions on this project have died mid-task on provider errors, so
 state belongs here and in commits — not only in chat. Developer docs (run,
 test, package, release) live in DEVELOPMENT.md; the README is user-facing._
 
-## Where things stand (verified 2026-10-16, late night)
+## Where things stand (verified 2026-10-17, evening)
 
 - `main` clean and in sync; the tip contains the evening's work: the briefcase
   and GUI dependency pins, the docs split, two test-infrastructure fixes, and
@@ -17,10 +17,11 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
   verified the pinned build path end-to-end — apart from three one-off flaky
   Windows failures, explained in the open threads.
 - Full local suite: **14/14 green** (exit 0) on the pre-feature tree, and
-  **15/15 green** (exit 0) on the current tree — the new
-  `tests/test_detect_command.py` (18 tests) covers the command detector
-  below. The scratch briefcase build also finished green with the pinned
-  requires (PySide6 6.7.3 trio + pyobjc 12.2.2 — exactly what v0.3.8 ships).
+  **15/15 green** (exit 0) on the 16th's tree. The 17th's dialog polish (see
+  below) grew `tests/test_detect_command.py` to 31 tests and `test_urldetect`
+  by 2 — the full suite was re-running at writing. The scratch briefcase
+  build also finished green with the pinned requires (PySide6 6.7.3 trio +
+  pyobjc 12.2.2 — exactly what v0.3.8 ships).
 - **Pinned dependency sets** (move together — see DEVELOPMENT.md
   "Dependency versions"):
   - `briefcase==0.4.6` — CI build jobs; local `.buildenv` matches
@@ -42,7 +43,7 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
 - Cutting a release = bump `version` in `pyproject.toml`, commit, then
   `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
-## What the last work stretch (Oct 14–16) finished
+## What the last work stretch (Oct 14–17) finished
 
 - Windows port-conflict handling end-to-end (netstat, PowerShell, bind-wait,
   traceback recovery).
@@ -94,8 +95,19 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
   not a hub project's working dir). Safety: a suggestion only ever fills an
   EMPTY command field and replaces only its own previous suggestion — a typed
   or recorded command is never rewritten (spec §6); files are read, never
-  executed (§7). New suite (18 tests) + one dialog test in `test_urldetect.py`;
-  suite count 14 → 15.
+  executed (§7). New suite (18 tests — 31 after the 17th's polish) + dialog
+  tests in `test_urldetect.py`; suite count 14 → 15.
+- **Add-dialog polish (Oct 17, from user feedback)**: every help paragraph
+  cut to one line or deleted (auto-detection had made them noise; the
+  type-override paragraph is gone entirely — its dropdown is
+  self-explanatory), and the folder row gained a **File…** button — pick one
+  file and the folder (its parent) and command (from the file itself)
+  follow: `.py` → `python3 <file>` (a venv still becomes the interpreter;
+  `manage.py` gets `runserver`), `.html` → served, `.sh`/`.command` →
+  `bash`, `.go` → `go run`, bare `.js` → `node` (inside a package project
+  its own script wins), manifests → the folder recipes; names with spaces
+  are quoted. Same §6 rule: never rewrites a typed or recorded command.
+  `detect_command` is now 31 tests; `test_urldetect` +2.
 
 ## Open threads, in priority order
 
