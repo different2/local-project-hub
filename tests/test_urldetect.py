@@ -434,6 +434,42 @@ def test_add_dialog_suggests_the_command_from_the_folder() -> None:
         )
 
 
+def test_picking_a_file_sets_folder_and_command() -> None:
+    """The File… flow: one file, and folder + command follow from it."""
+    from hub.project_dialog import ProjectDialog
+
+    with tempfile.TemporaryDirectory() as d:
+        script = Path(d) / "obs_live.py"
+        script.write_text("print('x')\n", encoding="utf-8")
+        dlg = ProjectDialog()
+        dlg._apply_file_choice(str(script))
+        assert dlg.wd.text().strip() == d, dlg.wd.text()
+        assert dlg.command.text().strip() == "python3 obs_live.py", dlg.command.text()
+
+
+def test_picking_a_file_replaces_only_an_earlier_suggestion() -> None:
+    """A file may override the folder's guess, never a command the record has."""
+    from hub.project_dialog import ProjectDialog
+
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "app.py").write_text("pass\n", encoding="utf-8")
+        (Path(d) / "requirements.txt").write_text("flask\n", encoding="utf-8")
+        (Path(d) / "other.py").write_text("pass\n", encoding="utf-8")
+
+        folder_guessed = ProjectDialog(base_dir=d)
+        assert folder_guessed.command.text().strip() == "python3 app.py"
+        folder_guessed._apply_file_choice(str(Path(d) / "other.py"))
+        assert folder_guessed.command.text().strip() == "python3 other.py", (
+            "the picked file did not outrank the folder's own suggestion"
+        )
+
+        kept = ProjectDialog(record={"command": "python3 mine.py", "working_dir": d})
+        kept._apply_file_choice(str(Path(d) / "other.py"))
+        assert kept.command.text().strip() == "python3 mine.py", (
+            "the File… flow rewrote a command the record already had"
+        )
+
+
 def test_removing_a_project_closes_its_tab(tmp: Path) -> None:
     """Removing a project must take its tab with it.
 

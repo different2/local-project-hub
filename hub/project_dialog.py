@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from . import store as store_mod
 from .detect_command import suggest_command as _suggest_command
+from .detect_command import suggest_for_file as _suggest_for_file
 from .detect_type import DISPLAY, detect as _detect_type
 
 _ICONS = ["🌐", "🧪", "📈", "🎮", "🎨", "🧭", "🛠️", "📚", "🤖", "⬜"]
@@ -62,22 +63,21 @@ class ProjectDialog(QDialog):
         form.addRow("Icon / description", self._wrap(row_icon))
 
         self.wd = QLineEdit(self._record.get("working_dir", base_dir))
-        browse = QPushButton("Choose…")
+        browse = QPushButton("Folder…")
+        browse.setToolTip("Choose the project's folder")
         browse.clicked.connect(self._pick_dir)
+        pick_file = QPushButton("File…")
+        pick_file.setToolTip("Choose the file that starts the project")
+        pick_file.clicked.connect(self._pick_file)
         row_wd = QHBoxLayout()
         row_wd.addWidget(self.wd)
         row_wd.addWidget(browse)
+        row_wd.addWidget(pick_file)
         form.addRow("Project folder", self._wrap(row_wd))
 
         self.interp = QLineEdit(self._record.get("interpreter", ""))
-        self.interp.setPlaceholderText(
-            "optional — e.g. .venv/bin/python, /opt/homebrew/bin/node, C:\\Python312\\python.exe"
-        )
-        interp_help = QLabel(
-            "Any executable that should run your command. Leave blank to use whatever "
-            "the command names itself (python3, node, npm, go…). Use it for a "
-            "project's own virtual environment or a specific toolchain."
-        )
+        self.interp.setPlaceholderText("optional — .venv/bin/python, /opt/homebrew/bin/node")
+        interp_help = QLabel("Only if the command must run through a specific interpreter.")
         interp_help.setWordWrap(True)
         interp_help.setStyleSheet("color: gray; font-size: 11px;")
         interp_box = QVBoxLayout()
@@ -92,9 +92,8 @@ class ProjectDialog(QDialog):
         form.addRow("Startup command", self.command)
 
         cmd_help = QLabel(
-            "Runs from the project folder. When the Hub recognises the project's "
-            "files it fills this in for you — Python, Node, Go, Rust, or a shell "
-            "script. Edit freely."
+            "Filled in from the folder or a picked file when the Hub recognises "
+            "it — edit freely."
         )
         cmd_help.setWordWrap(True)
         cmd_help.setStyleSheet("color: gray; font-size: 11px;")
@@ -115,9 +114,8 @@ class ProjectDialog(QDialog):
         self.args = QLineEdit(self._record.get("args", ""))
         self.args.setPlaceholderText("--no-open")
         args_help = QLabel(
-            "Appended to the command. Useful for flags you do not want to retype: "
-            "most servers have one that stops them opening their own browser, since "
-            "the Hub already shows the dashboard in its own tab."
+            "Appended to the command — e.g. a flag that stops the server opening "
+            "its own browser."
         )
         args_help.setWordWrap(True)
         args_help.setStyleSheet("color: gray; font-size: 11px;")
@@ -130,11 +128,7 @@ class ProjectDialog(QDialog):
 
         self.url = QLineEdit(self._record.get("url", ""))
         self.url.setPlaceholderText("leave blank to detect it automatically")
-        url_help = QLabel(
-            "Optional. Most servers print their address when they start — the Hub "
-            "reads that and fills this in for you. Set it only if your project "
-            "starts silently."
-        )
+        url_help = QLabel("Only needed if the project starts silently.")
         url_help.setWordWrap(True)
         url_help.setStyleSheet("color: gray; font-size: 11px;")
         url_box = QVBoxLayout()
@@ -165,18 +159,7 @@ class ProjectDialog(QDialog):
         self.type_override.addItems(["detect automatically", "web", "static", "desktop", "cli"])
         current = self._record.get("type_override") or ""
         self.type_override.setCurrentText(current or "detect automatically")
-        override_help = QLabel(
-            "Override only if the detection above is wrong. Your choice is saved and "
-            "reused; leave it on automatic otherwise."
-        )
-        override_help.setWordWrap(True)
-        override_help.setStyleSheet("color: gray; font-size: 11px;")
-        ov_box = QVBoxLayout()
-        ov_box.setContentsMargins(0, 0, 0, 0)
-        ov_box.setSpacing(2)
-        ov_box.addWidget(self.type_override)
-        ov_box.addWidget(override_help)
-        form.addRow("Project type", self._wrap(ov_box))
+        form.addRow("Project type", self.type_override)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
@@ -231,14 +214,14 @@ class ProjectDialog(QDialog):
         if not self.command.text().strip():
             self.detection.setText("Type a command to see what the Hub detected…")
             return
-        bits = [f"Type: {det.type} (confidence {det.confidence:.0%})"]
+        bits = [f"{det.type} ({det.confidence:.0%})"]
         if det.framework:
-            bits.append(f"framework: {det.framework}")
+            bits.append(det.framework)
         if det.port:
-            bits.append(f"port: {det.port}")
+            bits.append(f"port {det.port}")
         bits.append(f"will be shown as {det.display}")
         if det.type == "unknown":
-            bits.append("— the Hub could not tell; it will just run this command")
+            bits.append("— could not tell; it will just run it")
         self.detection.setText(self._with_suggestion_note(" · ".join(bits)))
 
     def _mark_command_touched(self) -> None:
@@ -289,10 +272,10 @@ class ProjectDialog(QDialog):
         self._suggested_interpreter = ""
 
     def _with_suggestion_note(self, text: str) -> str:
-        """Credit the folder detector while its suggestion is still intact."""
+        """Credit the detector while its suggestion is still intact."""
         s = self._suggestion
         if s and self.command.text().strip() == s.command:
-            return f"{text} · command suggested from {s.source}"
+            return f"{text} · from {s.source}"
         return text
 
     @staticmethod
@@ -307,6 +290,47 @@ class ProjectDialog(QDialog):
         )
         if d:
             self.wd.setText(d)
+
+    def _pick_file(self) -> None:
+        """Pick one file; its folder and startup command follow from it."""
+        start = self.wd.text().strip() or os.path.expanduser("~")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose the file that starts the project", start
+        )
+        if path:
+            self._apply_file_choice(path)
+
+    def _apply_file_choice(self, path: str) -> None:
+        """Load one file: set its folder, then suggest from the file itself.
+
+        Split from _pick_file so tests can drive it without a file dialog.
+        The picked file outranks the folder's own guess — it replaces only
+        an empty field or an earlier suggestion of ours, never a command the
+        user wrote (spec §6).
+        """
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent and parent != self.wd.text().strip():
+            self.wd.setText(parent)  # may fill a folder suggestion first
+        if self._command_touched:
+            return
+        current = self.command.text().strip()
+        old = self._suggestion
+        if current and (old is None or current != old.command):
+            return  # a real user command is never replaced
+        try:
+            sugs = _suggest_for_file(path)
+        except Exception:
+            return  # a suggestion is advisory; it must never break the dialog
+        sug = sugs[0] if sugs else None
+        self._suggestion = sug
+        self._clear_suggested_interpreter()
+        if sug is None:
+            return
+        self.command.setText(sug.command)
+        if sug.interpreter and not self.interp.text().strip():
+            self.interp.setText(sug.interpreter)
+            self._suggested_interpreter = sug.interpreter
+        self._refresh_detection()
 
     def result_record(self) -> dict | None:
         if self.result() != QDialog.Accepted:

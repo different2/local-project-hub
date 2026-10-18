@@ -203,6 +203,118 @@ def test_unrecognised_folder_yields_nothing() -> None:
         assert dc.suggest_commands(d) == []
 
 
+# ---------- a specific file (the dialog's File… button) ----------
+
+
+def test_a_picked_python_file_is_the_start_command() -> None:
+    """A file the user points at needs no manifest to be believed."""
+    with tempfile.TemporaryDirectory() as d:
+        script = Path(d) / "obs_live.py"
+        script.write_text("print('x')\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "python3 obs_live.py", got
+        assert got[0].interpreter == "", got
+
+
+def test_a_picked_python_file_in_a_venv_becomes_the_interpreter() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / ".venv" / "bin").mkdir(parents=True)
+        (Path(d) / ".venv" / "bin" / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+        script = Path(d) / "tool.py"
+        script.write_text("pass\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "tool.py", got
+        assert got[0].interpreter == ".venv/bin/python", got
+
+
+def test_a_picked_manage_py_gets_runserver() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        script = Path(d) / "manage.py"
+        script.write_text("pass\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "python3 manage.py runserver", got
+
+
+def test_a_picked_html_file_is_served() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        page = Path(d) / "demo.html"
+        page.write_text("<html></html>\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(page))
+        assert got and got[0].command == "python3 -m http.server 8000", got
+
+
+def test_a_picked_shell_or_command_file_runs_with_bash() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        for name in ("deploy.sh", "start_dashboard.command"):
+            script = Path(d) / name
+            script.write_text("echo hi\n", encoding="utf-8")
+            got = dc.suggest_for_file(str(script))
+            assert got and got[0].command == f"bash {name}", (name, got)
+
+
+def test_a_picked_go_file_runs_with_go_run() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        script = Path(d) / "server.go"
+        script.write_text("package main\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "go run server.go", got
+
+
+def test_a_picked_js_file_without_a_package_is_node() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        script = Path(d) / "server.js"
+        script.write_text("// x\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "node server.js", got
+
+
+def test_a_picked_js_file_inside_a_node_project_uses_its_script() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"package.json": '{"scripts": {"dev": "vite"}}'})
+        script = Path(d) / "server.js"
+        script.write_text("// x\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "npm run dev", got
+
+
+def test_picking_the_manifest_means_the_whole_project() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"package.json": '{"scripts": {"dev": "vite"}}'})
+        got = dc.suggest_for_file(str(Path(d) / "package.json"))
+        assert got and got[0].command == "npm run dev", got
+
+
+def test_an_unrecognised_file_falls_back_to_the_folder() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(
+            Path(d),
+            {"requirements.txt": "flask\n", "app.py": "pass\n", "notes.txt": "hi\n"},
+        )
+        got = dc.suggest_for_file(str(Path(d) / "notes.txt"))
+        assert got and got[0].command == "python3 app.py", got
+
+
+def test_an_unrecognised_file_in_a_plain_folder_yields_nothing() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "notes.txt").write_text("hi\n", encoding="utf-8")
+        assert dc.suggest_for_file(str(Path(d) / "notes.txt")) == []
+
+
+def test_a_picked_file_name_with_spaces_is_quoted() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        script = Path(d) / "my server.py"
+        script.write_text("pass\n", encoding="utf-8")
+        got = dc.suggest_for_file(str(script))
+        assert got and got[0].command == "python3 'my server.py'", got
+
+
+def test_suggest_for_file_rejects_things_that_are_not_files() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        assert dc.suggest_for_file(str(Path(d))) == [], "a folder is not a file"
+    assert dc.suggest_for_file("") == []
+    assert dc.suggest_for_file(None) == []
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):

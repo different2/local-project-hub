@@ -21,6 +21,7 @@ An empty result means "nothing recognisable", never "this project is broken".
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -122,6 +123,110 @@ def suggest_command(folder) -> Suggestion | None:
     """The single best suggestion for a folder, or None."""
     got = suggest_commands(folder)
     return got[0] if got else None
+
+
+# Picking a file is stronger evidence than scanning a folder: the user named
+# the thing that should start, so no manifest is needed to believe it. These
+# are the file kinds whose start command follows from the file alone.
+_RUNNER_BY_SUFFIX = {".sh": "bash {file}", ".command": "bash {file}", ".go": "go run {file}"}
+
+# Picking one of these means "this whole project", so the folder recipes
+# answer better than the file's own name does.
+_MANIFEST_NAMES = (
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "pipfile",
+    "go.mod",
+    "cargo.toml",
+)
+
+
+def suggest_for_file(path) -> list[Suggestion]:
+    """Candidate commands for one file the user picked (the dialog's File…).
+
+    The parent folder still supplies context — its virtualenv, or a
+    package.json that owns the file — but an unrecognised file simply falls
+    back to the folder's own suggestions. Nothing here opens or executes the
+    file; this is the same read-only inspection as the folder recipes.
+    """
+    try:
+        p = Path(str(path))
+        if not p.is_file():
+            return []
+    except (OSError, ValueError, TypeError):
+        return []
+    base = p.parent
+    name = p.name
+    lower = name.lower()
+    suffix = p.suffix.lower()
+
+    if lower in _MANIFEST_NAMES:
+        return suggest_commands(base)
+
+    quoted = shlex.quote(name)
+    interpreter, venv = _venv_python(base)
+
+    if suffix == ".py":
+        run = f"{quoted} runserver" if lower == "manage.py" else quoted
+        if interpreter:
+            command = run
+        else:
+            command = f"python3 {run}"
+        evidence = [f"you picked {name}"]
+        if interpreter:
+            evidence.append(f"a virtual environment exists ({venv})")
+        return [
+            Suggestion(
+                command=command,
+                interpreter=interpreter,
+                source=f"the file you picked ({name})",
+                evidence=evidence,
+                confidence=0.7,
+            )
+        ]
+
+    if suffix in (".html", ".htm"):
+        # A page needs an address to be shown in a tab; serve its folder.
+        return [
+            Suggestion(
+                command="python3 -m http.server 8000",
+                source=f"the page you picked ({name})",
+                evidence=[
+                    f"you picked {name}",
+                    "its folder is served with Python's built-in HTTP server",
+                ],
+                confidence=0.6,
+            )
+        ]
+
+    if suffix in (".js", ".mjs", ".cjs"):
+        folder = suggest_commands(base)
+        if folder and folder[0].command.split()[0] in _PM_COMMAND:
+            # A JS file in a dev-server project: the project script is the way in.
+            return folder
+        return [
+            Suggestion(
+                command=f"node {quoted}",
+                source=f"the file you picked ({name})",
+                evidence=[f"you picked {name}"],
+                confidence=0.5,
+            )
+        ]
+
+    if suffix in _RUNNER_BY_SUFFIX:
+        return [
+            Suggestion(
+                command=_RUNNER_BY_SUFFIX[suffix].format(file=quoted),
+                source=f"the file you picked ({name})",
+                evidence=[f"you picked {name}"],
+                confidence=0.6,
+            )
+        ]
+
+    # Anything else: the folder may still know better.
+    return suggest_commands(base)
 
 
 # ---------- detectors ----------
