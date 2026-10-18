@@ -233,7 +233,14 @@ class HubWindow(QMainWindow):
             except Exception as e:  # never let a check crash the app
                 result["error"] = f"Update check failed: {e}"
 
-        def _done():
+        def _done(res=None):
+            # `res` is the worker's return value -- unused here, since the
+            # check records its outcome in the `result` dict instead. The
+            # parameter must exist anyway: _run_offline_safe calls
+            # done(worker.result), and without it every branch of this check
+            # died as a TypeError inside a Qt slot, which swallows exceptions
+            # -- the feature silently did nothing (found by a real click,
+            # 2026-10-17).
             err, release = result["error"], result["release"]
             if err:
                 self.status.clearMessage()
@@ -405,8 +412,11 @@ class HubWindow(QMainWindow):
         """Run blocking work off the GUI thread, then apply the result.
 
         Kept tiny on purpose: a QThread wrapper would be more code than the
-        two call sites need, and a crash inside `work` is reported rather than
-        taking the window down with it.
+        two call sites need, and a crash inside `work` -- or inside `done` --
+        is reported rather than silently swallowed.
+
+        Contract: `done` is called on the GUI thread as `done(worker.result)`,
+        receiving whatever `work()` returned.
         """
         from PySide6.QtCore import QThread
 
@@ -431,7 +441,16 @@ class HubWindow(QMainWindow):
                 self.status.clearMessage()
                 QMessageBox.warning(self, "Something went wrong", worker.failure)
                 return
-            done(worker.result)
+            try:
+                done(worker.result)
+            except Exception as e:  # noqa: BLE001 - a callback bug must not vanish
+                # Qt swallows exceptions raised inside slots, which is how a
+                # callback-signature mistake made Check for Updates silently do
+                # nothing for weeks. Report it like any other failure.
+                self.status.clearMessage()
+                QMessageBox.warning(
+                    self, "Something went wrong", f"{type(e).__name__}: {e}"
+                )
 
         worker.finished.connect(_finish)
         worker.start()

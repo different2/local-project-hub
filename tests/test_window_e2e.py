@@ -140,6 +140,53 @@ def make_window(tmp: Path) -> tuple[HubWindow, int]:
     return w, port
 
 
+def test_check_for_updates_always_reports(tmp: Path) -> None:
+    """Check for Updates must always end in something visible.
+
+    Regression found by a real click (2026-10-17): the check's completion
+    callback was written as a zero-argument `_done()`, but _run_offline_safe
+    calls `done(worker.result)`. The TypeError landed in Qt's slot handling,
+    which swallows exceptions -- so every branch of the check (error, up to
+    date, update available) silently did NOTHING. This drives the real worker
+    plumbing with the network call stubbed.
+    """
+    import hub.window as wm
+    from PySide6.QtWidgets import QMessageBox
+
+    from hub.updater import Release
+
+    st = sm.Store(tmp / "registry.json")
+    w = HubWindow(st)
+    w.show()
+    original_fetch = wm.fetch_latest_release
+    original_info = QMessageBox.information
+    original_offer = w._offer_update
+    seen = []
+    try:
+        # An available update: the offer dialog must be reached.
+        wm.fetch_latest_release = lambda: Release(version="v99.0.0")
+        w._offer_update = lambda release: seen.append(("offer", release.version))
+        w._check_for_updates()
+        assert _wait_for(lambda: seen), "an available update produced no dialog"
+
+        # Up to date: an information dialog must appear.
+        wm.fetch_latest_release = lambda: Release(version="v0.0.1")
+        QMessageBox.information = staticmethod(
+            lambda *args, **kwargs: seen.append(
+                ("info", args[2] if len(args) > 2 else "")
+            )
+        )
+        w._check_for_updates()
+        assert _wait_for(lambda: any(kind == "info" for kind, _ in seen)), (
+            "'up to date' produced no dialog"
+        )
+    finally:
+        wm.fetch_latest_release = original_fetch
+        QMessageBox.information = original_info
+        w._offer_update = original_offer
+        w.close()
+
+
 def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
     """Selecting a project opens ITS OWN tab and loads its dashboard there."""
     w, port = make_window(tmp)

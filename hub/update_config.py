@@ -19,6 +19,7 @@ RELEASE_API_URL = (
 # browser path; saving a report file always works.
 ISSUES_URL = "https://github.com/different2/local-project-hub/issues/new"
 
-# Optional: when true, the app checks for updates in the background on start
-# and only *notifies*; installation stays user-initiated (release spec §5).
+# Reserved for a future background check (nothing reads this yet): when
+# implemented, the app will check for updates on start and only *notify*;
+# installation stays user-initiated (release spec §5).
 BACKGROUND_CHECK = True
