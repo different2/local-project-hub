@@ -16,12 +16,12 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
 - Latest CI runs on `main`: green — including a workflow-dispatch run that
   verified the pinned build path end-to-end — apart from three one-off flaky
   Windows failures, explained in the open threads.
-- Full local suite: **14/14 green** (exit 0) on the pre-feature tree, and
-  **15/15 green** (exit 0) on the 16th's tree. The 17th's dialog polish (see
-  below) grew `tests/test_detect_command.py` to 31 tests and `test_urldetect`
-  by 2 — the full suite was re-running at writing. The scratch briefcase
-  build also finished green with the pinned requires (PySide6 6.7.3 trio +
-  pyobjc 12.2.2 — exactly what v0.3.8 ships).
+- Full local suite: **14/14 green** (exit 0) on the pre-feature tree;
+  **15/15 green** (exit 0) on the 16th's tree and again on the 17th's tree
+  after the dialog polish (which grew `tests/test_detect_command.py` to 31
+  tests and `test_urldetect` by 2, see below). The scratch briefcase build
+  also finished green with the pinned requires (PySide6 6.7.3 trio + pyobjc
+  12.2.2 — exactly what v0.3.8 ships).
 - **Pinned dependency sets** (move together — see DEVELOPMENT.md
   "Dependency versions"):
   - `briefcase==0.4.6` — CI build jobs; local `.buildenv` matches
