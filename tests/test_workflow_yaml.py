@@ -221,6 +221,37 @@ def test_gui_dependency_pins_are_coordinated() -> None:
     )
 
 
+def test_tag_check_gets_the_tag_on_every_shell() -> None:
+    """The version guard must receive the tag on EVERY runner OS.
+
+    The step read `"${GITHUB_REF_NAME}"`, which bash expands but PowerShell
+    does not: on the Windows runner it arrived empty, the guard refused with
+    "no tag given to check", and the first tag build that ever ran this step
+    (v0.4.0, 2026-10-18) died there with every Windows build step skipped
+    behind it. The step was added after v0.3.8 shipped, which is why no
+    earlier tag build could have found it. `${{ github.ref_name }}` is
+    expanded by the runner itself, so both shells see the tag.
+    """
+    lines = [
+        ln.strip()
+        for ln in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if "check_tag_version.py" in ln and not ln.strip().startswith("#")
+    ]
+    assert len(lines) == 2, (
+        f"expected the tag check in both build jobs, found {len(lines)}"
+    )
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "${GITHUB_REF_NAME}" not in text, (
+        "bash-only expansion: PowerShell expands GITHUB_REF_NAME to nothing, "
+        "so the tag check fails on the Windows runner. Use the "
+        "runner-expanded form (dollar-brace-brace github.ref_name)."
+    )
+    for ln in lines:
+        assert '"${{ github.ref_name }}"' in ln, (
+            f"tag check does not pass the runner-expanded tag: {ln!r}"
+        )
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):
