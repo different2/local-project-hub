@@ -1,170 +1,156 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-17, evening. A fresh session should start from this
-file alone: read it, run `git log --oneline -15`, then work the open threads
-below. Long sessions on this project have died mid-task on provider errors, so
-state belongs here and in commits — not only in chat. Developer docs (run,
-test, package, release) live in DEVELOPMENT.md; the README is user-facing._
+_Last written: 2026-10-18, night (release night). A fresh session should start
+from this file alone: read it, run `git log --oneline -15`, then work the open
+threads below. Long sessions on this project have died mid-task on provider
+errors, so state belongs here and in commits — not only in chat. Developer
+docs (run, test, package, release) live in DEVELOPMENT.md; the README is
+user-facing._
 
-## Where things stand (verified 2026-10-17, evening)
+## Where things stand (verified 2026-10-18, night)
 
-- `main` clean and in sync; the tip contains the evening's work: the briefcase
-  and GUI dependency pins, the docs split, two test-infrastructure fixes, and
-  the new command detector (`git log -1` for the hash).
-- **v0.3.8 is the latest release** with both installers attached
-  (`Local.Project.Hub-0.3.8.dmg` 262 MB, `.msi` 109 MB). No newer release cut.
-- Latest CI runs on `main`: green — including a workflow-dispatch run that
-  verified the pinned build path end-to-end — apart from three one-off flaky
-  Windows failures, explained in the open threads.
-- Full local suite: **14/14 green** (exit 0) on the pre-feature tree;
-  **15/15 green** (exit 0) on the 16th's tree and again on the 17th's tree
-  after the dialog polish (which grew `tests/test_detect_command.py` to 31
-  tests and `test_urldetect` by 2, see below). The scratch briefcase build
-  also finished green with the pinned requires (PySide6 6.7.3 trio + pyobjc
-  12.2.2 — exactly what v0.3.8 ships).
-- **v0.4.0 release in progress (2026-10-17, evening)**: `main` at `b184bdd`
-  carries the command auto-detection + File… flow + dialog text diet, and
-  the fix for a newly-found silent bug — "Check for Updates" died as a
-  TypeError inside a Qt slot and did nothing on every branch, in every
-  build so far (found by a real user click; `test_window_e2e.py`'s
-  `test_check_for_updates_always_reports` reproduced it before the fix).
-  Commits pushed; the CI test run was in flight at writing — **the v0.4.0
-  tag was NOT pushed yet: push it once that run is green** (`git tag v0.4.0
-  && git push origin v0.4.0`), then the tag build publishes both
-  installers. The user must install 0.4.0 **manually** once: the app he
-  runs (0.3.7) contains the broken check and can never offer him anything;
-  from 0.4.0 onward the in-app check works. Release notes: see the draft in
-  `~/.hermes/cache/scratch/lph-verify/release-notes-0.4.0.md` (still to be
-  applied to the release after publish).
-- **Pinned dependency sets** (move together — see DEVELOPMENT.md
-  "Dependency versions"):
-  - `briefcase==0.4.6` — CI build jobs; local `.buildenv` matches
-  - `PySide6==6.7.3`, `PySide6-Essentials==6.7.3`, `PySide6-Addons==6.7.3`,
-    `Pillow==11.3.0` — CI test + build jobs, pyproject `requires`, both venvs
+- `main` clean and in sync at `4a4d6ff` (the update-dialog feature).
+- **v0.4.1 is the latest release** — both installers, notes applied
+  (`Local.Project.Hub-0.4.1.dmg` 262 MB, `.msi` 172 MB). **v0.4.0 is also
+  live** — the first release whose in-app update check actually works.
+- **The user runs 0.3.7 and must install by hand once** — the check in 0.3.7
+  is one of the bugs fixed in 0.4.0, so it can never offer anything itself.
+  From 0.4.0 onward the in-app check works; 0.4.1 adds the visible dialog.
+  He was told 2026-10-18 with download links (0.4.0 vs 0.4.1 both fine);
+  which one he installs is not yet known.
+- Full local suite: **15/15 green, 186 tests** (exit 0; `full-suite-6.out` in
+  `~/.hermes/cache/scratch/lph-verify/`) on the released tree.
+- CI tonight: push-run `39196659931` green; tag run `39198718961` green (all
+  four jobs) — the pipeline that failed twice on the first v0.4.0 attempt
+  now runs clean end to end. The whole 0.4.1 release ran unattended via
+  watcher chain (auto-tag on green → notes on publish).
 
-## How CI and releases work here
+## Release night 2026-10-17→18: three silent traps, fixed and guarded
 
-- Push to `main` → the suite runs on **Windows only** (deliberate); serial,
-  50-minute cap (GUI suites bind fixed ports and must not overlap).
-- Tag `v<version>` → builds the macOS `.dmg` and Windows `.msi` with the
-  pinned toolchain, then publishes both to the release. The tag must equal the
-  `pyproject.toml` version or `tools/check_tag_version.py` fails in seconds.
-- Manual dispatch (`gh workflow run CI --ref main`) → builds both installers
-  as artifacts and **never publishes**.
-- Workflow guards in `tests/test_workflow_yaml.py`: trigger integrity,
-  dispatch-never-publishes, briefcase pinned, GUI set pinned and coordinated
-  with pyproject's `requires`.
-- Cutting a release = bump `version` in `pyproject.toml`, commit, then
-  `git tag vX.Y.Z && git push origin vX.Y.Z`.
+The first v0.4.0 tag attempt exposed three "nothing happens" failure modes.
+All are fixed and pinned (a test or a standing rule; also in the skill
+`github-tag-release-traps`):
 
-## What the last work stretch (Oct 14–17) finished
+1. **A tag on a `[skip ci]` commit builds nothing.** The auto-tagger tagged
+   HEAD; by then HEAD was a docs commit carrying `[skip ci]` (docs-only
+   commits use it here), so GitHub created NO run at all. Rule: always tag
+   the release commit by explicit sha (`git tag vX.Y.Z <sha>`) and verify a
+   run appeared.
+2. **`"${GITHUB_REF_NAME}"` is empty under PowerShell.** The tag/version
+   guard step passed on macOS (bash) but died on the Windows runner at its
+   first step ("no tag given to check") — the step was added after v0.3.8,
+   so v0.4.0 was the first tag build to run it. Fixed to
+   `${{ github.ref_name }}` in both build jobs + new
+   `test_tag_check_gets_the_tag_on_every_shell` (negative-controlled: failed
+   before, passes after).
+3. **Watcher chains can grab the OLD run.** A chain finding "the run for tag
+   v0.4.0" by branch prefix matched the previous failed run the moment the
+   new tag was pushed, before the new run existed. Match by run id
+   (discovered after the push) or by `headSha` + branch together.
 
-- Windows port-conflict handling end-to-end (netstat, PowerShell, bind-wait,
-  traceback recovery).
-- Packaging pipeline: `-p msi`/`-p dmg` fixes, release created before upload,
-  publish permissions, `--adhoc-sign`, dispatch builds that never publish.
-- Update downloads digest-verified (against the real v0.3.8); tag/version
-  guard verified live with a throwaway mismatched tag; MSI UpgradeCode trap
-  documented in `pyproject.toml`; Gatekeeper guidance in the macOS updater.
-- **Briefcase pinned to 0.4.6** in CI (+ guard test, negative-controlled); a
-  dispatch run then verified the pinned build path green.
-- **GUI dependency set pinned** to the PySide6 6.7.3 trio + Pillow 11.3.0
-  across CI, `pyproject.toml` `requires`, and both local venvs (+ a
-  coordinated-pins guard, negative-controlled three ways). Why 6.7.3: it is
-  what both shipped builds already contain, it supports Python 3.9 and 3.11,
-  and it is the newest PySide6 the bundle can install — briefcase installs app
-  dependencies with `pip --platform macosx_11_0_<arch>`, and 6.8+ ships only
-  macOS-12+/13+/14+ wheels (see DEVELOPMENT.md "Dependency versions").
-- **README split stayed clean**: the "Updates itself" bullet was removed on
-  request; README is user-facing, dev material lives in DEVELOPMENT.md.
-- **Welcome pane text fixed** — it claimed selecting never starts a project;
-  it now matches behaviour (clicking starts it if not already running; adding
-  never starts it).
-- **Two test-infrastructure fixes** (found this evening):
-  1. `test_two_projects_get_two_tabs` raised `NameError` on *every* run since
-     commit `1c9a454` (stale `port_a`/`port_b` refs after the ephemeral-port
-     refactor), silently: no PASS/FAIL line → the isolated runner counted
-     0/0 → the teardown-crash rule turned the suite green. The only symptom
-     was "12 passed" for a 13-test file. Test repaired; window suite reports
-     13/13.
-  2. `tests/run_all.py`: "exited nonzero without ever reporting" now counts as
-     a failure (traceback attached) instead of neither-passed-nor-failed —
-     verified against a deliberately broken fake suite, which now goes red
-     instead of green.
-- **Test-server orphan cleanup**: 38 leaked `srv_*.py` test servers (`ppid=1`,
-  under test temp dirs, oldest ~1½ days) were terminated; the leak itself is
-  an open thread below. The user's live dashboards and the Hub were not
-  touched.
-- **Start-command auto-detection** (user request, inspired by Dev-Router —
-  github.com/Angelov1314/Dev-Router, MIT): new `hub/detect_command.py` fills
-  the Add dialog's startup command from the project folder. Recipes:
-  `package.json` scripts dev > start > serve (package manager from the
-  lockfile: npm `npm run dev`, yarn/pnpm/bun spell it directly); Python —
-  `manage.py` → `manage.py runserver` (Django), then app/server/main.py, a
-  manifest required, and a project venv becomes the **interpreter** field
-  (the command then drops its own `python3` — the interpreter runs it);
-  `go.mod` → `go run .`; `Cargo.toml` → `cargo run`; root `index.html` →
-  `python3 -m http.server 8000` (the web view needs a URL). `__main__.py` is
-  deliberately skipped (`python3 -m pkg` needs the parent directory, which is
-  not a hub project's working dir). Safety: a suggestion only ever fills an
-  EMPTY command field and replaces only its own previous suggestion — a typed
-  or recorded command is never rewritten (spec §6); files are read, never
-  executed (§7). New suite (18 tests — 31 after the 17th's polish) + dialog
-  tests in `test_urldetect.py`; suite count 14 → 15.
-- **Add-dialog polish (Oct 17, from user feedback)**: every help paragraph
-  cut to one line or deleted (auto-detection had made them noise; the
-  type-override paragraph is gone entirely — its dropdown is
-  self-explanatory), and the folder row gained a **File…** button — pick one
-  file and the folder (its parent) and command (from the file itself)
-  follow: `.py` → `python3 <file>` (a venv still becomes the interpreter;
-  `manage.py` gets `runserver`), `.html` → served, `.sh`/`.command` →
-  `bash`, `.go` → `go run`, bare `.js` → `node` (inside a package project
-  its own script wins), manifests → the folder recipes; names with spaces
-  are quoted. Same §6 rule: never rewrites a typed or recorded command.
-  `detect_command` is now 31 tests; `test_urldetect` +2.
+Timeline: v0.4.0 live at `42dec72` (tag run `39107315507`, published
+2026-10-18 07:27Z, notes applied).
+
+## Release 0.4.1 (2026-10-18 evening): the visible update flow — DONE
+
+User request: clicking "check for updates" showed only "checking for
+updates" in the bottom bar and nothing else; he wanted "an obvious
+notification box in the center of the screen" that says "checking for
+updates", then "all up to date" if true, and downloads it otherwise.
+Shipped in `4a4d6ff`:
+
+- `hub/update_dialog.py` (new) — one reusable dialog per window: checking
+  (busy bar) → up to date | version available (Download and Install /
+  Later / release page) → downloading with a real byte-progress bar →
+  error. Non-modal, centred on the screen, re-revealed on every state so
+  a result can never be missed.
+- `hub/updater.py` — `download_asset()`: chunked download with
+  `on_progress(done, total)`; a short read vs the advertised length is an
+  error (it replaced `urlretrieve`: no progress, no length check).
+- `hub/window.py` — the check/offer/download flow drives the dialog (the
+  old offer message box is gone); download progress crosses threads via
+  counters the worker bumps and a GUI-thread timer reads; re-clicking
+  while busy re-reveals the dialog instead of stacking another;
+  `_update_busy` guards re-entry; `_finish` still reports callback crashes
+  (the 0.4.0 lesson).
+- Tests: `test_check_for_updates_always_reports` reworked to assert each
+  outcome lands in the dialog; +2 window tests (all dialog states incl.
+  the download signal; download hand-off + corrupt-download launches
+  nothing); +1 updater test (`download_asset` progress + short-read, via a
+  file:// fixture, no network). `test_window_e2e` 14→16, `test_updater`
+  15→16, suite total 186.
+- Released unattended: push-run `39196659931` green → tag `v0.4.1` at
+  `4a4d6ff` → tag run `39198718961` green → notes applied
+  (`release-notes-0.4.1.md` in the scratch dir).
+
+## Still-true rationale from earlier stretches
+
+- **Pinned dependency sets** (move together — DEVELOPMENT.md "Dependency
+  versions"): `briefcase==0.4.6` (CI build jobs, `.buildenv`);
+  `PySide6==6.7.3` + `PySide6-Essentials==6.7.3` + `PySide6-Addons==6.7.3` +
+  `Pillow==11.3.0` (CI test + build jobs, pyproject `requires`, both venvs).
+  Why 6.7.3: what both shipped builds contain, supports Py 3.9/3.11, newest
+  PySide6 the `macosx_11_0` bundle target can install (6.8+ ships only
+  macosx_12_0+ wheels).
+- **Docs split**: README is user-facing (the "Updates itself" bullet stays
+  OUT, per request); DEVELOPMENT.md = run/test/package/release; this file =
+  state.
+- **Start-command auto-detection** (`hub/detect_command.py`, 31 tests):
+  folder or File… → command; npm/yarn/pnpm/bun chosen by lockfile; Python
+  venv becomes the interpreter; `manage.py` → `runserver`; go/cargo/html/sh
+  recipes; §6 rule — suggestions only fill EMPTY fields and replace only
+  their own earlier suggestion, never a typed/recorded command; files are
+  read, never executed. `__main__.py` deliberately skipped.
+- **Add-dialog diet** (user feedback): help text cut to one line or deleted;
+  File… button on the folder row.
+- **Test-runner truthfulness**: `tests/run_all.py` counts "exited nonzero
+  without reporting" as a failure — found when a `NameError` hid for weeks
+  as "12 passed" on a 13-test file. The repair also fixed
+  `test_two_projects_get_two_tabs` itself.
+- **Orphan sweep**: 38 leaked `srv_*.py` test servers cleaned 2026-10-16;
+  the leak is still open (thread 4). Sweep rule: only `ppid=1` under
+  `/var/folders` — never the user's live dashboards or the Hub.
 
 ## Open threads, in priority order
 
-1. **"One-click update" smoothness across macOS/Windows** — the user's goal.
-   Remaining: unsigned-build warnings need paid certificates (messaging only
-   until then); macOS drag-to-Applications self-replace deliberately deferred;
-   digest protection only from 0.3.8 onward (informational); the Windows
-   update dialog says nothing about SmartScreen — whether an app-downloaded
-   MSI even triggers it is unverified; check before "fixing".
+1. **"One-click update" smoothness** — the user's goal. Status now: 0.4.0+
+   checks, offers, downloads and opens the installer, with visible progress.
+   Remaining: the single manual install off 0.3.7 (user's to do, any time);
+   unsigned-build warnings need paid certificates (messaging only until
+   then); macOS drag-to-Applications is deliberate (self-replace deferred);
+   whether an app-downloaded MSI triggers SmartScreen is unverified — check
+   before "fixing".
 2. **pyobjc-framework-Cocoa is still unpinned** in `requires` (same class of
-   risk as the others were; raised with the user 2026-10-16 — pending).
+   risk as the others were; resolves to 12.2.2 = what v0.3.8 shipped; raised
+   with the user 2026-10-16 — still pending).
 3. **Windows `test_urldetect` flakiness watch** — three different tests have
-   now failed once each on Windows: `test_detected_suppress_flag_is_applied_to_the_launch`
-   (run 38917634716), `test_finish_time_output_is_drained_before_deciding_conflict`
-   (run 39001253618) and `test_bind_failure_names_the_port_from_the_command`
-   (run 39004119373, "test server did not start (state=running)"). All three
-   were green on adjacent runs, and all three failed while several CI runs
-   were executing concurrently — looks load/timing-shaped. Standing rule for
-   now: do not stack CI runs; if it recurs anyway, start here.
-4. **The test suite leaks `srv_*.py` test-server children on some paths** —
-   38 orphans (`ppid=1`, test temp dirs, oldest ~1½ days) were found and
-   cleaned up on 2026-10-16; at least one teardown path still leaks.
-   Investigate next. (When sweeping: only `ppid=1` under `/var/folders` —
-   never the user's live dashboards or the Hub.)
-5. **MSI upgrade (replace-in-place) is still only verified from Briefcase's
-   WiX template** — run one real Windows update before calling Windows done.
+   failed once each on Windows (`test_detected_suppress_flag_is_applied_to_the_launch`
+   run 38917634716; `test_finish_time_output_is_drained_before_deciding_conflict`
+   run 39001253618; `test_bind_failure_names_the_port_from_the_command` run
+   39004119373). All green on adjacent runs; all during stacked CI runs.
+   Standing rule: do not stack CI runs. Tonight's sequential chain ran clean.
+4. **The test suite leaks `srv_*.py` test-server children on some teardown
+   paths** — 38 orphans found and cleaned on 2026-10-16; at least one path
+   still leaks. Investigate next.
+5. **MSI upgrade (replace-in-place) verified only from Briefcase's WiX
+   template** — run one real Windows update before calling Windows done.
 6. **macOS-target ↔ Qt ceiling (FYI / decision)** — the bundle's macOS target
-   (macosx_11_0) is what caps PySide6 at 6.7.3 today. Raising the macOS target
-   would unlock newer Qt — a product decision, documented in DEVELOPMENT.md.
+   (`macosx_11_0`) is what caps PySide6 at 6.7.3 today; raising the target
+   would unlock newer Qt (product decision, documented in DEVELOPMENT.md).
 
 ## Environment on this machine
 
 - `.hubenv` — Python 3.9.6, dev/test env: PySide6 trio 6.7.3, Pillow 11.3.0.
 - `.buildenv` — Python 3.11.10, local packaging env: same GUI set, briefcase
-  0.4.6 (the 6.12-era split wheels `PySide6_WebEngine`/`PySide6_Pdf` removed).
+  0.4.6.
 - `gh` CLI at `~/.local/bin/gh` (not on `PATH`), authed as `different2`.
 - Single suites run directly (`.hubenv/bin/python tests/test_workflow_yaml.py`);
-  GUI suites go through `tests/run_all.py`, which isolates each test in its own
-  process (`--test=NAME` runs one).
+  GUI suites go through `tests/run_all.py`, which isolates each test in its
+  own process (`--test=NAME` runs one).
 - Data dirs: installed app `~/Library/Application Support/LocalProjectHub/`;
   source runs use `./.hubstate` (`LOCAL_PROJECT_HUB_HOME`).
-- Docs: user-facing `README.md`, developer `DEVELOPMENT.md`; design context in
-  `SPEC.md`, `PHASE1_AUDIT.md`, `hub-project-real-app-design.rtf`.
+- Docs: user-facing `README.md`, developer `DEVELOPMENT.md`; design context
+  in `SPEC.md`, `PHASE1_AUDIT.md`, `hub-project-real-app-design.rtf`.
 
 ## Verify claims quickly
 
@@ -172,7 +158,7 @@ test, package, release) live in DEVELOPMENT.md; the README is user-facing._
 git fetch && git status -sb                    # clean, in sync
 QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 15 suites, serial, ~30 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.3.8 = Latest
+~/.local/bin/gh release list                   # v0.4.1 = Latest
 ~/.local/bin/gh run list --branch main --limit 5
 ```
 

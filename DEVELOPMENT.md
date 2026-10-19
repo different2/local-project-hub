@@ -149,15 +149,31 @@ produced by GitHub Actions rather than locally:
    build jobs run `tools/check_tag_version.py` first, which fails in seconds
    if they disagree (a mismatch ships an app that offers the same update
    forever).
-2. Commit, then tag and push:
+2. Commit, then tag the **release commit by explicit sha** and push:
 
    ```bash
-   git tag vX.Y.Z && git push origin vX.Y.Z
+   git tag vX.Y.Z <sha> && git push origin vX.Y.Z
    ```
+
+   Two traps make tag pushes silently do nothing (both hit for real on
+   2026-10-18 — see HANDOFF "release night"):
+
+   - A `[skip ci]` marker in the tagged commit's message suppresses the whole
+     build. Docs-only commits here use that marker — never let one be the tag
+     target (hence the explicit sha; never tag bare HEAD without checking
+     `git log -1`).
+   - After pushing, **verify a run appeared** (`gh run list --limit 5`). No
+     run means it was skipped, not queued.
 
 3. CI builds the macOS `.dmg` and Windows `.msi` and attaches both to the
    release. That release is also the update channel the in-app updater checks,
    so the next Check for Updates picks it up.
+
+   Workflow steps run under bash on macOS but **PowerShell on Windows** —
+   reference the tag as `${{ github.ref_name }}` in `run:` lines, never
+   `"${GITHUB_REF_NAME}"` (that expands to nothing under PowerShell; it is
+   exactly how the tag/version guard died at its first step on the Windows
+   runner). `tests/test_workflow_yaml.py` pins the correct form.
 
 ## Signing
 
