@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run the whole test suite, one suite at a time.
 
-The GUI suites bind fixed ports so failures stay reproducible, which means
-they must NOT run concurrently — two at once makes every test fail because
-the port is taken. This runner goes through them serially and prints one
-summary, so `python3 tests/run_all.py` is always safe.
+The GUI suites create QtWebEngine views, which cannot run concurrently — two
+runs at once make tests fail in port-shaped ways — and a couple still bind
+fixed ports so failures stay reproducible. This runner goes through them
+serially and prints one summary, so `python3 tests/run_all.py` is always safe.
 
 Exit code is 0 only when every suite passes.
 """
@@ -12,6 +12,7 @@ Exit code is 0 only when every suite passes.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -247,13 +248,83 @@ def discover_test_ports() -> tuple[int, ...]:
 TEST_PORTS = discover_test_ports()
 
 
-def wait_for_ports_free(timeout_s: float = 30.0) -> None:
-    """Block until the test ports are released (or the timeout passes)."""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if not any(port_in_use(p) for p in TEST_PORTS):
+def port_owners(ports) -> set[int]:
+    """PIDs LISTENING on these ports (empty where lsof is unavailable).
+
+    -sTCP:LISTEN matters: without it lsof also names every process merely
+    connected TO the port — the Hub's own webview included — and the caller
+    would then kill innocent bystanders instead of the server.
+    """
+    if IS_WINDOWS:
+        return set()
+    args = ["lsof", "-nP", "-sTCP:LISTEN", "-t"]
+    for port in ports:
+        args.append(f"-iTCP:{port}")
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    pids: set[int] = set()
+    for token in out.stdout.split():
+        try:
+            pids.add(int(token))
+        except ValueError:
+            pass
+    return pids
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def stop_process(pid: int, wait_s: float = 1.5) -> None:
+    """SIGTERM the holder, then SIGKILL it if it will not go."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sig)
+        except OSError:
             return
-        time.sleep(0.5)
+        deadline = time.time() + wait_s
+        while time.time() < deadline:
+            if not _pid_alive(pid):
+                return
+            time.sleep(0.05)
+
+
+def free_test_ports(timeout_s: float = 8.0) -> None:
+    """Make the ports this run needs free instead of waiting them out.
+
+    The suites take their ports from the OS (helpers.reserve_port), so a busy
+    test port is nearly always something OUTSIDE this run: a Hub project left
+    running (obs_live.py sits on 8787), a stray demo server, a leftover child.
+    Waiting for such a process to exit on its own cost the full timeout before
+    every isolated test — 30s x ~40 tests — for a port it was never going to
+    release. Ask the OS who holds it and stop that process instead. What is
+    left is a short wait for the socket to actually go away, and it ends the
+    moment the port frees.
+    """
+    deadline = time.time() + timeout_s
+    while True:
+        busy = [p for p in TEST_PORTS if port_in_use(p)]
+        if not busy:
+            return
+        stopped = []
+        for pid in sorted(port_owners(busy)):
+            if pid in (os.getpid(), os.getppid()):
+                continue
+            stop_process(pid)
+            stopped.append(pid)
+        if stopped:
+            names = ", ".join(str(pid) for pid in stopped)
+            emit(f"  freed test ports {busy}: stopped pid {names}\n")
+        if time.time() >= deadline:
+            emit(f"  (warning) test ports still busy after {timeout_s:g}s: {busy}\n")
+            return
+        time.sleep(0.25)
 
 
 # How long to let a previous process's Chromium helper exit before starting the
@@ -299,7 +370,7 @@ def run_isolated_test(path: Path, test_name: str, attempts: int = 3):
         if started or code == 0:
             return code, out, n_pass, n_fail
         # died before running anything: wait for the helper to exit and retry
-        wait_for_ports_free(timeout_s=10)
+        free_test_ports(timeout_s=10)
     return code, out, n_pass, n_fail
 
 
@@ -322,7 +393,7 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
         # Wait for the ports this test may use to be released by the previous
         # process. Without this, a predecessor's server still holds the port,
         # the new server fails to bind, and the test fails — or worse, crashes.
-        wait_for_ports_free()
+        free_test_ports()
         code, out, n_pass, n_fail = run_isolated_test(path, test_name)
         passed += n_pass
         failed += n_fail
@@ -423,7 +494,7 @@ def main() -> int:
         # not reported", "dashboard did not come back") that reads like a logic
         # bug. That is what macOS CI was hitting.
         if results:
-            wait_for_ports_free()
+            free_test_ports()
         try:
             if name in ISOLATE_TESTS:
                 code, passed, failed, out = run_isolated(path)
@@ -454,8 +525,10 @@ def main() -> int:
     total = len(results)
     emit(f"\n{ok}/{total} suites passed")
     if ok != total:
-        emit("A busy port is the usual cause when GUI suites fail together -")
-        emit("check with: lsof -ti:8790,8791,8792,8793,8794,8782,8783,8799,8800,8801 | xargs kill")
+        emit("A busy port is the usual cause when GUI suites fail together.")
+        emit("The runner stops whatever holds a test port before each test;")
+        emit("if this persists, see what is still bound:")
+        emit("    lsof -nP -iTCP:8782-8830 -sTCP:LISTEN")
     return 0 if ok == total else 1
 
 

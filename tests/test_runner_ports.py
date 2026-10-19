@@ -76,6 +76,79 @@ def test_test_ports_are_derived_not_hardcoded() -> None:
     ), "8796 is tracked but no test uses it"
 
 
+def test_runner_stops_whatever_holds_a_test_port() -> None:
+    """A busy port is identified and its owner stopped, not waited out.
+
+    Waiting used to be the behaviour: the runner slept up to 30s before EVERY
+    isolated test because a Hub project (obs_live.py on 8787) never releases
+    its port on its own — ~40 tests x 30s of pure stall. The runner now asks
+    the OS who is listening and stops it, so the wait is only for the socket
+    to actually go away.
+    """
+    import subprocess
+    import time
+
+    probe = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import socket, time\n"
+            "s = socket.socket()\n"
+            "s.bind(('127.0.0.1', 0))\n"
+            "s.listen(1)\n"
+            "print(s.getsockname()[1], flush=True)\n"
+            "time.sleep(60)\n",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        port = int(probe.stdout.readline().strip())
+        assert run_all.port_in_use(port), "the probe did not take the port"
+        if run_all.IS_WINDOWS:
+            return  # no lsof: the runner falls back to waiting there
+        owners = run_all.port_owners([port])
+        assert probe.pid in owners, f"lsof did not name the holder: {owners}"
+
+        real = run_all.TEST_PORTS
+        run_all.TEST_PORTS = (port,)
+        try:
+            started = time.time()
+            run_all.free_test_ports()
+            took = time.time() - started
+        finally:
+            run_all.TEST_PORTS = real
+
+        assert took < 5, f"freeing a held port took {took:.1f}s — still waiting it out"
+        probe.wait(timeout=5)
+        assert probe.returncode is not None, "the holder was not stopped"
+        assert not run_all.port_in_use(port), "the port is still busy after the kill"
+    finally:
+        if probe.poll() is None:
+            probe.kill()
+            probe.wait()
+        probe.stdout.close()
+
+
+def test_runner_returns_at_once_when_nothing_holds_a_port() -> None:
+    """The common case must not sleep at all.
+
+    Every test in every GUI suite calls this, so a fixed sleep here is paid
+    ~40 times per run. With the ports free it has to return immediately.
+    """
+    import time
+
+    real = run_all.TEST_PORTS
+    run_all.TEST_PORTS = ()  # nothing to wait for, whatever is running
+    try:
+        started = time.time()
+        run_all.free_test_ports()
+        took = time.time() - started
+    finally:
+        run_all.TEST_PORTS = real
+    assert took < 0.5, f"an empty port list still cost {took:.2f}s"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
