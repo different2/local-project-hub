@@ -196,6 +196,11 @@ produced by GitHub Actions rather than locally:
    exactly how the tag/version guard died at its first step on the Windows
    runner). `tests/test_workflow_yaml.py` pins the correct form.
 
+4. Once the release is published (tag run green): apply the release notes
+   (`gh release edit vX.Y.Z --notes-file <file>`) and bump the README's
+   **Download** section — it is version-pinned on purpose, so the front page
+   always names a concrete latest build.
+
 ## Signing
 
 Current builds are ad-hoc signed (macOS) and unsigned (Windows): they run, but

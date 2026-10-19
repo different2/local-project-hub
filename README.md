@@ -35,13 +35,14 @@ projects' source, virtual environments, or dependencies.
 
 ## Download
 
-Grab the latest installer from
-[Releases](https://github.com/different2/local-project-hub/releases):
+Latest version: **v0.4.2**
 
 | Platform | File | Install |
 |---|---|---|
-| macOS 12+ | `Local.Project.Hub-<version>.dmg` | Open the disk image, drag the app to Applications |
-| Windows | `Local.Project.Hub-<version>.msi` | Double-click the installer |
+| macOS 12+ | [`Local.Project.Hub-0.4.2.dmg`](https://github.com/different2/local-project-hub/releases/download/v0.4.2/Local.Project.Hub-0.4.2.dmg) | Open the disk image, drag the app to Applications |
+| Windows | [`Local.Project.Hub-0.4.2.msi`](https://github.com/different2/local-project-hub/releases/download/v0.4.2/Local.Project.Hub-0.4.2.msi) | Double-click the installer |
+
+Older versions: [Releases](https://github.com/different2/local-project-hub/releases).
 
 > **Read this before your first launch.** The installers are not code-signed
 > yet — that needs paid certificates — so your OS will warn the first time:
