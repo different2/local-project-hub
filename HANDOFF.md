@@ -21,7 +21,7 @@ user-facing._
     `OK version=v0.4.1`; `_ssl_context()` loads 117 CAs from the bundle's
     certifi while the default store still loads 0 (the negative control
     that proves the helper is what fixes it);
-  - local full suite: **15/15 suites green, 186 tests**
+  - local full suite: **15/15 suites green, 190 tests**
     (`full-suite-0.4.2.out` in the scratch dir);
   - tag `v0.4.2` → tag run `#39214811077` green, ALL FOUR JOBS; release
     notes applied; `releases/latest` = v0.4.2 (dmg 262,393,485 B; msi
