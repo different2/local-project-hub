@@ -1,51 +1,47 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-18, late night — **v0.4.2 is IN FLIGHT** (the TLS fix
-for the user's real "could not reach update server" report). A fresh session
-should start from this file alone: read it, run `git log --oneline -15`, then
-work the open threads below. Long sessions on this project have died mid-task
-on provider errors, so state belongs here and in commits — not only in chat.
-Developer docs (run, test, package, release) live in DEVELOPMENT.md; the
-README is user-facing._
+_Last written: 2026-10-19, early morning — **v0.4.2 IS LIVE** (the TLS fix
+for the user's real "could not reach update server" report; released and
+verified end to end 2026-10-19 07:43Z). A fresh session should start from
+this file alone: read it, run `git log --oneline -15`, then work the open
+threads below. Long sessions on this project have died mid-task on provider
+errors, so state belongs here and in commits — not only in chat. Developer
+docs (run, test, package, release) live in DEVELOPMENT.md; the README is
+user-facing._
 
-## Where things stand (verified 2026-10-18, late night)
+## Where things stand (verified 2026-10-19, early morning)
 
-- `main` clean at **`e1ea9d6`** — the 0.4.2 fix (TLS trust store + pyobjc
-  pin) — with this handoff refresh on top.
-- **The user's real click found a real bug, now fixed in tree.** Clicking
-  Check for Updates in his installed 0.4.0 returned "Could not reach the
-  update server" on a perfectly healthy connection. Root cause (reproduced
-  inside the shipped bundle): the app's Python had NO CA trust store, so
-  every HTTPS request died CERTIFICATE_VERIFY_FAILED. Full story and the
-  reproduction harness: the "TLS trust store" section below.
-- **v0.4.2 is IN FLIGHT at writing.** NEXT ACTION, in order, one step at a
-  time:
-  1. push-run for `e1ea9d6` is `#39211706715` — confirm it went green;
-  2. the local bundled-app probe must pass: rebuild with `briefcase build
-     macOS` (log: `~/.hermes/cache/scratch/lph-verify/briefcase-build.log`),
-     clone the built `.app` to the scratch dir, drop in
-     `~/.hermes/cache/scratch/lph-verify/probe_main.py`, run the stub
-     (`env -i HOME=$HOME PATH=/usr/bin:/bin .../MacOS/Local Project Hub`) —
-     expect `app_fetch_latest_release: OK` in `appcheck_result.json`;
-  3. local full suite green (`QT_QPA_PLATFORM=offscreen .hubenv/bin/python
-     tests/run_all.py`; log in the scratch dir);
-  4. then, and only then: `git tag v0.4.2 e1ea9d6 && git push origin
-     v0.4.2` (explicit sha — never HEAD on a `[skip ci]` docs commit),
-     verify a run appeared, and apply
-     `~/.hermes/cache/scratch/lph-verify/release-notes-0.4.2.md` once the
-     tag run is green.
-- **The user runs 0.4.0, which cannot self-update at all** (this very bug —
-  its check dies at TLS). v0.4.2 therefore needs ONE more manual install;
-  from 0.4.2 on, updates are genuinely in-app. He was told 2026-10-18
-  night. Assisted alternative if he wants the in-app ride before/while
-  updating: `launchctl setenv SSL_CERT_FILE /etc/ssl/cert.pem`, relaunch
-  the Hub, run the check (fetch + download + dmg hand-off should all
-  work), then `launchctl unsetenv SSL_CERT_FILE`. Untested as a flow —
-  offer it, don't spring it.
-- v0.4.1 remains the latest PUBLISHED release until v0.4.2's tag run lands.
-  (v0.4.1: both installers, notes applied; v0.4.0 live too.)
-- Local suite on the 0.4.1 tree was 15/15 green, 186 tests; the 0.4.2
-  re-run's result goes here when it lands.
+- `main` clean; the v0.4.2 fix is **`e1ea9d6`** (docs refresh commits
+  `7b97df6` and this one on top). Tag `v0.4.2` points at `e1ea9d6` by
+  design — tag the code, never a `[skip ci]` docs commit.
+- **v0.4.2 IS LIVE — released and verified end to end:**
+  - push-run for the fix commit: `#39211706715` green;
+  - the bundled-app probe PASSED in a fresh local rebuild: real
+    `fetch_latest_release()` from inside the built bundle returned
+    `OK version=v0.4.1`; `_ssl_context()` loads 117 CAs from the bundle's
+    certifi while the default store still loads 0 (the negative control
+    that proves the helper is what fixes it);
+  - local full suite: **15/15 suites green, 186 tests**
+    (`full-suite-0.4.2.out` in the scratch dir);
+  - tag `v0.4.2` → tag run `#39214811077` green, ALL FOUR JOBS; release
+    notes applied; `releases/latest` = v0.4.2 (dmg 262,393,485 B; msi
+    172,082,056 B; asset URL 200 unauthenticated).
+- **The user needs ONE more manual install** (0.4.0 cannot self-update —
+  its check dies at TLS): the v0.4.2 dmg from
+  `https://github.com/different2/local-project-hub/releases/latest`, drag
+  to Applications, exactly as before. From 0.4.2 on, updates are
+  genuinely in-app. Assisted alternative if he wants the in-app ride
+  before/while updating: `launchctl setenv SSL_CERT_FILE
+  /etc/ssl/cert.pem`, relaunch the Hub, run the check (fetch + download +
+  dmg hand-off should all work), then `launchctl unsetenv SSL_CERT_FILE`.
+  Untested as a flow — offer it, don't spring it. **Record the outcome of
+  his first real click on 0.4.2 here once known.**
+- **The user's real click found a real bug.** Clicking Check for Updates
+  in his installed 0.4.0 returned "Could not reach the update server" on a
+  perfectly healthy connection. Root cause (reproduced inside the shipped
+  bundle): the app's Python had NO CA trust store, so every HTTPS request
+  died CERTIFICATE_VERIFY_FAILED. Full story, scope and the reproduction
+  harness: the "TLS trust store" section below.
 
 ## 2026-10-18 late: "could not reach update server" — the bundle had no CA store
 
@@ -61,21 +57,24 @@ check maps that to "could not reach", so it read as a network problem.
 Scope: any installed build making this request on a Mac without a
 python.org-installed cert bundle (his included).
 
-Fix (`e1ea9d6`, ships in v0.4.2): the bundle ships `certifi` (pinned) and
+Fix (`e1ea9d6`, shipped in v0.4.2): the bundle ships `certifi` (pinned) and
 `hub/updater.py` builds its SSL context from it (`_ssl_context()`, with the
 system CA files as fallback for source runs); a TLS failure now reports a
 certificate problem, not the user's connection. Guards: trust-store-is-real
-(>=40 loaded CAs — the old bundle loaded ZERO), fallback test, message
-split, and the ci.yml↔pyproject pin coordination test.
+(>=40 loaded CAs), fallback test, message split, and the ci.yml↔pyproject
+pin coordination test.
 
 Reproduction harness (reusable, in `~/.hermes/cache/scratch/lph-verify/`):
 `hubprobe.app` is a CLONE of the installed app with `main.py` replaced by a
-probe — run the clone, never the real app. `appcheck_result.json` =
-post-click failure run; `ca_probe_result.json` = pre-fix store counts
-(default store: 0 CAs; the helper: ImportError — the negative control).
-To verify any future build the same way: `briefcase build macOS`, clone
-`build/hub/macos/app/Local Project Hub.app`, drop in `probe_main.py`, run
-the stub with a clean env.
+probe — run the clone, never the real app. `appcheck_result.json` = the
+user's failure reproduced in the OLD bundle (copy: `*_prefix.txt`); the NEW
+bundle gives `app_fetch_latest_release: OK` with default-store CAS still 0
+and helper CAS 117. To verify any future build the same way: `briefcase
+build macOS`, clone `build/hub/macos/app/Local Project Hub.app`, drop in
+`probe_main.py`, run the stub with a clean env (`env -i HOME=$HOME
+PATH=/usr/bin:/bin`). Probe caveat: a probe without a `main()` function
+makes the app abort into a modal dialog after writing its JSON — data lands
+first and the process must be killed; `probe_main.py` exits cleanly.
 
 ## Release night 2026-10-17→18: three silent traps, fixed and guarded
 
@@ -129,11 +128,9 @@ Shipped in `4a4d6ff`:
   outcome lands in the dialog; +2 window tests (all dialog states incl.
   the download signal; download hand-off + corrupt-download launches
   nothing); +1 updater test (`download_asset` progress + short-read, via a
-  file:// fixture, no network). `test_window_e2e` 14→16, `test_updater`
-  15→16, suite total 186.
+  file:// fixture, no network). Suite total 186.
 - Released unattended: push-run `39196659931` green → tag `v0.4.1` at
-  `4a4d6ff` → tag run `39198718961` green → notes applied
-  (`release-notes-0.4.1.md` in the scratch dir).
+  `4a4d6ff` → tag run `39198718961` green → notes applied.
 
 ## Still-true rationale from earlier stretches
 
@@ -167,32 +164,32 @@ Shipped in `4a4d6ff`:
 
 ## Open threads, in priority order
 
-1. **Finish the v0.4.2 release** (the NEXT ACTION block above) and get the
-   user onto it — one more manual install is unavoidable; offer the
-   `SSL_CERT_FILE` workaround for an assisted in-app ride.
-2. **"One-click update" smoothness** — after 0.4.2 is installed, his update
-   click is then the FIRST genuinely end-to-end run (offer → TLS-clean
-   download with progress → dmg hand-off); watch that it behaves.
-   Remaining beyond that: unsigned-build warnings need paid certificates
-   (messaging only until then); macOS drag-to-Applications is deliberate
-   (self-replace deferred); whether an app-downloaded MSI triggers
-   SmartScreen is unverified — check before "fixing".
+1. **Get the user onto v0.4.2** (see Where-things-stand): his one manual
+   install, then his first real check+download on a fixed build — watch it
+   and record the outcome here.
+2. **"One-click update" smoothness** — his update click on 0.4.2 is the
+   FIRST genuinely end-to-end run (offer → TLS-clean download with progress
+   → dmg hand-off). Remaining beyond that: unsigned-build warnings need
+   paid certificates (messaging only until then); macOS
+   drag-to-Applications is deliberate (self-replace deferred); whether an
+   app-downloaded MSI triggers SmartScreen is unverified — check before
+   "fixing".
 3. **Windows `test_urldetect` flakiness watch** — three different tests have
    failed once each on Windows (`test_detected_suppress_flag_is_applied_to_the_launch`
    run 38917634716; `test_finish_time_output_is_drained_before_deciding_conflict`
    run 39001253618; `test_bind_failure_names_the_port_from_the_command` run
    39004119373). All green on adjacent runs; all during stacked CI runs.
-   Standing rule: do not stack CI runs.
+   Standing rule: do not stack CI runs. (Clean through the v0.4.2 runs.)
 4. **The test suite leaks `srv_*.py` test-server children on some teardown
    paths** — 38 orphans found and cleaned on 2026-10-16; at least one path
-   still leaks (none visible at the 2026-10-18 late-night check).
+   still leaks (none visible at the 2026-10-19 late-night sweep either).
    Investigate next.
 5. **MSI upgrade (replace-in-place) verified only from Briefcase's WiX
    template** — run one real Windows update before calling Windows done.
 6. **macOS-target ↔ Qt ceiling (FYI / decision)** — the bundle's macOS target
    (`macosx_11_0`) is what caps PySide6 at 6.7.3 today; raising the target
    would unlock newer Qt (product decision, documented in DEVELOPMENT.md).
-   (DONE since the list was first written: the pyobjc pin, was thread 2.)
+   (DONE since the list was first written: the pyobjc pin; the TLS fix.)
 
 ## Environment on this machine
 
@@ -213,12 +210,13 @@ Shipped in `4a4d6ff`:
 
 ```bash
 git fetch && git status -sb                    # clean, in sync
-QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 15 suites, serial, ~30 min
+QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 15 suites, serial, ~15 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.4.2 = Latest once released
+~/.local/bin/gh release list                   # v0.4.2 = Latest (verified)
 ~/.local/bin/gh run list --branch main --limit 5
 # bundle probe (see the TLS section): rebuild, clone the built .app,
-# drop in probe_main.py, run the stub — app_fetch_latest_release must say OK
+# drop in probe_main.py, run the stub — app_fetch_latest_release must say
+# OK (this is how 0.4.2 was proven)
 ```
 
 _Maintenance: at the end of a work session, move finished items out of Open
