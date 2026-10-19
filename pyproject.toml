@@ -7,7 +7,7 @@ project_name = "local-project-hub"
 # upgrading — each release installs alongside the last instead of over it,
 # with no error to explain why. The same applies to renaming the app key.
 bundle = "local.projecthub"
-version = "0.4.1"
+version = "0.4.2"
 url = "https://github.com/different2/local-project-hub"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -28,11 +28,22 @@ icon = "assets/icon"
 requires = [
     "PySide6-Essentials==6.7.3",
     "PySide6-Addons==6.7.3",
+    # The app's own HTTPS (update check + download) verifies against a CA
+    # bundle that always exists. The bundle's Python has NO default trust
+    # store — its compiled-in paths point at the python.org framework
+    # location, which is not inside the app — so before this every HTTPS
+    # request died CERTIFICATE_VERIFY_FAILED and the update check said
+    # "Could not reach the update server" on a healthy connection (real
+    # click on 0.4.0, reproduced inside the bundle, 2026-10-18).
+    "certifi==2026.10.18",
     # macOS only: the About box's traffic lights cannot be controlled through Qt
     # (every window-button hint combination yields some set of buttons, never
     # close alone), so the real AppKit buttons are hidden via pyobjc. Guarded at
     # import time — the app runs unchanged where it is absent or not macOS.
-    "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
+    # Pinned 12.2.2: what the shipped 0.3.8/0.4.x bundles contain — a floating
+    # pin lets a rebuild silently change the AppKit behaviour the About box
+    # was verified against.
+    "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'",
 ]
 
 # Python 3.11+ has wheels for arm64 macOS; 3.9 (the dev interpreter) does not,

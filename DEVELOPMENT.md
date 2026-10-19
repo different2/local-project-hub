@@ -14,7 +14,8 @@ Or set up the venv once (recommended — avoids PATH surprises):
 
 ```bash
 python3 -m venv .hubenv
-.hubenv/bin/pip install "PySide6==6.7.3" "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "Pillow==11.3.0"
+.hubenv/bin/pip install "PySide6==6.7.3" "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "Pillow==11.3.0" "certifi==2026.10.18"
+.hubenv/bin/pip install "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"   # Python >= 3.10; on 3.9 pip has no 12.x wheel (see "Dependency versions")
 .hubenv/bin/python main.py
 ```
 
@@ -31,14 +32,16 @@ Notes:
 
 ## Dependency versions (updated deliberately)
 
-The GUI stack is pinned to **one coordinated set** — CI, the packaged app, and
-both local venvs must all use exactly these:
+The GUI stack and the app's HTTPS trust store are pinned to **one coordinated
+set** — CI, the packaged app, and both local venvs must all use exactly these:
 
 ```
 PySide6==6.7.3
 PySide6-Essentials==6.7.3   # the trio ships in lockstep; always the same version
 PySide6-Addons==6.7.3
 Pillow==11.3.0
+certifi==2026.10.18         # CA trust store for the app's own HTTPS (see below)
+pyobjc-framework-Cocoa==12.2.2   # macOS only; needs Python >= 3.10 (see below)
 ```
 
 Where the pins live (they move together):
@@ -46,7 +49,7 @@ Where the pins live (they move together):
 | File | Pins |
 |---|---|
 | `.github/workflows/ci.yml` | the whole set, in the test job and both build jobs |
-| `pyproject.toml` → `requires` | the two PySide6 packages briefcase bundles into the app |
+| `pyproject.toml` → `requires` | the PySide6 pair, certifi and pyobjc — what briefcase bundles into the app |
 | local venvs (`.hubenv`, `.buildenv`) | the whole set, installed by hand |
 
 **Why 6.7.3 and not the latest:** briefcase installs the bundle's dependencies
@@ -58,13 +61,31 @@ contain. Choosing newer Qt means changing what macOS the app targets, which
 is a product decision, not a dependency bump. (6.12 also requires Python
 ≥3.10, which the 3.9 dev venv cannot take.)
 
+**Why certifi:** the packaged app's Python has no default CA store — its
+compiled-in paths point at the python.org framework location, which is not
+inside the app — so without certifi every HTTPS request from the app dies as
+`CERTIFICATE_VERIFY_FAILED`. That is how 0.4.0 and 0.4.1 shipped: the in-app
+update check reported "Could not reach the update server" on a perfectly
+healthy connection (reproduced inside the shipped bundle, 2026-10-18). The
+updater builds its SSL context from certifi
+(`hub/updater.py::_ssl_context`) and falls back to the system CA files for
+source runs without it.
+
+**Why pyobjc 12.2.2:** it is what the shipped bundles (0.3.8, 0.4.x) contain;
+a floating pin would let a rebuild silently change the AppKit behaviour the
+About box was verified against. pyobjc 12.x ships wheels for Python 3.10+
+only, so the 3.9 dev venv (`.hubenv`) keeps 11.1 — the newest it can take —
+and the AppKit path is exercised against 12.2.2 in the packaged app.
+
 **To update the set, deliberately, as one change:**
 
 1. Pick the version; check it against every consumer: the 3.9 dev venv, CI's
    3.11, Windows wheels, and the bundle (`pip --platform macosx_11_0_*`).
-2. Bump every pin together: the three install lines in `ci.yml`, `requires`
-   in `pyproject.toml`, and both venvs —
-   `.hubenv/bin/pip install "PySide6==X" …`, same for `.buildenv`.
+2. Bump every pin together: the install lines in `ci.yml`, `requires` in
+   `pyproject.toml`, and both venvs —
+   `.hubenv/bin/pip install "PySide6==X" …`, same for `.buildenv`. certifi
+   and pyobjc live in the same places (pyobjc needs Python >= 3.10, so the
+   3.9 dev venv cannot take 12.x).
 3. Run the suite (`python3 tests/run_all.py`); `test_workflow_yaml.py` also
    fails if the pins drift apart or go unpinned.
 4. Exercise packaging without releasing: `gh workflow run CI --ref main`.

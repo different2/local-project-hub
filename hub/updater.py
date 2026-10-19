@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -51,6 +53,51 @@ class Release:
 
 class UpdateError(Exception):
     """A check failed in a way worth showing the user."""
+
+
+_UNREACHABLE = (
+    "Could not reach the update server. Check your connection and try again."
+)
+_CERT_FAILED = (
+    "The update server's security certificate could not be verified on this "
+    "system, so the connection was refused."
+)
+
+# CA bundles tried in order when certifi is unavailable (source checkouts);
+# the packaged app always ships certifi -- see _ssl_context().
+_CA_FILE_CANDIDATES = (
+    "/etc/ssl/cert.pem",  # macOS (and some BSDs)
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora/RHEL
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian/Ubuntu
+)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """An SSL context whose trust store actually EXISTS inside this build.
+
+    The packaged app's Python has no default CA store: its compiled-in paths
+    point at the python.org framework location, which is not where Briefcase
+    puts the framework inside the bundle, so
+    `ssl.get_default_verify_paths()` reports cafile=None there and every
+    HTTPS request died as CERTIFICATE_VERIFY_FAILED. That is what the 0.4.0
+    update check hit: it reported "could not reach the update server" on a
+    perfectly healthy connection (reproduced inside the shipped bundle on
+    2026-10-18). The bundle therefore ships certifi (pinned in
+    pyproject.toml); the system CA files are the fallback for source runs.
+    """
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    for path in _CA_FILE_CANDIDATES:
+        try:
+            if os.path.exists(path):
+                return ssl.create_default_context(cafile=path)
+        except Exception:
+            continue
+    return ssl.create_default_context()
 
 
 def _version_tuple(v: str) -> tuple:
@@ -158,7 +205,9 @@ def fetch_latest_release(timeout: float = 12.0) -> Release:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(
+            req, timeout=timeout, context=_ssl_context()
+        ) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -166,10 +215,14 @@ def fetch_latest_release(timeout: float = 12.0) -> Release:
                 "No published releases were found yet, so there is nothing to update to."
             ) from e
         raise UpdateError(f"Update check failed (HTTP {e.code}).") from e
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise UpdateError(
-            "Could not reach the update server. Check your connection and try again."
-        ) from e
+    except urllib.error.URLError as e:
+        if isinstance(getattr(e, "reason", None), ssl.SSLError):
+            raise UpdateError(_CERT_FAILED) from e
+        raise UpdateError(_UNREACHABLE) from e
+    except ssl.SSLError as e:
+        raise UpdateError(_CERT_FAILED) from e
+    except (TimeoutError, OSError) as e:
+        raise UpdateError(_UNREACHABLE) from e
     except json.JSONDecodeError as e:
         raise UpdateError("The update server returned an unreadable response.") from e
 
@@ -209,7 +262,9 @@ def download_asset(asset: Asset, dest, on_progress=None, chunk_size: int = 256 *
     )
     expected = 0
     done = 0
-    with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as fh:
+    with urllib.request.urlopen(
+        req, timeout=60, context=_ssl_context()
+    ) as resp, open(dest, "wb") as fh:
         try:
             expected = int(resp.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):

@@ -221,6 +221,52 @@ def test_gui_dependency_pins_are_coordinated() -> None:
     )
 
 
+def test_certifi_and_pyobjc_pins_are_coordinated() -> None:
+    """certifi (the app's CA trust store) and pyobjc must be pinned, in step.
+
+    certifi is not optional polish: the packaged app's Python has no default
+    CA store inside the bundle, so without certifi every HTTPS request dies
+    as CERTIFICATE_VERIFY_FAILED and the update check reports "could not
+    reach the update server" on a healthy connection (reproduced in the
+    shipped bundle, 2026-10-18). pyobjc is the AppKit dependency of the
+    About-box fix. Both float to the newest release unless pinned, so a
+    rebuild could silently swap either; the workflow (what CI tests
+    against) and pyproject (what briefcase bundles) must name the same
+    versions, and pyobjc must keep its darwin marker so the Linux and
+    Windows runners do not try to install it.
+    """
+    import re
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    cmd = "\n".join(
+        ln for ln in text.splitlines()
+        if "pip install" in ln and not ln.strip().startswith("#")
+    )
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    for name in ("certifi", "pyobjc-framework-Cocoa"):
+        versions = sorted(set(re.findall(re.escape(name) + r"==([0-9][0-9.]*)", cmd)))
+        assert versions, f"{name} is not pinned in the workflow"
+        assert len(versions) == 1, f"{name} pinned at several versions: {versions}"
+        version = versions[0]
+        assert (
+            f'"{name}=={version}"' in pyproject or f"{name}=={version};" in pyproject
+        ), (
+            f"pyproject does not pin {name}=={version} (the workflow pins it) — "
+            "the packaged app would not run what CI tested"
+        )
+
+    assert re.search(
+        r"pyobjc-framework-Cocoa==[0-9.]+;\s*sys_platform == 'darwin'", pyproject
+    ), "pyobjc must stay macOS-only in pyproject (it is a darwin dependency)"
+    assert re.search(
+        r"pyobjc-framework-Cocoa==[0-9.]+;\s*sys_platform == 'darwin'", cmd
+    ), (
+        "pyobjc install in the workflow needs the darwin marker, or the Linux "
+        "and Windows runners fail the install step"
+    )
+
+
 def test_tag_check_gets_the_tag_on_every_shell() -> None:
     """The version guard must receive the tag on EVERY runner OS.
 

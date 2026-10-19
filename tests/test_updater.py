@@ -297,6 +297,80 @@ def test_download_asset_reports_progress():
             urllib.request.urlopen = original
 
 
+def test_the_update_trust_store_is_real():
+    """HTTPS from the updater must use a CA store that EXISTS.
+
+    Found by a real click on 0.4.0 (2026-10-18): "Could not reach the update
+    server" on a perfectly healthy connection. Reproduced inside the shipped
+    bundle's own Python: its compiled-in CA paths point at a python.org
+    framework location that is not inside the app, so
+    ssl.get_default_verify_paths() reports cafile=None and every HTTPS
+    request died CERTIFICATE_VERIFY_FAILED. The property violated is the one
+    this asserts: a context built with a missing store loads zero CA
+    certificates while otherwise looking fine.
+    """
+    ctx = updater._ssl_context()
+    cas = ctx.get_ca_certs()
+    assert len(cas) >= 40, f"trust store is empty or nearly so: {len(cas)} CA certs"
+
+
+def test_trust_store_falls_back_without_certifi():
+    """Source runs without certifi still verify: the system CA files are used."""
+    if sys.platform == "win32":
+        print("SKIP test_trust_store_falls_back_without_certifi: Windows uses the system store")
+        return
+    saved = sys.modules.get("certifi")
+    sys.modules["certifi"] = None  # makes `import certifi` raise ImportError
+    try:
+        ctx = updater._ssl_context()
+    finally:
+        if saved is None:
+            sys.modules.pop("certifi", None)
+        else:
+            sys.modules["certifi"] = saved
+    assert len(ctx.get_ca_certs()) >= 40, "no system CA file was used as a fallback"
+
+
+def test_certificate_failure_is_not_reported_as_unreachable():
+    """A TLS trust failure must say so instead of blaming the connection.
+
+    0.4.0 reported "could not reach the update server" for what was
+    CERTIFICATE_VERIFY_FAILED, which sent the diagnosis at the network. The
+    updater now distinguishes a URLError wrapping an ssl error; genuine
+    connectivity failures keep the old wording.
+    """
+    import ssl as ssl_mod
+    import urllib.error
+    import urllib.request
+
+    original = urllib.request.urlopen
+
+    def fake_tls_failure(*a, **k):
+        raise urllib.error.URLError(ssl_mod.SSLError("certificate verify failed"))
+
+    def fake_offline(*a, **k):
+        raise urllib.error.URLError("timed out")
+
+    try:
+        urllib.request.urlopen = fake_tls_failure
+        try:
+            updater.fetch_latest_release()
+        except updater.UpdateError as e:
+            assert "certificate" in str(e).lower(), str(e)
+        else:
+            raise AssertionError("expected UpdateError for a TLS failure")
+
+        urllib.request.urlopen = fake_offline
+        try:
+            updater.fetch_latest_release()
+        except updater.UpdateError as e:
+            assert "reach the update server" in str(e), str(e)
+        else:
+            raise AssertionError("expected UpdateError for a connectivity failure")
+    finally:
+        urllib.request.urlopen = original
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
