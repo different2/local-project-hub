@@ -9,15 +9,20 @@ user-facing._
 
 ## Where things stand (verified 2026-10-18, night)
 
-- `main` clean and in sync at `4a4d6ff` (the update-dialog feature).
+- `main` clean and in sync at `0dd5adb` (release-night docs; feature commit
+  `4a4d6ff`).
 - **v0.4.1 is the latest release** — both installers, notes applied
   (`Local.Project.Hub-0.4.1.dmg` 262 MB, `.msi` 172 MB). **v0.4.0 is also
   live** — the first release whose in-app update check actually works.
-- **The user runs 0.3.7 and must install by hand once** — the check in 0.3.7
-  is one of the bugs fixed in 0.4.0, so it can never offer anything itself.
-  From 0.4.0 onward the in-app check works; 0.4.1 adds the visible dialog.
-  He was told 2026-10-18 with download links (0.4.0 vs 0.4.1 both fine);
-  which one he installs is not yet known.
+- **The user runs 0.4.0** — installed by hand 2026-10-18 00:22, so the
+  one-time manual install off 0.3.7 is DONE. His build's offer flow is the
+  plain message box (no progress bar; that arrives with 0.4.1). **Next:
+  the in-app 0.4.0 → 0.4.1 update — the first real end-to-end run of the
+  flow he asked for.** Channel re-verified 2026-10-18 night: repo is
+  public, `releases/latest` = v0.4.1 (dmg 262,308,037 B; msi 172,028,624 B),
+  asset URL resolves unauthenticated (302 → 200). What the offer box
+  actually does (dialog, download, dmg hand-off) is not yet observed —
+  record the outcome here once known.
 - Full local suite: **15/15 green, 186 tests** (exit 0; `full-suite-6.out` in
   `~/.hermes/cache/scratch/lph-verify/`) on the released tree.
 - CI tonight: push-run `39196659931` green; tag run `39198718961` green (all
@@ -114,8 +119,10 @@ Shipped in `4a4d6ff`:
 ## Open threads, in priority order
 
 1. **"One-click update" smoothness** — the user's goal. Status now: 0.4.0+
-   checks, offers, downloads and opens the installer, with visible progress.
-   Remaining: the single manual install off 0.3.7 (user's to do, any time);
+   checks, offers, downloads and opens the installer; 0.4.1 adds visible
+   progress. The manual install off 0.3.7 is done (0.4.0 in `/Applications`,
+   verified 2026-10-18 night). Remaining: he still has to ride
+   0.4.0 → 0.4.1 in-app (the first real end-to-end update run — his click);
    unsigned-build warnings need paid certificates (messaging only until
    then); macOS drag-to-Applications is deliberate (self-replace deferred);
    whether an app-downloaded MSI triggers SmartScreen is unverified — check
