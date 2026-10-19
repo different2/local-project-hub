@@ -4,8 +4,10 @@ Design notes (matching SPEC's separation principle):
   * One sidebar list of projects. Selecting a row = "open it": starts the
     backend if needed, waits for readiness, then points the webview at the URL.
   * Toolbar: Start/Stop, Restart, Open in Browser, Add, Edit, Remove.
-  * Log drawer at the bottom shows merged stdout/stderr of the active project,
-    plus hub messages. It is collapsible so it stays unobtrusive.
+  * Log drawer at the bottom is a TERMINAL PER PROJECT: each project's
+    stdout/stderr goes to its own pane and switching projects switches the
+    pane, so one project's output never shows up under another. Hub-level
+    messages have their own pane. The drawer is collapsible.
   * A project's failure never blocks another project: every process is its own
     QProcess, and the webview just shows an error page on load failure.
 """
@@ -20,6 +22,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -28,11 +31,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QSplitter,
     QStackedLayout,
+    QStackedWidget,
     QStatusBar,
+    QStyledItemDelegate,
     QTabBar,
     QTabWidget,
     QToolBar,
@@ -57,6 +63,16 @@ _STATE_LABEL = {
     "running": "● running",
     "error": "✕ error",
 }
+
+# Sidebar rows show "<icon>  <name>", so the name gets a role of its own:
+# renaming a project must change the name and nothing else.
+_NAME_ROLE = Qt.UserRole + 1
+
+
+def _short_label(text: str, limit: int = 22) -> str:
+    """Trim a tab label, leaving the tooltip to carry the full text."""
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 class _PopupBridge(QObject):
@@ -106,6 +122,110 @@ def _entry_script(rec: dict) -> str:
     return best
 
 
+class _NameEditDelegate(QStyledItemDelegate):
+    """Inline-edit a project's NAME, not the icon glued onto its row text.
+
+    A QListWidgetItem hands its whole display string ("icon  name") to the
+    editor, so double-clicking would put "🌐  obs_live" in the box and let the
+    icon be deleted by accident. The name lives in its own role; this delegate
+    edits only that.
+    """
+
+    def setEditorData(self, editor, index) -> None:  # noqa: N802 - Qt API
+        editor.setText(index.data(_NAME_ROLE) or "")
+
+    def setModelData(self, editor, model, index) -> None:  # noqa: N802 - Qt API
+        name = editor.text().strip()
+        if name:
+            model.setData(index, name, _NAME_ROLE)
+
+
+class LogDrawer(QWidget):
+    """The bottom drawer: one terminal panel per project, plus one for the hub.
+
+    Every project's output goes to its OWN pane, and switching projects
+    switches the pane, so a line printed by one project can never appear under
+    another (the single shared view is what made them indistinguishable).
+    Panes are created on first use and kept, so a project's history is still
+    there when the user comes back to it.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.header = QLabel("Logs")
+        self.header.setStyleSheet("color: gray; font-size: 11px; padding: 2px 6px;")
+        self.stack = QStackedWidget()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.header)
+        lay.addWidget(self.stack, 1)
+        self._edits: dict[str, QPlainTextEdit] = {}
+        self._hub = self._make_edit()
+        self._edits[""] = self._hub
+        self.stack.addWidget(self._hub)
+        self._current = ""
+
+    def _make_edit(self) -> QPlainTextEdit:
+        edit = QPlainTextEdit()
+        edit.setReadOnly(True)
+        edit.setStyleSheet("font-family: Menlo, monospace; font-size: 11px;")
+        return edit
+
+    def _edit_for(self, key) -> QPlainTextEdit:
+        k = key or ""
+        edit = self._edits.get(k)
+        if edit is None:
+            edit = self._make_edit()
+            self._edits[k] = edit
+            self.stack.addWidget(edit)
+        return edit
+
+    def show_page(self, key) -> None:
+        """Show one project's terminal (key=None shows the hub's own)."""
+        self._current = key or ""
+        self.stack.setCurrentWidget(self._edit_for(key))
+
+    def drop_page(self, key) -> None:
+        """Forget a project's pane; nothing stale lingers for a re-add."""
+        k = key or ""
+        edit = self._edits.pop(k, None)
+        if edit is None:
+            return
+        self.stack.removeWidget(edit)
+        edit.deleteLater()
+        if self._current == k:
+            self.show_page(None)
+
+    def set_header(self, text: str) -> None:
+        self.header.setText(text)
+
+    def append_for(self, text: str, key=None) -> None:
+        self._edit_for(key).appendPlainText(text.rstrip("\n"))
+
+    # The rest of the window (and the tests) talk to the drawer as if it were
+    # the old single QPlainTextEdit: these use the visible pane.
+    def appendPlainText(self, text: str) -> None:
+        self._edit_for(self._current).appendPlainText(text.rstrip("\n"))
+
+    def toPlainText(self) -> str:
+        return self._edit_for(self._current).toPlainText()
+
+    def combined_text(self, labeller=None) -> str:
+        """Every pane, labelled — what a problem report wants."""
+        parts = []
+        for key, edit in self._edits.items():
+            body = edit.toPlainText().strip("\n")
+            if not body:
+                continue
+            if not key:
+                label = "hub"
+            else:
+                label = labeller(key) if labeller else key
+            parts.append(f"--- {label} ---\n{body}")
+        return "\n\n".join(parts)
+
+
 class HubWindow(QMainWindow):
     def __init__(self, store: store_mod.Store):
         super().__init__()
@@ -122,6 +242,9 @@ class HubWindow(QMainWindow):
         # during startup (populating the sidebar) must not start it — a project
         # runs when the user asks, or when its autostart box is ticked.
         self._starting_up = True
+        # True while the sidebar is being (re)filled: a programmatic text
+        # change must not be mistaken for the user renaming a project.
+        self._loading_list = False
 
         self._build_ui()
         self._reload_list()
@@ -401,7 +524,9 @@ class HubWindow(QMainWindow):
         from . import diagnostics
 
         report = diagnostics.build_report(
-            log_tail=self.log_view.toPlainText(),
+            log_tail=self.log_view.combined_text(
+                lambda p: (self.store.get(p) or {}).get("name") or p
+            ),
             project_count=len(self.store.projects),
         )
 
@@ -572,9 +697,23 @@ class HubWindow(QMainWindow):
         self.list.setMaximumWidth(280)
         self.list.setStyleSheet("font-size: 13px;")
         self.list.itemSelectionChanged.connect(self._on_select)
+        # Double-click (or Return) renames a project in place, the way a
+        # session is renamed in the sidebar. The icon is part of the row's
+        # display text, so the delegate edits a separate role and only the
+        # name changes.
+        self.list.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+        )
+        self.list.setItemDelegate(_NameEditDelegate(self.list))
+        self.list.itemChanged.connect(self._on_item_changed)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._on_list_menu)
 
         left = QVBoxLayout()
         left.addWidget(QLabel("Projects"))
+        rename_hint = QLabel("Double-click a name to rename it")
+        rename_hint.setStyleSheet("color: gray; font-size: 10px;")
+        left.addWidget(rename_hint)
         left.addWidget(self.list, 1)
         left_w = QWidget()
         left_w.setLayout(left)
@@ -626,9 +765,9 @@ class HubWindow(QMainWindow):
         # mechanism as the left sidebar means it can be dragged taller/shorter
         # and collapsed out of the way by dragging the divider down, instead
         # of being stuck at a fixed height.
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet("font-family: Menlo, monospace; font-size: 11px;")
+        # One terminal pane per project (LogDrawer): switching projects
+        # switches the pane, so output cannot carry over between them.
+        self.log_view = LogDrawer()
 
         outer = QSplitter(Qt.Vertical)
         outer.addWidget(split)
@@ -654,12 +793,17 @@ class HubWindow(QMainWindow):
 
     def _reload_list(self) -> None:
         keep = self.active_id
-        self.list.clear()
-        for rec in self.store.ordered():
-            item = QListWidgetItem(f"{rec['icon']}  {rec['name']}")
-            item.setData(Qt.UserRole, rec["id"])
-            item.setToolTip(rec.get("description") or rec["command"])
-            self.list.addItem(item)
+        self._loading_list = True
+        try:
+            self.list.clear()
+            for rec in self.store.ordered():
+                item = QListWidgetItem(self._item_label(rec))
+                item.setData(Qt.UserRole, rec["id"])
+                item.setData(_NAME_ROLE, rec["name"])
+                item.setToolTip(rec.get("description") or rec["command"])
+                self.list.addItem(item)
+        finally:
+            self._loading_list = False
         if keep:
             self._select_id(keep)
         elif self.list.count() and not self.list.currentItem():
@@ -670,6 +814,74 @@ class HubWindow(QMainWindow):
                 self._select_id(self.list.item(0).data(Qt.UserRole), start=False)
             else:
                 self.list.setCurrentRow(0)
+
+    def _item_label(self, rec: dict) -> str:
+        return f"{rec.get('icon') or ''}  {rec.get('name') or ''}"
+
+    def _paint_item(self, item: QListWidgetItem, rec: dict) -> None:
+        """Rewrite a row (icon + name) without it looking like a rename."""
+        self._loading_list = True
+        try:
+            item.setData(_NAME_ROLE, rec.get("name") or "")
+            item.setText(self._item_label(rec))
+            item.setToolTip(rec.get("description") or rec.get("command") or "")
+        finally:
+            self._loading_list = False
+
+    def _on_item_changed(self, item: QListWidgetItem) -> None:
+        """The sidebar's inline editor committed a new display name."""
+        if self._loading_list:
+            return
+        pid = item.data(Qt.UserRole)
+        rec = self.store.get(pid) if pid else None
+        if rec is None:
+            return
+        wanted = str(item.data(_NAME_ROLE) or "").strip()
+        old = rec.get("name") or ""
+        if not wanted or wanted == old:
+            self._paint_item(item, rec)
+            if not wanted:
+                self.status.showMessage(
+                    "A project needs a name — kept the old one.", 6000
+                )
+            return
+        updated = dict(rec)
+        updated["name"] = wanted
+        try:
+            self.store.update(updated)
+        except store_mod.RegistryError as e:
+            self._paint_item(item, rec)
+            QMessageBox.warning(self, "Couldn't rename", str(e))
+            return
+        self._paint_item(item, updated)
+        self._retitle_tab(pid, self._item_label(rec), updated)
+        self.status.showMessage(f"Renamed to “{wanted}”", 6000)
+
+    def _retitle_tab(self, pid: str, old_label: str, rec: dict) -> None:
+        """Update a project's tab title if it still shows the old default."""
+        idx = self._tab_index_for_project(pid)
+        if idx is None or self.tabs.tabText(idx) != _short_label(old_label):
+            return
+        self.tabs.setTabText(idx, _short_label(self._item_label(rec)))
+        self.tabs.setTabToolTip(idx, rec.get("description") or rec["command"])
+
+    def _on_list_menu(self, pos) -> None:
+        item = self.list.itemAt(pos)
+        if item is None:
+            return
+        self.list.setCurrentItem(item)
+        menu = QMenu(self)
+        rename = menu.addAction("Rename…")
+        edit = menu.addAction("Edit project…")
+        menu.addSeparator()
+        remove = menu.addAction("Remove…")
+        chosen = menu.exec(self.list.mapToGlobal(pos))
+        if chosen is rename:
+            self.list.editItem(item)
+        elif chosen is edit:
+            self._edit_project()
+        elif chosen is remove:
+            self._remove_project()
 
     def _select_id(self, project_id: str, start: bool = True) -> None:
         """Select a project in the sidebar and, by default, launch it.
@@ -688,6 +900,7 @@ class HubWindow(QMainWindow):
                     self.list.blockSignals(False)
                     self.active_id = project_id
                     self._set_controls_enabled(True)
+                    self._sync_log_page(project_id)
                     self._open_project_tab(self.store.get(project_id), start=False)
                     return
                 if self.list.currentRow() == i:
@@ -704,6 +917,8 @@ class HubWindow(QMainWindow):
         pid = item.data(Qt.UserRole) if item else None
         self.active_id = pid
         self._set_controls_enabled(pid is not None)
+        # The terminal follows the project: each one has its own pane.
+        self._sync_log_page(pid)
         if pid is None:
             self.stack.setCurrentWidget(self.placeholder)
             self.placeholder.setText("No project selected")
@@ -758,8 +973,10 @@ class HubWindow(QMainWindow):
             "<b>Things worth knowing</b><br>"
             "• Each project gets its own tab; a project that opens its own "
             "window (a sphere view, say) gets an extra tab you can close.<br>"
-            "• The log drawer at the bottom shows what each project prints. "
-            "Drag its edge to resize, or collapse it with the arrow.<br>"
+            "• Each project has its own terminal in the drawer at the bottom; "
+            "switching projects switches the terminal. Drag its edge to "
+            "resize, or collapse it with the arrow.<br>"
+            "• Double-click a project in the list to rename it.<br>"
             "• If a port is already taken, the hub offers to end the process "
             "holding it instead of failing to start.<br>"
             "• Browser-opening flags such as <code>--no-open</code> are read "
@@ -875,12 +1092,14 @@ class HubWindow(QMainWindow):
         if kind == "desktop":
             if not start:
                 self._append_log(
-                    f"[hub] {rec['name']} is a desktop app — press Start to launch it"
+                    f"[hub] {rec['name']} is a desktop app — press Start to launch it",
+                    rec["id"],
                 )
                 return
             self._append_log(
                 f"[hub] {rec['name']} looks like a desktop app — starting it in its "
-                f"own window, not in a tab"
+                f"own window, not in a tab",
+                rec["id"],
             )
             self.status.showMessage(f"{rec['name']} launched in its own window")
             proc = self._proc_for(rec)
@@ -906,7 +1125,7 @@ class HubWindow(QMainWindow):
         view.titleChanged.connect(
             lambda t, v=view: self._label_tab(self.tabs.indexOf(v), t or rec["name"])
         )
-        idx = self.tabs.addTab(view, f"{rec['icon']}  {rec['name']}")
+        idx = self.tabs.addTab(view, _short_label(self._item_label(rec)))
         self.tabs.setTabToolTip(idx, rec.get("description") or rec["command"])
         self.tabs.setCurrentIndex(idx)
 
@@ -914,7 +1133,7 @@ class HubWindow(QMainWindow):
             # Restoring a selection must not launch anything. Show the tab with
             # a clear message instead of a blank pane.
             self.placeholder.setText(
-                f"{rec['name']} is not running.\nPress Start, or double-click it, to launch it."
+                f"{rec['name']} is not running.\nPress Start to launch it."
             )
             self.status.showMessage(f"{rec['name']} not started")
             return
@@ -928,7 +1147,8 @@ class HubWindow(QMainWindow):
                 f"{rec['name']} has no dashboard URL yet — starting it to find one…"
             )
             self._append_log(
-                f"[hub] {rec['name']} has no dashboard URL; starting it to detect one"
+                f"[hub] {rec['name']} has no dashboard URL; starting it to detect one",
+                rec["id"],
             )
             if proc.state != "running":
                 # Must go through _start_active so the port-conflict check runs:
@@ -958,7 +1178,7 @@ class HubWindow(QMainWindow):
                 return
             url = proc.detect_url_from_ports()
             if url:
-                self._append_log(f"[hub] detected listening port: {url}")
+                self._append_log(f"[hub] detected listening port: {url}", rec["id"])
 
         QTimer.singleShot(delay_ms, _scan)
 
@@ -967,7 +1187,7 @@ class HubWindow(QMainWindow):
         if pid not in self.procs:
             proc = ProjectProcess(rec)
             proc.state_changed.connect(lambda s, p=pid: self._on_state(p, s))
-            proc.output.connect(self._append_log)
+            proc.output.connect(lambda text, p=pid: self._append_log(text, p))
             proc.url_detected.connect(self._on_url_detected)
             proc.port_conflict_from_output.connect(
                 lambda port, p=pid: self._on_port_conflict_from_output(p, port)
@@ -1015,7 +1235,8 @@ class HubWindow(QMainWindow):
             self._append_log(
                 "[hub] that process could not start because its port was already "
                 "in use.\n[hub] If another copy of this project is running, stop it "
-                "and press Start again."
+                "and press Start again.",
+                pid,
             )
             return
         rec = self.store.get(pid)
@@ -1079,7 +1300,7 @@ class HubWindow(QMainWindow):
         rec = self.store.get(pid) if pid else None
         if rec is None or rec.get("url"):
             return
-        self._append_log(f"[hub] detected dashboard URL: {url}")
+        self._append_log(f"[hub] detected dashboard URL: {url}", pid)
         rec["url"] = url
         try:
             self.store.update(rec)
@@ -1099,7 +1320,7 @@ class HubWindow(QMainWindow):
         """
         idx = self.tabs.addTab(view, "New tab")
         self.tabs.setCurrentIndex(idx)
-        self._append_log("[hub] opened a new tab")
+        self._append_log("[hub] opened a new tab", self.active_id)
         # Popups of popups: keep chaining into tabs rather than windows.
         view.popup_opened.connect(self._on_popup_opened)
 
@@ -1115,7 +1336,7 @@ class HubWindow(QMainWindow):
             view.page().runJavaScript(
                 "document.title", lambda t, i=idx: self._label_tab(i, t or s)
             )
-            self._append_log(f"[hub] new tab: {s}")
+            self._append_log(f"[hub] new tab: {s}", self.active_id)
             self.status.showMessage(f"New tab: {s}", 6000)
 
         view.urlChanged.connect(_update)
@@ -1125,8 +1346,7 @@ class HubWindow(QMainWindow):
         text = (text or "").strip()
         if not text or index < 0:
             return
-        label = text if len(text) <= 22 else text[:21] + "…"
-        self.tabs.setTabText(index, label)
+        self.tabs.setTabText(index, _short_label(text))
         self.tabs.setTabToolTip(index, text)
 
     def _close_tab(self, index: int) -> None:
@@ -1149,11 +1369,11 @@ class HubWindow(QMainWindow):
             if proc is not None:
                 rec = self.store.get(pid)
                 name = (rec or {}).get("name") or pid
-                self._append_log(f"[hub] stopping {name} (tab closed)")
+                self._append_log(f"[hub] stopping {name} (tab closed)", pid)
                 self._user_stopped_ids.add(pid)
                 proc.stop()
         self.tabs.removeTab(index)
-        self._append_log(f"[hub] closed tab '{label.strip()}'")
+        self._append_log(f"[hub] closed tab '{label.strip()}'", pid)
         if widget is not None:
             widget.deleteLater()
 
@@ -1196,7 +1416,14 @@ class HubWindow(QMainWindow):
         self.placeholder.setVisible(not on_starter)
         if on_starter:
             self._refresh_welcome()
+            self._sync_log_page(None)
         else:
+            widget = self.tabs.widget(index)
+            pid = widget.property("hub_project_id") if widget is not None else None
+            if pid:
+                # Switching tabs switches the terminal too; a popup tab
+                # (no project of its own) keeps the current project pane.
+                self._sync_log_page(pid)
             label = self.tabs.tabText(index)
             self.status.showMessage(f"Viewing: {label}", 4000)
 
@@ -1208,7 +1435,8 @@ class HubWindow(QMainWindow):
             self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(state, state)}")
         if state == "error":
             self._append_log(
-                f"[hub] {rec['name']} exited with an error — see the log below"
+                f"[hub] {rec['name']} exited with an error — its terminal has the details",
+                pid,
             )
         elif state == "stopped":
             # Close the tabs only for an EXPLICIT stop. A project that exits
@@ -1247,22 +1475,28 @@ class HubWindow(QMainWindow):
 
     def _on_load_finished(self, ok: bool) -> None:
         view = self.sender()
-        rec = self.store.get(self.active_id) or {}
+        # A background tab can finish loading while another project is on
+        # screen; its message must land in ITS OWN terminal, not the
+        # visible one.
+        pid = view.property("hub_project_id") if view is not None else None
+        pid = pid or self.active_id
+        rec = self.store.get(pid) or {}
         if ok:
             return  # the tab is already the visible page
         name = rec.get("name", "project")
-        proc = self.procs.get(self.active_id)
+        proc = self.procs.get(pid)
         if proc is not None and proc.state == "running":
             # Server says it's up but the page failed — could be a slow
             # first render. Give it one automatic reload before bothering
             # the user.
-            self._append_log(f"[hub] {name} page failed to load; retrying\n")
+            self._append_log(f"[hub] {name} page failed to load; retrying\n", pid)
             if view is not None:
                 QTimer.singleShot(1200, view.reload)
         else:
             self._append_log(
                 f"[hub] {name} is not reachable at {rec.get('url','?')} yet "
-                "— the backend may still be starting\n"
+                "— the backend may still be starting\n",
+                pid,
             )
 
     def _wait_ready(self, rec: dict) -> None:
@@ -1287,14 +1521,15 @@ class HubWindow(QMainWindow):
                 if proc is not None and proc.state != "running":
                     self._append_log(
                         f"[hub] {rec['url']} answered, but {rec['name']} is not running —\n"
-                        f"[hub] that page belongs to another process on the same port.\n"
+                        f"[hub] that page belongs to another process on the same port.\n",
+                        pid,
                     )
                     return
-                self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n")
+                self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n", pid)
                 self._show_dashboard(rec)
         def _fail(reason: str):
             _cleanup()
-            self._append_log(f"[hub] {reason}\n")
+            self._append_log(f"[hub] {reason}\n", pid)
             if pid == self.active_id:
                 self.status.showMessage(f"{rec['name']}: {reason}")
                 self.placeholder.setText(reason)
@@ -1306,8 +1541,18 @@ class HubWindow(QMainWindow):
 
     # ---------- logs ----------
 
-    def _append_log(self, text: str) -> None:
-        self.log_view.appendPlainText(text.rstrip("\n"))
+    def _append_log(self, text: str, pid: str | None = None) -> None:
+        """Write to one project's terminal (pid=None → the hub's pane)."""
+        self.log_view.append_for(text, pid)
+
+    def _sync_log_page(self, pid: str | None) -> None:
+        """Point the drawer at the terminal belonging to what is on screen."""
+        self.log_view.show_page(pid)
+        if pid:
+            rec = self.store.get(pid) or {}
+            self.log_view.set_header(f"Logs — {rec.get('name') or pid}")
+        else:
+            self.log_view.set_header("Logs — hub")
 
     def _toggle_logs(self, shown: bool) -> None:
         # Collapse the splitter child rather than hiding the widget: a hidden
@@ -1324,7 +1569,7 @@ class HubWindow(QMainWindow):
     def _autostart(self) -> None:
         for rec in self.store.ordered():
             if rec.get("autostart"):
-                self._append_log(f"[hub] autostarting {rec['name']}\n")
+                self._append_log(f"[hub] autostarting {rec['name']}\n", rec["id"])
                 proc = self._proc_for(rec)
                 proc.start()
 
@@ -1371,7 +1616,7 @@ class HubWindow(QMainWindow):
         if conflict:
             self._offer_to_free_port(rec, proc, conflict)
             return
-        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
+        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}", rec["id"])
         if rec.get("url"):
             # Poll for the dashboard now; when it answers, _ready() points the
             # tab's webview at it. Do not wait on the "running" state signal
@@ -1381,7 +1626,7 @@ class HubWindow(QMainWindow):
 
     def _launch(self, rec: dict, proc: ProjectProcess) -> None:
         """Start the process and begin waiting for its dashboard."""
-        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}")
+        self._append_log(f"[hub] starting {rec['name']}: {rec['command']}", rec["id"])
         if rec.get("url"):
             self._wait_ready(rec)
         proc.start()
@@ -1422,7 +1667,7 @@ class HubWindow(QMainWindow):
         )
 
         if not self._can_show_dialog():
-            self._append_log(f"[hub] {reason}")
+            self._append_log(f"[hub] {reason}", rec["id"])
             self.status.showMessage(
                 f"{rec['name']} not started — port {conflict['port']} in use"
             )
@@ -1447,7 +1692,8 @@ class HubWindow(QMainWindow):
         if box.clickedButton() is not kill_btn:
             self._append_log(
                 f"[hub] port {conflict['port']} is held by another process; "
-                f"{rec['name']} was not started"
+                f"{rec['name']} was not started",
+                rec["id"],
             )
             return
 
@@ -1456,7 +1702,8 @@ class HubWindow(QMainWindow):
             if urldetect.kill_process(h["pid"]):
                 killed.append(h["pid"])
         self._append_log(
-            f"[hub] ended process(es) holding port {conflict['port']}: {killed}"
+            f"[hub] ended process(es) holding port {conflict['port']}: {killed}",
+            rec["id"],
         )
 
         def _start_after_free():
@@ -1466,7 +1713,8 @@ class HubWindow(QMainWindow):
             else:
                 self._append_log(
                     f"[hub] port {conflict['port']} is still in use after ending the "
-                    f"process; {rec['name']} was not started"
+                    f"process; {rec['name']} was not started",
+                    rec["id"],
                 )
 
         QTimer.singleShot(1200, _start_after_free)
@@ -1485,7 +1733,7 @@ class HubWindow(QMainWindow):
         if not pid:
             return
         rec = self.store.get(pid)
-        self._append_log(f"[hub] restarting {rec['name']}\n")
+        self._append_log(f"[hub] restarting {rec['name']}\n", pid)
         self.placeholder.setText(f"Restarting {rec['name']}…")
         self.stack.setCurrentWidget(self.placeholder)
         self._proc_for(rec).restart()
@@ -1524,7 +1772,8 @@ class HubWindow(QMainWindow):
         pid = self.active_id
         if not pid:
             return
-        dlg = ProjectDialog(self, record=self.store.get(pid))
+        before = self.store.get(pid) or {}
+        dlg = ProjectDialog(self, record=before)
         if dlg.exec() != QDialog.Accepted:
             return
         try:
@@ -1533,6 +1782,7 @@ class HubWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid project", str(e))
             return
         self.store.update(rec)
+        self._retitle_tab(pid, self._item_label(before), rec)
         old = self.procs.pop(pid, None)
         if old:
             old.stop()
@@ -1569,7 +1819,9 @@ class HubWindow(QMainWindow):
             waiter.deleteLater()
         self._user_stopped_ids.discard(pid)
         self.store.remove(pid)
+        self.log_view.drop_page(pid)
         self.active_id = None
+        self._sync_log_page(None)
         self._reload_list()
         self._refresh_welcome()
 

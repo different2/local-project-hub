@@ -470,6 +470,127 @@ def test_picking_a_file_replaces_only_an_earlier_suggestion() -> None:
         )
 
 
+def test_add_dialog_names_the_project_after_the_folder_or_file() -> None:
+    """The display name is taken from what was picked, until the user types one.
+
+    User request (2026-10-19): the display name "should just be taken from what
+    the file or folder I selected name. It should be able to be edited in the
+    sidebar or in the options whenever I want though."
+    """
+    from PySide6.QtWidgets import QFileDialog
+
+    from hub.project_dialog import ProjectDialog
+
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d) / "obs_live"
+        folder.mkdir()
+        script = folder / "server.py"
+        script.write_text("pass\n", encoding="utf-8")
+
+        # Picking a FOLDER names it after the folder (through the real handler).
+        original = QFileDialog.getExistingDirectory
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(folder))
+        try:
+            picked_folder = ProjectDialog()
+            picked_folder._pick_dir()
+        finally:
+            QFileDialog.getExistingDirectory = original
+        assert picked_folder.name.text() == "obs_live", picked_folder.name.text()
+
+        # Picking a FILE names it after the file, without the suffix.
+        picked_file = ProjectDialog()
+        picked_file._apply_file_choice(str(script))
+        assert picked_file.name.text() == "server", picked_file.name.text()
+
+        # A name the user typed is never overwritten by a later pick.
+        typed = ProjectDialog()
+        typed.name.setText("My dashboard")
+        typed._mark_name_touched()  # what textEdited does in a real session
+        typed.wd.setText(str(folder))
+        typed._maybe_name_from_folder()
+        assert typed.name.text() == "My dashboard", "a typed name was overwritten"
+
+        # Even left empty, a new project is named after the folder it runs in.
+        unnamed = ProjectDialog()
+        unnamed.wd.setText(str(folder))
+        unnamed.command.setText(f"python3 {script}")
+        unnamed.accept()
+        assert unnamed.result_record()["name"] == "obs_live"
+
+
+def test_add_dialog_hides_the_auto_decided_fields_behind_optional_settings() -> None:
+    """Only what the Hub cannot work out is on show; the rest sits behind one toggle.
+
+    User request (2026-10-19): "Since a majority of those options in the add
+    project are automatically decided. I think a majority of these options
+    should be hidden under a whole optional settings button."
+    """
+    from hub.project_dialog import ProjectDialog
+
+    advanced_fields = (
+        "icon",
+        "desc",
+        "interp",
+        "args",
+        "url",
+        "env",
+        "autostart",
+        "type_override",
+    )
+    dlg = ProjectDialog()
+    dlg.show()
+    try:
+        assert not dlg.more.isChecked(), "the optional block starts expanded"
+        assert not dlg.advanced.isVisible(), "optional rows are on show by default"
+        for name in advanced_fields:
+            widget = getattr(dlg, name)
+            assert dlg.advanced.isAncestorOf(widget), (
+                f"{name} is not inside the optional settings block"
+            )
+        dlg.more.setChecked(True)
+        assert dlg.advanced.isVisible(), "expanding optional settings showed nothing"
+        # The three questions that matter stay on show either way.
+        assert dlg.wd.isVisible() and dlg.name.isVisible() and dlg.command.isVisible()
+    finally:
+        dlg.close()
+
+    # Nothing an existing project has already set is hidden from its owner.
+    existing = ProjectDialog(
+        record={"command": "python3 x.py", "working_dir": "/tmp", "args": "--no-open"}
+    )
+    assert existing.more.isChecked(), "an existing project's settings stayed hidden"
+
+
+def test_add_dialog_never_clips_its_help_text() -> None:
+    """Every hint's box must be tall enough for the text it holds.
+
+    The crowded version drew two-line hints in one-line boxes, so sentences
+    were sliced in half mid-word — the user's report of "several of these
+    sentences are truncated" (2026-10-19). heightForWidth() is the height the
+    text actually needs at the width it was given.
+    """
+    from hub.project_dialog import ProjectDialog
+
+    dlg = ProjectDialog(base_dir="/tmp")
+    dlg.show()
+    dlg.more.setChecked(True)  # the optional block must fit its own text too
+    QApplication.instance().processEvents()
+    try:
+        clipped = []
+        for label in dlg.findChildren(QLabel):
+            text = label.text()
+            if not text or not label.isVisible():
+                continue
+            needed = label.heightForWidth(label.width())
+            if needed <= 0:
+                needed = label.sizeHint().height()
+            if label.height() < needed:
+                clipped.append((text[:70], label.height(), needed, label.width()))
+        assert not clipped, f"clipped help text: {clipped}"
+    finally:
+        dlg.close()
+
+
 def test_removing_a_project_closes_its_tab(tmp: Path) -> None:
     """Removing a project must take its tab with it.
 

@@ -1,13 +1,20 @@
 """Add/Edit project dialog.
 
-Fields map 1:1 to the store's record. Validation runs through hub.store.validate
-so the rules live in exactly one place; registry errors are shown to the user
-instead of silently failing.
+The dialog asks for the two things it cannot work out by itself — which folder
+(or file) the project lives in, and what command starts it — and derives the
+rest, including the display name. Everything else is real but optional, so it
+sits behind one "Optional settings" toggle instead of crowding the form with
+rows nobody has to fill in (user request, 2026-10-19: "a majority of these
+options should be hidden under a whole optional settings button").
+
+Validation runs through hub.store.validate so the rules live in exactly one
+place; registry errors are shown to the user instead of silently failing.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -22,6 +29,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -33,36 +41,47 @@ from .detect_type import DISPLAY, detect as _detect_type
 
 _ICONS = ["🌐", "🧪", "📈", "🎮", "🎨", "🧭", "🛠️", "📚", "🤖", "⬜"]
 
+_HINT_STYLE = "color: gray; font-size: 11px;"
+
 
 def _display_for(kind: str) -> str:
     return DISPLAY.get(kind, DISPLAY["unknown"])
 
 
+def name_from_folder(path: str) -> str:
+    """The display name implied by a chosen folder: its own name."""
+    p = Path(path.rstrip("/") or "/")
+    if p.name:
+        return p.name
+    return str(p)  # a filesystem root has no basename
+
+
+def name_from_file(path: str) -> str:
+    """The display name implied by a chosen file: its name, without suffix.
+
+    "obs_live.py" reads better as "obs_live" in the sidebar than as a filename,
+    and a file with no suffix keeps its whole name.
+    """
+    p = Path(path)
+    return p.stem or p.name
+
+
 class ProjectDialog(QDialog):
     def __init__(self, parent=None, record: dict | None = None, base_dir: str = ""):
         super().__init__(parent)
-        self.setWindowTitle("Edit project" if record else "Add project")
         self._record = dict(record) if record else {}
-        self.setMinimumWidth(540)
+        self._editing = bool(record)
+        self.setWindowTitle("Edit project" if record else "Add project")
+        # Wide enough that no hint has to wrap into a clipped second line.
+        self.setMinimumWidth(640)
 
+        # ---------- the three questions that matter ----------
         form = QFormLayout()
-
-        self.name = QLineEdit(self._record.get("name", ""))
-        self.name.setPlaceholderText("Sphere Project")
-        form.addRow("Display name", self.name)
-
-        self.icon = QComboBox()
-        self.icon.addItems(_ICONS)
-        self.icon.setEditable(True)
-        self.icon.setCurrentText(self._record.get("icon", "🌐"))
-        self.desc = QLineEdit(self._record.get("description", ""))
-        self.desc.setPlaceholderText("optional description")
-        row_icon = QHBoxLayout()
-        row_icon.addWidget(self.icon)
-        row_icon.addWidget(self.desc, 1)
-        form.addRow("Icon / description", self._wrap(row_icon))
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.wd = QLineEdit(self._record.get("working_dir", base_dir))
+        self.wd.setPlaceholderText("Choose the project's folder…")
+        self.wd.setToolTip("The folder the startup command runs in.")
         browse = QPushButton("Folder…")
         browse.setToolTip("Choose the project's folder")
         browse.clicked.connect(self._pick_dir)
@@ -70,96 +89,115 @@ class ProjectDialog(QDialog):
         pick_file.setToolTip("Choose the file that starts the project")
         pick_file.clicked.connect(self._pick_file)
         row_wd = QHBoxLayout()
-        row_wd.addWidget(self.wd)
+        row_wd.addWidget(self.wd, 1)
         row_wd.addWidget(browse)
         row_wd.addWidget(pick_file)
-        form.addRow("Project folder", self._wrap(row_wd))
+        form.addRow("Folder", self._wrap(row_wd))
 
-        self.interp = QLineEdit(self._record.get("interpreter", ""))
-        self.interp.setPlaceholderText("optional — .venv/bin/python, /opt/homebrew/bin/node")
-        interp_help = QLabel("Only if the command must run through a specific interpreter.")
-        interp_help.setWordWrap(True)
-        interp_help.setStyleSheet("color: gray; font-size: 11px;")
-        interp_box = QVBoxLayout()
-        interp_box.setContentsMargins(0, 0, 0, 0)
-        interp_box.setSpacing(2)
-        interp_box.addWidget(self.interp)
-        interp_box.addWidget(interp_help)
-        form.addRow("Interpreter (optional)", self._wrap(interp_box))
+        self.name = QLineEdit(self._record.get("name", ""))
+        self.name.setPlaceholderText("taken from the folder or file you choose")
+        self.name.setToolTip(
+            "How this project is listed. Filled in from your choice of folder or "
+            "file; you can also rename it in the sidebar at any time."
+        )
+        form.addRow("Display name", self.name)
 
         self.command = QLineEdit(self._record.get("command", ""))
-        self.command.setPlaceholderText("python3 server.py 8471  ·  npm run dev  ·  go run .")
-        form.addRow("Startup command", self.command)
-
-        cmd_help = QLabel(
-            "Filled in from the folder or a picked file when the Hub recognises "
-            "it — edit freely."
+        self.command.setPlaceholderText("python3 server.py  ·  npm run dev  ·  go run .")
+        self.command.setToolTip(
+            "The command that starts this project. Filled in when the Hub "
+            "recognises the folder or file — edit it freely."
         )
-        cmd_help.setWordWrap(True)
-        cmd_help.setStyleSheet("color: gray; font-size: 11px;")
-        form.addRow("", cmd_help)
+        self.detection = QLabel("")
+        self.detection.setWordWrap(True)
+        self.detection.setStyleSheet(_HINT_STYLE)
+        cmd_box = QVBoxLayout()
+        cmd_box.setContentsMargins(0, 0, 0, 0)
+        cmd_box.setSpacing(2)
+        cmd_box.addWidget(self.command)
+        cmd_box.addWidget(self.detection)
+        form.addRow("Startup command", self._wrap(cmd_box))
 
-        self.env = QPlainTextEdit()
-        self.env.setPlaceholderText("KEY=VALUE, one per line (optional)")
-        self.env.setMaximumHeight(80)
-        self.env.setPlainText(
-            "\n".join(f"{k}={v}" for k, v in self._record.get("env", {}).items())
-        )
-        form.addRow("Env vars", self.env)
+        # ---------- everything else, behind one toggle ----------
+        self.more = QToolButton()
+        self.more.setText("Optional settings")
+        self.more.setCheckable(True)
+        self.more.setChecked(False)
+        self.more.setArrowType(Qt.RightArrow)
+        self.more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.more.setAutoRaise(True)
+        self.more.toggled.connect(self._toggle_advanced)
 
-        # Extra arguments, appended after the command. Deliberately NOT
-        # auto-injected: the hub cannot know which flag a given server uses to
-        # suppress its own browser ("--no-open" here, "--no-reload" for flask,
-        # nothing at all for npm), so guessing would corrupt commands.
+        self.advanced = QWidget()
+        adv = QFormLayout(self.advanced)
+        adv.setContentsMargins(0, 0, 0, 0)
+        adv.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+
+        self.icon = QComboBox()
+        self.icon.addItems(_ICONS)
+        self.icon.setEditable(True)
+        self.icon.setCurrentText(self._record.get("icon", "🌐"))
+        self.icon.setToolTip("Shown next to the project's name in the sidebar.")
+        self.desc = QLineEdit(self._record.get("description", ""))
+        self.desc.setPlaceholderText("optional description")
+        row_icon = QHBoxLayout()
+        row_icon.addWidget(self.icon)
+        row_icon.addWidget(self.desc, 1)
+        adv.addRow("Icon / description", self._wrap(row_icon))
+
+        self.interp = QLineEdit(self._record.get("interpreter", ""))
+        self.interp.setPlaceholderText(".venv/bin/python, /opt/homebrew/bin/node")
+        self.interp.setToolTip("Only if the command must run through a specific interpreter.")
+        adv.addRow("Interpreter", self.interp)
+
         self.args = QLineEdit(self._record.get("args", ""))
         self.args.setPlaceholderText("--no-open")
-        args_help = QLabel(
+        self.args.setToolTip(
             "Appended to the command — e.g. a flag that stops the server opening "
             "its own browser."
         )
-        args_help.setWordWrap(True)
-        args_help.setStyleSheet("color: gray; font-size: 11px;")
-        args_box = QVBoxLayout()
-        args_box.setContentsMargins(0, 0, 0, 0)
-        args_box.setSpacing(2)
-        args_box.addWidget(self.args)
-        args_box.addWidget(args_help)
-        form.addRow("Extra arguments (optional)", self._wrap(args_box))
+        adv.addRow("Extra arguments", self.args)
 
         self.url = QLineEdit(self._record.get("url", ""))
-        self.url.setPlaceholderText("leave blank to detect it automatically")
-        url_help = QLabel("Only needed if the project starts silently.")
-        url_help.setWordWrap(True)
-        url_help.setStyleSheet("color: gray; font-size: 11px;")
-        url_box = QVBoxLayout()
-        url_box.setContentsMargins(0, 0, 0, 0)
-        url_box.setSpacing(2)
-        url_box.addWidget(self.url)
-        url_box.addWidget(url_help)
-        form.addRow("Dashboard URL (optional)", self._wrap(url_box))
+        self.url.setPlaceholderText("auto-detected")
+        self.url.setToolTip(
+            "The address to show inside the Hub. Leave blank and it is detected "
+            "from the server's own output."
+        )
+        adv.addRow("Dashboard URL", self.url)
+
+        self.env = QPlainTextEdit()
+        self.env.setPlaceholderText("KEY=VALUE, one per line")
+        self.env.setMaximumHeight(70)
+        self.env.setToolTip("Environment variables for this project only.")
+        self.env.setPlainText(
+            "\n".join(f"{k}={v}" for k, v in self._record.get("env", {}).items())
+        )
+        adv.addRow("Env vars", self.env)
 
         self.autostart = QCheckBox("Start automatically when the hub opens")
         self.autostart.setChecked(self._record.get("autostart", False))
-        form.addRow("", self.autostart)
-
-        # ---------- automatic detection (spec §5) ----------
-        # Shown live as the user types, so setup is informative without adding
-        # questions. Detection is best-effort: a low-confidence or "unknown"
-        # result is reported as such, and the type can be overridden below.
-        self.detection = QLabel("Type a command to see what the Hub detected…")
-        self.detection.setWordWrap(True)
-        self.detection.setStyleSheet("color: gray; font-size: 11px;")
-        det_box = QVBoxLayout()
-        det_box.setContentsMargins(0, 0, 0, 0)
-        det_box.setSpacing(2)
-        det_box.addWidget(self.detection)
-        form.addRow("Detected", self._wrap(det_box))
+        adv.addRow("", self.autostart)
 
         self.type_override = QComboBox()
-        self.type_override.addItems(["detect automatically", "web", "static", "desktop", "cli"])
+        self.type_override.addItems(
+            ["detect automatically", "web", "static", "desktop", "cli"]
+        )
         current = self._record.get("type_override") or ""
         self.type_override.setCurrentText(current or "detect automatically")
-        form.addRow("Project type", self.type_override)
+        self.type_override.setToolTip(
+            "How the Hub shows this project. Detection is usually right."
+        )
+        adv.addRow("Project type", self.type_override)
+
+        self.advanced_note = QLabel(
+            "These are worked out automatically. Set one only to override that."
+        )
+        self.advanced_note.setWordWrap(True)
+        self.advanced_note.setStyleSheet(_HINT_STYLE)
+        adv.addRow("", self.advanced_note)
+
+        self.advanced.setVisible(False)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
@@ -167,6 +205,8 @@ class ProjectDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(self.more)
+        layout.addWidget(self.advanced)
         layout.addWidget(self.buttons)
 
         # Re-run detection whenever the fields it depends on change.
@@ -184,8 +224,69 @@ class ProjectDialog(QDialog):
         self.command.textEdited.connect(self._mark_command_touched)
         self.wd.textChanged.connect(self._maybe_suggest_from_folder)
 
+        # The name follows the folder/file the user picks until they type their
+        # own. Only a USER edit turns that off, so a pre-filled folder (base_dir)
+        # never silently names the project after the user's home directory.
+        self._name_auto = not self._editing
+        self.name.textEdited.connect(self._mark_name_touched)
+        self.wd.textEdited.connect(self._maybe_name_from_folder)
+
         self._refresh_detection()
         self._maybe_suggest_from_folder()
+
+        if self._editing and self._advanced_has_values():
+            # Nothing the user has already set is hidden from them.
+            self.more.setChecked(True)
+        self._refresh_more_label()
+
+    # ---------- optional settings ----------
+
+    def _toggle_advanced(self, shown: bool) -> None:
+        self.advanced.setVisible(shown)
+        self.more.setArrowType(Qt.DownArrow if shown else Qt.RightArrow)
+        self._refresh_more_label()
+        # Grow/shrink to fit instead of squeezing the new rows into the old
+        # height, which is what clipped the help text in the crowded version.
+        self.adjustSize()
+
+    def _advanced_has_values(self) -> bool:
+        return bool(
+            self.desc.text().strip()
+            or self.interp.text().strip()
+            or self.args.text().strip()
+            or self.url.text().strip()
+            or self.env.toPlainText().strip()
+            or self.autostart.isChecked()
+            or self.type_override.currentText() != "detect automatically"
+            or (self.icon.currentText().strip() not in ("", "🌐"))
+        )
+
+    def _refresh_more_label(self) -> None:
+        text = "Optional settings"
+        if self.more.isChecked() or not self._advanced_has_values():
+            self.more.setText(text)
+        else:
+            self.more.setText(f"{text} (set)")
+
+    # ---------- name ----------
+
+    def _mark_name_touched(self) -> None:
+        """The user named it themselves; never overwrite that."""
+        self._name_auto = False
+
+    def _maybe_name_from_folder(self) -> None:
+        if not self._name_auto:
+            return
+        folder = self.wd.text().strip()
+        if folder:
+            self.name.setText(name_from_folder(folder))
+
+    def _maybe_name_from_file(self, path: str) -> None:
+        if not self._name_auto:
+            return
+        self.name.setText(name_from_file(path))
+
+    # ---------- detection ----------
 
     def _refresh_detection(self) -> None:
         """Show what the Hub currently believes about this project."""
@@ -204,24 +305,19 @@ class ProjectDialog(QDialog):
             self.detection.setText("Could not inspect this project.")
             return
         if manual:
-            kind = override
             self.detection.setText(
-                self._with_suggestion_note(
-                    f"Using your choice: {kind}. Will be shown as {_display_for(kind)}."
-                )
+                self._with_suggestion_note(f"Shown as {_display_for(override)}")
             )
             return
         if not self.command.text().strip():
-            self.detection.setText("Type a command to see what the Hub detected…")
+            self.detection.setText("Filled in when the Hub recognises the folder.")
             return
         bits = [f"{det.type} ({det.confidence:.0%})"]
         if det.framework:
             bits.append(det.framework)
         if det.port:
             bits.append(f"port {det.port}")
-        bits.append(f"will be shown as {det.display}")
-        if det.type == "unknown":
-            bits.append("— could not tell; it will just run it")
+        bits.append(f"shown as {det.display}")
         self.detection.setText(self._with_suggestion_note(" · ".join(bits)))
 
     def _mark_command_touched(self) -> None:
@@ -284,12 +380,15 @@ class ProjectDialog(QDialog):
         w.setLayout(layout)
         return w
 
+    # ---------- picking ----------
+
     def _pick_dir(self) -> None:
         d = QFileDialog.getExistingDirectory(
             self, "Project folder", self.wd.text() or os.path.expanduser("~")
         )
         if d:
             self.wd.setText(d)
+            self._maybe_name_from_folder()
 
     def _pick_file(self) -> None:
         """Pick one file; its folder and startup command follow from it."""
@@ -306,11 +405,13 @@ class ProjectDialog(QDialog):
         Split from _pick_file so tests can drive it without a file dialog.
         The picked file outranks the folder's own guess — it replaces only
         an empty field or an earlier suggestion of ours, never a command the
-        user wrote (spec §6).
+        user wrote (spec §6). It also names the project, since the file is
+        what the user actually chose.
         """
         parent = os.path.dirname(os.path.abspath(path))
         if parent and parent != self.wd.text().strip():
             self.wd.setText(parent)  # may fill a folder suggestion first
+        self._maybe_name_from_file(path)
         if self._command_touched:
             return
         current = self.command.text().strip()
@@ -332,6 +433,8 @@ class ProjectDialog(QDialog):
             self._suggested_interpreter = sug.interpreter
         self._refresh_detection()
 
+    # ---------- result ----------
+
     def result_record(self) -> dict | None:
         if self.result() != QDialog.Accepted:
             return None
@@ -351,9 +454,15 @@ class ProjectDialog(QDialog):
             det.type = override
             det.display = _display_for(override)
             det.evidence = list(det.evidence) + [f"user override: {override}"]
+        name = self.name.text().strip()
+        if not name:
+            # Never make the user answer a question we can answer ourselves:
+            # an unnamed project is named after the folder it runs in.
+            folder = self.wd.text().strip()
+            name = name_from_folder(folder) if folder else ""
         rec.update(
             {
-                "name": self.name.text().strip(),
+                "name": name,
                 "description": self.desc.text().strip(),
                 "icon": self.icon.currentText().strip() or "🌐",
                 "working_dir": self.wd.text().strip(),

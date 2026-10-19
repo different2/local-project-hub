@@ -605,7 +605,9 @@ def test_reselecting_a_project_does_not_open_a_second_tab(tmp: Path) -> None:
         w._select_id(pid, start=False)
         assert w.tabs.count() == 2, f"duplicated to {w.tabs.count()} tabs"
         labels = [w.tabs.tabText(i) for i in range(w.tabs.count())]
-        assert labels.count("  Solo") == 1, labels
+        # Tab text is the project name trimmed; the sidebar's two-space icon
+        # padding is not carried into the tab strip.
+        assert labels.count("Solo") == 1, labels
     finally:
         w.close()
 
@@ -717,6 +719,109 @@ def test_closing_the_starter_tab_leaves_project_tabs_working(tmp: Path) -> None:
         assert w.starter_index() is not None, "starter could not be reopened"
         assert w.tabs.count() == 2, w.tabs.count()
         assert w.welcome.isVisible(), "welcome pane did not come back"
+    finally:
+        w.close()
+
+
+def test_each_project_has_its_own_terminal(tmp: Path) -> None:
+    """The drawer keeps one terminal per project, and output never carries over.
+
+    User request (2026-10-19): "for each 'project' can they have their own
+    terminal window show instead of a shared terminal window at the bottom. So
+    when i switch between projects the terminal window doesn't carry over, and
+    wont be confused."
+
+    Runs the real path: both markers come from live processes through
+    ProjectProcess.output, not from poking the drawer directly.
+    """
+    st = sm.Store(tmp / "registry.json")
+    for name, marker in (("Alpha", "ALPHA-ONLY"), ("Beta", "BETA-ONLY")):
+        script = tmp / f"{name.lower()}.py"
+        script.write_text(f"print('{marker}', flush=True)\n", encoding="utf-8")
+        st.add(
+            sm.validate(
+                {
+                    "name": name,
+                    "command": f"{sys.executable} {script}",
+                    "working_dir": str(tmp),
+                }
+            )
+        )
+    w = HubWindow(st)
+    w.show()
+    try:
+        alpha, beta = (r["id"] for r in st.ordered())
+
+        # The terminal follows the selection...
+        w._select_id(alpha, start=False)
+        assert w.log_view.header.text() == "Logs — Alpha", w.log_view.header.text()
+        w._proc_for(st.get(alpha)).start()
+        assert _wait_for(lambda: "ALPHA-ONLY" in w.log_view.toPlainText()), (
+            f"Alpha's own output never arrived: {w.log_view.toPlainText()!r}"
+        )
+
+        # ...and switching projects swaps the pane instead of keeping the text.
+        w._select_id(beta, start=False)
+        assert w.log_view.header.text() == "Logs — Beta", w.log_view.header.text()
+        assert "ALPHA-ONLY" not in w.log_view.toPlainText(), (
+            "the previous project's output carried over into this terminal"
+        )
+        w._proc_for(st.get(beta)).start()
+        assert _wait_for(lambda: "BETA-ONLY" in w.log_view.toPlainText()), (
+            f"Beta's own output never arrived: {w.log_view.toPlainText()!r}"
+        )
+
+        # Going back finds Alpha's own history, uncontaminated.
+        w._select_id(alpha, start=False)
+        text = w.log_view.toPlainText()
+        assert "ALPHA-ONLY" in text and "BETA-ONLY" not in text, text
+    finally:
+        for p in list(w.procs.values()):
+            try:
+                p.stop()
+            except Exception:
+                pass
+        w.close()
+
+
+def test_renaming_a_project_in_the_sidebar_sticks(tmp: Path) -> None:
+    """Renaming in the sidebar updates the store, the row and the tab.
+
+    User request (2026-10-19): the name "should be able to be edited in the
+    sidebar ... whenever I want ... Like how I can rename names for sessions".
+    The delegate writes the edited name into the row's name role; the window is
+    what turns that into a saved rename.
+    """
+    from hub.window import _NAME_ROLE
+
+    st = sm.Store(tmp / "registry.json")
+    st.add(
+        sm.validate(
+            {
+                "name": "Old Name",
+                "command": "python3 x.py",
+                "working_dir": str(tmp),
+                "icon": "🌐",
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        pid = st.ordered()[0]["id"]
+        item = w.list.item(0)
+        item.setData(_NAME_ROLE, "New Name")
+        assert st.get(pid)["name"] == "New Name", st.get(pid)["name"]
+        assert item.data(_NAME_ROLE) == "New Name", item.data(_NAME_ROLE)
+        assert "New Name" in item.text(), item.text()
+        idx = w._tab_index_for_project(pid)
+        assert idx is not None, "the project has no tab"
+        assert "New Name" in w.tabs.tabText(idx), w.tabs.tabText(idx)
+
+        # An empty name is not a name: the stored one comes back on the row.
+        item.setData(_NAME_ROLE, "   ")
+        assert st.get(pid)["name"] == "New Name", "a blank rename was saved"
+        assert "New Name" in item.text(), item.text()
     finally:
         w.close()
 
