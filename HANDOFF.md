@@ -1,47 +1,36 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-19, early morning — **v0.4.2 IS LIVE** (the TLS fix
-for the user's real "could not reach update server" report; released and
-verified end to end 2026-10-19 07:43Z). A fresh session should start from
-this file alone: read it, run `git log --oneline -15`, then work the open
-threads below. Long sessions on this project have died mid-task on provider
-errors, so state belongs here and in commits — not only in chat. Developer
-docs (run, test, package, release) live in DEVELOPMENT.md; the README is
-user-facing._
+_Last written: 2026-10-19, morning — **v0.5.0 IS LIVE** (per-project
+terminals, the display name taken from the pick and editable in the
+sidebar, and a simpler Add-project dialog — the user's three UI requests;
+plus the test runner that stops what holds a test port instead of waiting
+30 s). A fresh session should start from this file alone: read it, run
+`git log --oneline -15`, then work the open threads below. Long sessions on
+this project have died mid-task on provider errors, so state belongs here
+and in commits — not only in chat. Developer docs (run, test, package,
+release) live in DEVELOPMENT.md; the README is user-facing._
 
-## Where things stand (verified 2026-10-19, early morning)
+## Where things stand (verified 2026-10-19, morning)
 
-- `main` clean; the v0.4.2 fix is **`e1ea9d6`** (docs refresh commits
-  `7b97df6` and this one on top). Tag `v0.4.2` points at `e1ea9d6` by
-  design — tag the code, never a `[skip ci]` docs commit.
-- **v0.4.2 IS LIVE — released and verified end to end:**
-  - push-run for the fix commit: `#39211706715` green;
-  - the bundled-app probe PASSED in a fresh local rebuild: real
-    `fetch_latest_release()` from inside the built bundle returned
-    `OK version=v0.4.1`; `_ssl_context()` loads 117 CAs from the bundle's
-    certifi while the default store still loads 0 (the negative control
-    that proves the helper is what fixes it);
-  - local full suite: **15/15 suites green, 190 tests**
-    (`full-suite-0.4.2.out` in the scratch dir);
-  - tag `v0.4.2` → tag run `#39214811077` green, ALL FOUR JOBS; release
-    notes applied; `releases/latest` = v0.4.2 (dmg 262,393,485 B; msi
-    172,082,056 B; asset URL 200 unauthenticated).
-- **The user needs ONE more manual install** (0.4.0 cannot self-update —
-  its check dies at TLS): the v0.4.2 dmg from
-  `https://github.com/different2/local-project-hub/releases/latest`, drag
-  to Applications, exactly as before. From 0.4.2 on, updates are
-  genuinely in-app. Assisted alternative if he wants the in-app ride
-  before/while updating: `launchctl setenv SSL_CERT_FILE
-  /etc/ssl/cert.pem`, relaunch the Hub, run the check (fetch + download +
-  dmg hand-off should all work), then `launchctl unsetenv SSL_CERT_FILE`.
-  Untested as a flow — offer it, don't spring it. **Record the outcome of
-  his first real click on 0.4.2 here once known.**
-- **The user's real click found a real bug.** Clicking Check for Updates
-  in his installed 0.4.0 returned "Could not reach the update server" on a
-  perfectly healthy connection. Root cause (reproduced inside the shipped
-  bundle): the app's Python had NO CA trust store, so every HTTPS request
-  died CERTIFICATE_VERIFY_FAILED. Full story, scope and the reproduction
-  harness: the "TLS trust store" section below.
+- `main` clean and pushed through `91348b6` (the 0.5.0 version bump). The
+  UI work is `0b9ed4d` (4 files, +734/−147), the runner fix is `0d9a5f0`,
+  the release commit `91348b6`; tag `v0.5.0` points at `91348b6` by design
+  — tag the code, never a `[skip ci]` docs commit.
+- **v0.5.0 IS LIVE — released and verified:**
+  - push run for `91348b6` (`#39256864511`): green;
+  - tag run (`#39260486253`): all four jobs green; release notes applied;
+    assets dmg 262,410,392 B / msi 172,077,960 B both HTTP 200
+    unauthenticated.
+  - local full suite on the same tree: **15/15 suites, 197 tests, exit 0,
+    13m 54s** (`full-suite-ui3.out` in the scratch dir). The 53-minute
+    run before it (`full-suite-ui2.out`) is what exposed the port-wait
+    bug — 30 s per isolated test because the user's own `obs_live.py`
+    held port 8787.
+- **The user's 0.4.2 click is the one to watch:** `/Applications` now has
+  **0.4.2** (installed 2026-10-19 00:16), so his update click lands on the
+  first build that can actually self-update. The 0.4.2 → 0.5.0 check,
+  download-with-progress and dmg hand-off is the flow to verify on his
+  machine. **Record the outcome here once known.**
 
 ## 2026-10-18 late: "could not reach update server" — the bundle had no CA store
 
@@ -132,6 +121,54 @@ Shipped in `4a4d6ff`:
 - Released unattended: push-run `39196659931` green → tag `v0.4.1` at
   `4a4d6ff` → tag run `39198718961` green → notes applied.
 
+## Release 0.5.0 (2026-10-19): the three UI requests + the port-wait fix — DONE
+
+User requests: each project should get its own terminal pane instead of one
+shared drawer; the project's display name should come from the folder/file
+picked and stay editable in the sidebar "whenever I want"; and most
+Add-project options should hide behind one optional-settings control, with
+no truncated sentences. Shipped in `0b9ed4d` (4 files, +734/−147):
+
+- `hub/window.py` — every `_append_log(...)` call now carries an owner id
+  (`rec["id"]`, `pid`, or `self.active_id`); `LogDrawer` keeps one pane per
+  project and shows the owner in its header (`Logs — <project>`). Switching
+  projects switches panes; nothing carries over. Sidebar rename via
+  `itemDoubleClicked` + `setEditTriggers`; `_retitle_tab()` follows.
+  `_item_label` still uses an empty icon for iconless records (a `•`
+  fallback was tried and reverted — it changed sidebar/tab text and broke
+  `test_reselecting_a_project_does_not_open_a_second_tab`).
+- `hub/project_dialog.py` — 490-line rewrite (was 381): two required
+  fields (folder, command), the name auto-derived from the pick's basename
+  and never overwritten once typed, every auto-decided field behind a
+  `QToolButton` "Optional settings" disclosure, help text given
+  `heightForWidth` so sentences are no longer sliced.
+- Guard tests first: 3 dialog tests in `test_urldetect.py` (one drives the
+  real `_pick_dir()` with a monkeypatched `QFileDialog`), 2 e2e tests in
+  `test_window_e2e.py` (each project's pane gets only its own output;
+  renaming in the sidebar sticks). Suite 190 → 195.
+- Proof beyond the suite: `render_dialog.py` rendered the dialog collapsed
+  and expanded to PNG and both were read back (no clipping, nothing past
+  the right edge); `probe_perproject_drawer.py` drove a real `HubWindow`
+  with two live processes and confirmed Alpha's pane held `ALPHA-ONLY` only,
+  Beta's was empty until its output arrived, and switching back restored
+  Alpha's history.
+
+`0d9a5f0` (separate commit): `tests/run_all.py` `wait_for_ports_free()`
+became `free_test_ports()` — `port_owners()` (`lsof -nP -sTCP:LISTEN -t`),
+`stop_process()` (SIGTERM, then SIGKILL after 1.5 s), bounded wait only
+while a port is still bound; added `test_runner_stops_whatever_holds_a_test_port`.
+Why: a 53-minute suite run exposed a 30 s wait before every isolated test,
+caused by the user's own `obs_live.py` on port 8787. After the fix the same
+suite took 13m 54s and printed one
+`freed test ports [8787]: stopped pid 73750`. Windows keeps the wait-only
+path (no lsof; CI has no stray listeners).
+
+Released 2026-10-19: `91348b6` (version bump only — `hub.__version__` falls
+back to pyproject when no dist metadata is installed) → push run
+`#39256864511` green → tag `v0.5.0` at `91348b6` → tag run `#39260486253`
+all four jobs green → notes applied → README Download pins bumped
+(`[skip ci]` docs commit).
+
 ## Still-true rationale from earlier stretches
 
 - **Pinned dependency sets** (move together — DEVELOPMENT.md "Dependency
@@ -164,11 +201,11 @@ Shipped in `4a4d6ff`:
 
 ## Open threads, in priority order
 
-1. **Get the user onto v0.4.2** (see Where-things-stand): his one manual
-   install, then his first real check+download on a fixed build — watch it
-   and record the outcome here.
-2. **"One-click update" smoothness** — his update click on 0.4.2 is the
-   FIRST genuinely end-to-end run (offer → TLS-clean download with progress
+1. **Watch the user's first real update click** (see Where-things-stand):
+   0.4.2 is installed, 0.5.0 is the release to reach — check → download
+   with progress → dmg hand-off, and record the outcome here.
+2. **"One-click update" smoothness** — this 0.4.2 → 0.5.0 run is the
+   FIRST genuinely end-to-end flow (offer → TLS-clean download with progress
    → dmg hand-off). Remaining beyond that: unsigned-build warnings need
    paid certificates (messaging only until then); macOS
    drag-to-Applications is deliberate (self-replace deferred); whether an
@@ -212,7 +249,7 @@ Shipped in `4a4d6ff`:
 git fetch && git status -sb                    # clean, in sync
 QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 15 suites, serial, ~15 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.4.2 = Latest (verified)
+~/.local/bin/gh release list                   # v0.5.0 = Latest (verified)
 ~/.local/bin/gh run list --branch main --limit 5
 # bundle probe (see the TLS section): rebuild, clone the built .app,
 # drop in probe_main.py, run the stub — app_fetch_latest_release must say
