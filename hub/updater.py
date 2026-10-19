@@ -190,6 +190,45 @@ def verify_sha256(path, expected: str) -> bool:
     return h.hexdigest().lower() == expected.strip().lower()
 
 
+def download_asset(asset: Asset, dest, on_progress=None, chunk_size: int = 256 * 1024) -> None:
+    """Download `asset` to `dest`, reporting (done, total) bytes as it goes.
+
+    Chunked rather than urlretrieve so a long download can show real progress
+    (the update dialog does). A download that ends before the advertised
+    length is an error, not a silently-truncated file: without that check a
+    dropped connection would only be caught by the checksum -- and only when
+    the release actually carries one.
+
+    Raises UpdateError (or a urllib error) on failure; the caller decides
+    what to do about it.
+    """
+    import urllib.request
+
+    req = urllib.request.Request(
+        asset.url, headers={"User-Agent": f"LocalProjectHub/{__version__}"}
+    )
+    expected = 0
+    done = 0
+    with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as fh:
+        try:
+            expected = int(resp.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            expected = 0
+        expected = expected or int(asset.size or 0)
+        while True:
+            buf = resp.read(chunk_size)
+            if not buf:
+                break
+            fh.write(buf)
+            done += len(buf)
+            if on_progress is not None:
+                on_progress(done, expected)
+    if expected and done != expected:
+        raise UpdateError(
+            f"The download ended early ({done} of {expected} bytes), so it was discarded."
+        )
+
+
 def summarize_release(release: Release) -> str:
     """Short, human release summary for the dialog (spec: 'concise summary')."""
     lines = [f"Version {release.version} is available."]

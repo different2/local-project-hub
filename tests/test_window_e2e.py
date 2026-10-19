@@ -148,42 +148,149 @@ def test_check_for_updates_always_reports(tmp: Path) -> None:
     calls `done(worker.result)`. The TypeError landed in Qt's slot handling,
     which swallows exceptions -- so every branch of the check (error, up to
     date, update available) silently did NOTHING. This drives the real worker
-    plumbing with the network call stubbed.
+    plumbing with the network call stubbed, and asserts each outcome lands in
+    the one dialog the check now reports itself in (user request, 2026-10-18:
+    "an obvious notification box in the center of the screen").
     """
     import hub.window as wm
-    from PySide6.QtWidgets import QMessageBox
-
-    from hub.updater import Release
+    from hub.platform import IS_MACOS
+    from hub.updater import Asset, Release, UpdateError
 
     st = sm.Store(tmp / "registry.json")
     w = HubWindow(st)
     w.show()
     original_fetch = wm.fetch_latest_release
-    original_info = QMessageBox.information
-    original_offer = w._offer_update
-    seen = []
     try:
-        # An available update: the offer dialog must be reached.
-        wm.fetch_latest_release = lambda: Release(version="v99.0.0")
-        w._offer_update = lambda release: seen.append(("offer", release.version))
-        w._check_for_updates()
-        assert _wait_for(lambda: seen), "an available update produced no dialog"
+        dlg = w._update_widget()
 
-        # Up to date: an information dialog must appear.
-        wm.fetch_latest_release = lambda: Release(version="v0.0.1")
-        QMessageBox.information = staticmethod(
-            lambda *args, **kwargs: seen.append(
-                ("info", args[2] if len(args) > 2 else "")
-            )
-        )
+        # An available update: the dialog must say so and offer the download.
+        suffix = ".dmg" if IS_MACOS else ".msi"
+        asset = Asset(name=f"Hub-99.0.0{suffix}", url="https://example.com/x", size=10)
+        wm.fetch_latest_release = lambda: Release(version="v99.0.0", assets=[asset])
         w._check_for_updates()
-        assert _wait_for(lambda: any(kind == "info" for kind, _ in seen)), (
-            "'up to date' produced no dialog"
+        assert _wait_for(lambda: "99.0.0" in dlg.headline.text()), (
+            f"an available update produced no dialog: {dlg.headline.text()!r}"
         )
+        assert dlg.primary.isVisible() and "Download" in dlg.primary.text(), (
+            "the update offer did not offer a download"
+        )
+
+        # Up to date: the same dialog must report it.
+        wm.fetch_latest_release = lambda: Release(version="v0.0.1")
+        w._check_for_updates()
+        assert _wait_for(lambda: "up to date" in dlg.headline.text().lower()), (
+            f"'up to date' produced no dialog: {dlg.headline.text()!r}"
+        )
+
+        # A failed check must report too (this used to vanish silently).
+        def _boom():
+            raise UpdateError("Could not reach the update server.")
+
+        wm.fetch_latest_release = _boom
+        w._check_for_updates()
+        assert _wait_for(lambda: "check for updates" in dlg.headline.text().lower()), (
+            f"a failed check produced no dialog: {dlg.headline.text()!r}"
+        )
+        assert "reach the update server" in dlg.detail.text()
     finally:
         wm.fetch_latest_release = original_fetch
-        QMessageBox.information = original_info
-        w._offer_update = original_offer
+        w.close()
+
+
+def test_update_dialog_presents_every_state(tmp: Path) -> None:
+    """The dialog shows: checking, up to date, available, progress, error.
+
+    The user asked (2026-10-18) for one obvious box that walks the whole
+    update flow instead of a quiet status-bar line. This pins the visible
+    states and the one signal the Download button sends.
+    """
+    from hub.update_dialog import UpdateDialog
+    from hub.updater import Asset, Release
+
+    QApplication.instance() or QApplication([])
+    dlg = UpdateDialog(None)
+    got = []
+    dlg.request_download.connect(lambda: got.append("download"))
+
+    dlg.show_checking()
+    assert "Checking" in dlg.headline.text()
+    assert dlg.bar.isVisible() and dlg.bar.maximum() == 0, "checking shows a busy bar"
+
+    dlg.show_up_to_date(__version__)
+    assert "up to date" in dlg.headline.text().lower()
+    assert __version__ in dlg.detail.text()
+
+    rel = Release(version="v9.9.9", notes="Notes here.", html_url="https://example.com/r")
+    asset = Asset(name="Thing-9.9.9.dmg", url="https://example.com/a.dmg", size=1000)
+    dlg.show_available(rel, asset)
+    assert "9.9.9" in dlg.headline.text()
+    assert dlg.primary.isVisible() and "Download" in dlg.primary.text()
+    dlg.primary.click()
+    assert got == ["download"], "the download button must emit request_download"
+
+    dlg.show_downloading(asset.name, asset.size)
+    assert "Downloading" in dlg.headline.text()
+    dlg.set_progress(250, 1000)
+    assert (dlg.bar.value(), dlg.bar.maximum()) == (250, 1000)
+
+    dlg.show_error("Couldn't check for updates", "No network")
+    assert "No network" in dlg.detail.text()
+    assert dlg.primary.isVisible() and dlg.primary.text() == "OK"
+    dlg.close()
+
+
+def test_download_update_shows_progress_and_verifies(tmp: Path) -> None:
+    """A download reports into the dialog, then hands off; a corrupt one doesn't.
+
+    Uses a file:// URL so the real worker path runs without a network, and
+    stubs only the installer launch (its message box would block an offscreen
+    test).
+    """
+    import hashlib
+
+    from hub.updater import Asset
+
+    payload = b"HUB-UPDATE-PAYLOAD-" * 8192
+    src = tmp / "thing.dmg"
+    src.write_bytes(payload)
+
+    st = sm.Store(tmp / "registry.json")
+    w = HubWindow(st)
+    w.show()
+    launched = []
+    original_launch = w._launch_installer
+    try:
+        w._launch_installer = lambda path: launched.append(path)
+        dlg = w._update_widget()
+
+        good = Asset(
+            name="thing.dmg",
+            url=src.as_uri(),
+            size=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        w._download_update(None, good)
+        assert "Downloading" in dlg.headline.text(), (
+            f"the dialog never showed the download: {dlg.headline.text()!r}"
+        )
+        assert _wait_for(lambda: launched), "the installer hand-off never happened"
+        assert w._update_busy is False, "the busy flag was left set"
+
+        # A checksum mismatch must surface as an error and launch nothing.
+        launched.clear()
+        bad = Asset(
+            name="thing2.dmg",
+            url=src.as_uri(),
+            size=len(payload),
+            sha256="0" * 64,
+        )
+        w._download_update(None, bad)
+        assert _wait_for(lambda: "didn't finish" in dlg.headline.text()), (
+            f"a bad checksum produced no error: {dlg.headline.text()!r}"
+        )
+        assert not launched, "the installer was launched for a corrupt download"
+    finally:
+        w._launch_installer = original_launch
         w.close()
 
 

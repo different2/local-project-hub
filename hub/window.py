@@ -48,6 +48,7 @@ from .platform import IS_MACOS, IS_WINDOWS
 from .process_manager import ProjectProcess
 from .project_dialog import ProjectDialog
 from .readiness import ReadinessWaiter
+from .update_dialog import UpdateDialog
 from .updater import UpdateError, _asset_for_platform, fetch_latest_release, is_newer, verify_sha256
 
 _STATE_LABEL = {
@@ -221,8 +222,22 @@ class HubWindow(QMainWindow):
             self.chk_launch.setChecked(launch_at_login.is_enabled())
 
     def _check_for_updates(self) -> None:
-        """Help → Check for Updates (release spec §5)."""
+        """Help → Check for Updates (release spec §5).
+
+        Everything this does is shown in one obvious dialog (user request,
+        2026-10-18): it appears on the click and stays for the whole
+        sequence -- checking, up to date / version available, download
+        progress -- instead of hiding behind the status bar.
+        """
+        dlg = self._update_widget()
+        if getattr(self, "_update_busy", False):
+            # A check or a download is already running; just bring its dialog
+            # back instead of stacking a second one.
+            dlg.reveal()
+            return
+        self._update_busy = True
         self.status.showMessage("Checking for updates…")
+        dlg.show_checking()
         result = {"release": None, "error": None}
 
         def _work():
@@ -241,75 +256,75 @@ class HubWindow(QMainWindow):
             # died as a TypeError inside a Qt slot, which swallows exceptions
             # -- the feature silently did nothing (found by a real click,
             # 2026-10-17).
+            self._update_busy = False
             err, release = result["error"], result["release"]
+            self.status.clearMessage()
             if err:
-                self.status.clearMessage()
-                QMessageBox.information(self, "Check for Updates", err)
+                self._append_log(f"[hub] update check failed: {err}")
+                dlg.show_error("Couldn't check for updates", err)
                 return
             if not is_newer(release.version):
-                self.status.clearMessage()
-                QMessageBox.information(
-                    self,
-                    "Check for Updates",
-                    f"Local Project Hub {__version__} is up to date.",
-                )
+                dlg.show_up_to_date(__version__)
                 return
-            self._offer_update(release)
+            self._pending_update = (release, _asset_for_platform(release.assets))
+            dlg.show_available(release, self._pending_update[1])
 
         self._run_offline_safe(_work, _done)
 
-    def _offer_update(self, release) -> None:
-        from .updater import summarize_release
+    def _update_widget(self) -> UpdateDialog:
+        """One reusable update dialog per window (created on first use)."""
+        dlg = getattr(self, "_update_dialog", None)
+        if dlg is None:
+            dlg = self._update_dialog = UpdateDialog(self)
+            dlg.request_download.connect(self._download_pending_update)
+        return dlg
 
-        asset = _asset_for_platform(release.assets)
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Update available")
-        msg.setText(summarize_release(release))
-        msg.setInformativeText(
-            "Download and install now?\n\n"
-            + (
-                f"The {asset.name} installer will open; your projects and "
-                "settings are kept."
-                if asset
-                else "No installer for this platform was published in this release yet."
-            )
-        )
-        download = msg.addButton("Download and Install", QMessageBox.AcceptRole)
-        msg.addButton("Later", QMessageBox.RejectRole)
-        if release.html_url:
-            msg.addButton("Open release page", QMessageBox.HelpRole)
-        msg.exec()
-
-        clicked = msg.clickedButton()
-        if clicked is download:
+    def _download_pending_update(self) -> None:
+        release, asset = getattr(self, "_pending_update", (None, None))
+        if release is not None:
             self._download_update(release, asset)
-        elif release.html_url and clicked is not None and msg.buttonRole(clicked) == QMessageBox.HelpRole:
-            QDesktopServices.openUrl(QUrl(release.html_url))
+
+
 
     def _download_update(self, release, asset) -> None:
         """Download to a temp file, verify, then hand off to the OS installer.
 
         Never replaces the running executable in place (release spec §5): the
         artifact is staged, integrity-checked, and the platform installer is
-        launched, which asks the user before touching anything.
+        launched, which asks the user before touching anything. Progress goes
+        to the update dialog, which stays up for the whole download -- a
+        250 MB silence made the app look frozen (user report, 2026-10-18).
         """
+        dlg = self._update_widget()
         if asset is None:
-            QMessageBox.warning(
-                self,
-                "Update",
+            dlg.show_error(
+                "No installer for this platform",
                 "This release does not include an installer for your platform yet.",
             )
             return
+        self._update_busy = True
         self.status.showMessage(f"Downloading {asset.name}…")
         self._append_log(f"[hub] downloading update {asset.name}")
+        dlg.show_downloading(asset.name, asset.size or 0)
+
+        # The worker thread only bumps these counters; a GUI-thread timer
+        # reads them into the dialog. The worker must never touch widgets.
+        progress = {"done": 0, "total": asset.size or 0}
 
         def _work():
             import tempfile
-            import urllib.request
+
+            from .updater import download_asset
 
             dest = Path(tempfile.gettempdir()) / asset.name
             try:
-                urllib.request.urlretrieve(asset.url, dest)
+                download_asset(
+                    asset,
+                    dest,
+                    on_progress=lambda done, total: progress.update(
+                        done=done, total=total or progress["total"]
+                    ),
+                )
             except Exception as e:
                 return None, f"Download failed: {e}"
             if asset.sha256:
@@ -320,15 +335,26 @@ class HubWindow(QMainWindow):
                     )
             return dest, None
 
+        timer = QTimer(self)
+        timer.setInterval(250)
+        timer.timeout.connect(
+            lambda: dlg.set_progress(progress["done"], progress["total"])
+        )
+        timer.start()
+
         def _done(res):
+            timer.stop()
+            timer.deleteLater()
+            self._update_busy = False
             dest, err = res if res else (None, "Download failed.")
             if err:
                 self.status.clearMessage()
                 self._append_log(f"[hub] update failed: {err}")
-                QMessageBox.warning(self, "Update", err)
+                dlg.show_error("The update didn't finish", err)
                 return
             self.status.clearMessage()
             self._append_log(f"[hub] update downloaded to {dest}")
+            dlg.close()
             self._launch_installer(dest)
 
         self._run_offline_safe(_work, _done)

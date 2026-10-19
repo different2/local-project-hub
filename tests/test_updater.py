@@ -239,6 +239,64 @@ def test_launch_at_login_off_by_default():
     assert isinstance(lal.is_enabled(), bool)
 
 
+def test_download_asset_reports_progress():
+    """download_asset feeds the update dialog's progress bar.
+
+    The dialog shows real byte progress, so the downloader must call
+    on_progress with (done, total) as it reads -- and a download that ends
+    before its advertised length must be an error, not a truncated installer
+    that only a checksum would catch (and only when one exists).
+    """
+    payload = b"X" * (300 * 1024)  # spans more than one 256 KB chunk
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "asset.bin"
+        src.write_bytes(payload)
+        seen = []
+        dest = Path(d) / "out.bin"
+        asset = updater.Asset(name="asset.bin", url=src.as_uri(), size=len(payload))
+        updater.download_asset(
+            asset, dest, on_progress=lambda done, total: seen.append((done, total))
+        )
+        assert dest.read_bytes() == payload
+        assert seen and seen[-1] == (len(payload), len(payload)), seen
+
+        # A session that promises more than it delivers is an error.
+        import urllib.request
+
+        class _ShortResp:
+            headers = {"Content-Length": str(len(payload) + 10)}
+
+            def __init__(self):
+                self._done = False
+
+            def read(self, n=-1):
+                if self._done:
+                    return b""
+                self._done = True
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        original = urllib.request.urlopen
+        urllib.request.urlopen = lambda *a, **k: _ShortResp()
+        try:
+            try:
+                updater.download_asset(
+                    updater.Asset(name="x.bin", url="https://example.com/x", size=0),
+                    Path(d) / "out2.bin",
+                )
+            except updater.UpdateError:
+                pass
+            else:
+                raise AssertionError("a short download was not treated as an error")
+        finally:
+            urllib.request.urlopen = original
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
