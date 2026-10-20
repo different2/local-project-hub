@@ -38,11 +38,22 @@ release) live in DEVELOPMENT.md; the README is user-facing._
 - **v0.6.0** (previous, same day): tag `v0.6.0` at `ec655a2`, tag run
   `#39368233018` green, assets 262,419,588 B dmg / 172,086,164 B msi;
   suite then was 16/16, 204 tests.
-- **The user's update click is the one to watch:** `/Applications` still has
-  **0.4.2**, which cannot self-install, so his next step (0.4.2 → 0.6.2) is
-  the last manual drag. From 0.6.x on, every update is Restart and Install —
-  the 0.6.2 → later run is the first real self-install. **Record the outcome
-  here once known**, including the path he took.
+- **The self-install has run for real and worked** (verified 2026-10-20 from
+  the bundle and the log, after wrongly reporting "still 0.4.2" from a stale
+  reading): `/Applications/Local Project Hub.app` is **0.6.1**, bundle dated
+  Oct 19 22:01, and `~/Library/Logs/LocalProjectHub/update.log` ends with
+  ```
+  2026-10-19 22:29:12 waiting for pid 155 to exit
+  2026-10-19 22:29:12 copying the new version beside the old one
+  2026-10-19 22:29:17 moving the old version to the Trash (… (before 0.6.0) …)
+  2026-10-19 22:29:17 installed; reopening /Applications/Local Project Hub.app
+  ```
+  with `~/.Trash/Local Project Hub (before 0.6.0) 2026-10-19 22-29-12-155.app`
+  on disk. So 0.4.2 → 0.6.0 was the last manual drag, and **0.6.0 → 0.6.1
+  self-installed exactly as designed** — the window closed, the swap happened,
+  the old copy went to the Trash, the app reopened. The next update
+  (0.6.1 → 0.6.2) is the same path again; the only untested step left in the
+  chain is a swap that *fails*, which by design restores and reopens.
 
 ## Release 0.6.2 (2026-10-19): Rename was a no-op — DONE
 
@@ -321,13 +332,15 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
 
 ## Open threads, in priority order
 
-1. **The first self-installing update.** 0.4.2 cannot self-install, so the
-   user's 0.4.2 → 0.6.2 step is still the last manual drag. The flow to prove
-   with him is the NEXT one (0.6.2 → a later release): check → download →
-   "Preparing…" → **Restart and Install** → the app quits, swaps itself and
-   reopens. `~/Library/Logs/LocalProjectHub/update.log` must end with
-   `installed; reopening`. If the window stays open, or the log says `did not
-   exit`, the quit path is the suspect. Record the outcome here.
+1. **The self-installing update — PROVEN on 2026-10-19 22:29.** The user's
+   0.6.0 → 0.6.1 update ran the whole flow unaided: `update.log` shows
+   `waiting for pid 155 to exit` → `copying` → `moving the old version to the
+   Trash` → `installed; reopening`, and the installed bundle is 0.6.1. What is
+   still unproven is the **failure** half — restore-and-reopen when the copy or
+   the rename fails — because it has never happened outside a test. If a future
+   update leaves the app closed, look for the old bundle in `~/.Trash` and read
+   the log's last line; `did not exit` means the quit path, anything else means
+   the swap.
 2. **"One-click update" smoothness, what's left** — unsigned-build warnings
    need paid certificates (messaging only until then); whether an
    app-downloaded MSI triggers SmartScreen is unverified — check before
