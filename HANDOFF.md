@@ -1,7 +1,8 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-19, evening — **v0.6.1 IS LIVE: updates install
-themselves, and a detected URL now goes to the project that printed it.** The dialog no longer ends by opening the disk image for a drag
+_Last written: 2026-10-19, night — **v0.6.2 IS LIVE: Rename works, updates
+install themselves, and a detected URL now goes to the project that printed
+it.** The dialog no longer ends by opening the disk image for a drag
 to Applications; on macOS it stages the new bundle and offers **Restart and
 Install**, and a detached script swaps it in after the app quits (old copy to
 the Trash, restored on failure). Carried in from 0.5.0: per-project terminals,
@@ -15,11 +16,18 @@ release) live in DEVELOPMENT.md; the README is user-facing._
 
 ## Where things stand (verified 2026-10-19, morning)
 
-- `main` clean and pushed through `fd69d81` (the 0.6.1 fix). The 0.5.0 work
+- `main` clean and pushed through `bc8295c` (the 0.6.2 fix). The 0.5.0 work
   is `0b9ed4d` (UI), `0d9a5f0` (runner) and `91348b6` (bump); the
   self-install work is `ec655a2` (tag `v0.6.0`); the detected-URL fix is
-  `fd69d81` (tag `v0.6.1`) — tag the code, never a `[skip ci]` docs commit.
-- **v0.6.1 IS LIVE — released and verified:**
+  `fd69d81` (tag `v0.6.1`), `bc8295c` (tag `v0.6.2`) — tag the code, never a
+  `[skip ci]` docs commit.
+- **v0.6.2 IS LIVE — released and verified:** tag `v0.6.2` at `bc8295c`; the
+  Rename fix (below) landed red-test-first. Tag run `#39377116143`: all four
+  jobs green (`Tests (windows-latest)`, `Build macOS installer`, `Build
+  Windows installer`, `Publish to the GitHub release`). Assets dmg
+  262,420,721 B / msi 172,086,164 B, both HTTP 200 unauthenticated;
+  `releases/latest` = `v0.6.2`; notes applied.
+- **v0.6.1:**
   - tag run (`#39372517820`): all four jobs green — `Tests (windows-latest)`,
     `Build Windows installer`, `Build macOS installer`, `Publish to the
     GitHub release`;
@@ -31,10 +39,45 @@ release) live in DEVELOPMENT.md; the README is user-facing._
   `#39368233018` green, assets 262,419,588 B dmg / 172,086,164 B msi;
   suite then was 16/16, 204 tests.
 - **The user's update click is the one to watch:** `/Applications` still has
-  **0.4.2**, which cannot self-install, so his next step (0.4.2 → 0.6.1) is
+  **0.4.2**, which cannot self-install, so his next step (0.4.2 → 0.6.2) is
   the last manual drag. From 0.6.x on, every update is Restart and Install —
-  the 0.6.1 → later run is the first real self-install. **Record the outcome
+  the 0.6.2 → later run is the first real self-install. **Record the outcome
   here once known**, including the path he took.
+
+## Release 0.6.2 (2026-10-19): Rename was a no-op — DONE
+
+Reported by the user: *"selecting rename for a project apparently doesn't do
+anything in the side bar view? I click it and nothing happens."*
+
+**Cause.** Sidebar rows were built without `Qt.ItemIsEditable`.
+`QListWidgetItem` is not editable by default, so `editItem()` — exactly what
+the context menu's **Rename…** calls — was refused by Qt and dropped, with
+only `edit: editing failed` on the console. Double-click failed identically,
+so the hint *"Double-click a name to rename it"* described something that
+could not happen. Note the asymmetry that hid it:
+
+- `test_renaming_a_project_in_the_sidebar_sticks` passed throughout, because
+  it writes through the model (`item.setData(_NAME_ROLE, …)`) and never asks
+  the view for an editor. **A model-level test cannot see a view-level
+  refusal** — the guard has to drive `editItem()`.
+
+**Fix** (`hub/window.py`): `item.setFlags(item.flags() | Qt.ItemIsEditable)`
+on row creation, and the menu focuses the list (`self.list.setFocus()`) before
+starting the editor so typing lands in it. Probe: flags 53 → 55, `editItem()`
+reaches `EditingState`, editor pre-filled with the stored name.
+
+**Guard:** `test_rename_opens_an_editor_and_saves_the_new_name` asserts the
+flag, calls `editItem()` like the menu does, checks the editor text, then
+commits through the delegate (`setModelData`) and asserts the registry and the
+row text. Proven red first: *"the sidebar row is not editable, so Rename can
+only do nothing"*.
+
+Local suite: **16/16 suites, 207 tests** (`full-suite-0.6.2.out`); window
+suite 21 (was 20). Released 2026-10-19 night: `bc8295c` (fix + version bump) →
+tag `v0.6.2` → tag run `#39377116143` green → notes applied → README pins
+bumped in a `[skip ci]` docs commit. Note the CI quirk seen twice now: the
+`Publish to the GitHub release` job finishes before `Tests (windows-latest)`,
+so a published release is not yet a passed run — watch the run, not the assets.
 
 ## 2026-10-18 late: "could not reach update server" — the bundle had no CA store
 
@@ -279,8 +322,8 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
 ## Open threads, in priority order
 
 1. **The first self-installing update.** 0.4.2 cannot self-install, so the
-   user's 0.4.2 → 0.6.1 step is still the last manual drag. The flow to prove
-   with him is the NEXT one (0.6.1 → a later release): check → download →
+   user's 0.4.2 → 0.6.2 step is still the last manual drag. The flow to prove
+   with him is the NEXT one (0.6.2 → a later release): check → download →
    "Preparing…" → **Restart and Install** → the app quits, swaps itself and
    reopens. `~/Library/Logs/LocalProjectHub/update.log` must end with
    `installed; reopening`. If the window stays open, or the log says `did not
@@ -329,7 +372,7 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
 git fetch && git status -sb                    # clean, in sync
 QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 16 suites, serial, ~13 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.6.1 = Latest (verified)
+~/.local/bin/gh release list                   # v0.6.2 = Latest (verified)
 ~/.local/bin/gh run list --branch main --limit 5
 # bundle probe (see the TLS section): rebuild, clone the built .app,
 # drop in probe_main.py, run the stub — app_fetch_latest_release must say
