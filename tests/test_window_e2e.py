@@ -22,8 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QEventLoop, QTimer, QUrl  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QTabBar  # noqa: E402
+from PySide6.QtCore import QEventLoop, QTimer, QUrl, Qt  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QAbstractItemView,
+    QApplication,
+    QLabel,
+    QLineEdit,
+    QTabBar,
+)
 
 from helpers import reserve_port, temp_project_dir  # noqa: E402
 from hub import store as sm  # noqa: E402
@@ -822,6 +828,54 @@ def test_renaming_a_project_in_the_sidebar_sticks(tmp: Path) -> None:
         item.setData(_NAME_ROLE, "   ")
         assert st.get(pid)["name"] == "New Name", "a blank rename was saved"
         assert "New Name" in item.text(), item.text()
+    finally:
+        w.close()
+
+
+def test_rename_opens_an_editor_and_saves_the_new_name(tmp: Path) -> None:
+    """Reported 2026-10-19: "I click Rename and nothing happens."
+
+    QListWidgetItem is not editable by default, so `editItem()` — the context
+    menu's Rename — and double-click both failed silently ("edit: editing
+    failed" on the console). The row must carry ItemIsEditable and the editor
+    must start from the stored name, with the delegate's commit saving it.
+    """
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(
+        sm.validate(
+            {
+                "name": "Alpha",
+                "command": f"{sys.executable} -c 'pass'",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        item = w.list.item(0)
+        assert item.flags() & Qt.ItemIsEditable, (
+            "the sidebar row is not editable, so Rename can only do nothing"
+        )
+
+        w.list.setCurrentItem(item)
+        w.list.editItem(item)  # exactly what the context menu's Rename calls
+        assert _wait_for(
+            lambda: w.list.state() == QAbstractItemView.EditingState, 3.0
+        ), "editItem() opened no editor"
+
+        editor = w.list.findChild(QLineEdit)
+        assert editor is not None and editor.isVisible(), "no editor was shown"
+        assert editor.text() == "Alpha", (
+            f"the editor did not start from the stored name: {editor.text()!r}"
+        )
+
+        index = w.list.model().index(w.list.row(item), 0)
+        editor.setText("Renamed In Place")
+        w.list.itemDelegate().setModelData(editor, w.list.model(), index)
+
+        assert (st.get(rec["id"]) or {}).get("name") == "Renamed In Place", st.get(rec["id"])
+        assert "Renamed In Place" in w.list.item(0).text(), w.list.item(0).text()
     finally:
         w.close()
 

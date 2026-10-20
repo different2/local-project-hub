@@ -873,6 +873,11 @@ class HubWindow(QMainWindow):
                 item = QListWidgetItem(self._item_label(rec))
                 item.setData(Qt.UserRole, rec["id"])
                 item.setData(_NAME_ROLE, rec["name"])
+                # Rows are not editable by default, which made both ways of
+                # renaming (double-click and the context menu's "Rename…",
+                # which calls editItem) silently do nothing. Reported
+                # 2026-10-19: "I click it and nothing happens".
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
                 item.setToolTip(rec.get("description") or rec["command"])
                 self.list.addItem(item)
         finally:
@@ -950,6 +955,7 @@ class HubWindow(QMainWindow):
         remove = menu.addAction("Remove…")
         chosen = menu.exec(self.list.mapToGlobal(pos))
         if chosen is rename:
+            self.list.setFocus()
             self.list.editItem(item)
         elif chosen is edit:
             self._edit_project()
