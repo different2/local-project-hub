@@ -97,6 +97,7 @@ SUITES = [
     ("test_urldetect.py", True),
     ("test_detect_type.py", False),
     ("test_detect_command.py", False),
+    ("test_startpage.py", False),
     ("test_version.py", False),
     ("test_runner_ports.py", False),
     ("test_selfupdate.py", False),

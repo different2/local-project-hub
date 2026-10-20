@@ -1,8 +1,11 @@
 """Main window: project list + toolbar + embedded webview + log drawer.
 
 Design notes (matching SPEC's separation principle):
-  * One sidebar list of projects. Selecting a row = "open it": starts the
-    backend if needed, waits for readiness, then points the webview at the URL.
+  * One sidebar list of projects. Selecting a row OPENS it — it does not start
+    it. The tab shows a start page (project name, command, one Start button)
+    and the project runs only when Start is pressed, or when its autostart box
+    is ticked. Selecting a row used to launch the backend, which made every
+    click in the sidebar a hidden "run this".
   * Toolbar: Start/Stop, Restart, Open in Browser, Add, Edit, Remove.
   * Log drawer at the bottom is a TERMINAL PER PROJECT: each project's
     stdout/stderr goes to its own pane and switching projects switches the
@@ -17,9 +20,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from urllib.parse import unquote
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPalette
+from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -48,7 +53,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from . import diagnostics as diagnostics_mod
-from . import launch_at_login, store as store_mod, urldetect
+from . import launch_at_login, startpage, store as store_mod, urldetect
 from .diagnostics import build_report, format_report, save_report
 from .platform import IS_MACOS, IS_WINDOWS
 from .process_manager import ProjectProcess
@@ -79,6 +84,33 @@ class _PopupBridge(QObject):
     """Kept for import compatibility; the popup path now uses createWindow."""
 
 
+class _HubPage(QWebEnginePage):
+    """Intercepts the buttons drawn on the start/status page.
+
+    A custom `hub://` scheme cannot be used for this: QtWebEngine drops clicks
+    on an unknown scheme without ever calling acceptNavigationRequest for them
+    (verified with a probe — the request never arrives). An ordinary https URL
+    on a host that does not resolve does reach us, so the page links to
+    `https://hub.invalid/start/<id>` and this refuses the navigation while
+    emitting what was asked for.
+    """
+
+    start_requested = Signal(str)
+    stop_requested = Signal(str)
+
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):  # noqa: N802
+        if url.host() == startpage.ACTION_HOST:
+            parts = [p for p in url.path().split("/") if p]
+            action = parts[0] if parts else ""
+            pid = unquote(parts[1]) if len(parts) > 1 else ""
+            if pid and action == "start":
+                self.start_requested.emit(pid)
+            elif pid and action == "stop":
+                self.stop_requested.emit(pid)
+            return False
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
+
 class HubWebView(QWebEngineView):
     """A webview that answers window.open(..., "_blank") instead of dropping it.
 
@@ -92,6 +124,16 @@ class HubWebView(QWebEngineView):
     """
 
     popup_opened = Signal(QWebEngineView)
+    #: Emitted when the user presses Start (or Stop) on a page this view shows.
+    start_requested = Signal(str)
+    stop_requested = Signal(str)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        page = _HubPage(self)
+        page.start_requested.connect(self.start_requested)
+        page.stop_requested.connect(self.stop_requested)
+        self.setPage(page)
 
     def createWindow(self, window_type):
         # NOTE: PySide6 expects the QWebEngineView itself here, not .page() —
@@ -883,7 +925,9 @@ class HubWindow(QMainWindow):
         finally:
             self._loading_list = False
         if keep:
-            self._select_id(keep)
+            # Re-selecting after a repaint must not launch the project: the
+            # user renamed or edited it, they did not ask to run it.
+            self._select_id(keep, start=False)
         elif self.list.count() and not self.list.currentItem():
             # Populate the first row WITHOUT starting it: selecting fires the
             # selection handler, which launches the project. During startup the
@@ -963,11 +1007,12 @@ class HubWindow(QMainWindow):
             self._remove_project()
 
     def _select_id(self, project_id: str, start: bool = True) -> None:
-        """Select a project in the sidebar and, by default, launch it.
+        """Select a project in the sidebar; with `start=True`, also run it.
 
-        `start=False` restores the selection WITHOUT launching — used at
-        startup, where merely reopening the hub must not fire a project (and
-        its browser) the user never asked to run.
+        Selecting alone never launches anything any more — the tab opens on its
+        start page. `start=True` is the explicit "open and run" path used by
+        tests and by the toolbar; `start=False` restores a selection without
+        launching, which is what startup does.
         """
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == project_id:
@@ -989,6 +1034,8 @@ class HubWindow(QMainWindow):
                     self._on_select()
                 else:
                     self.list.setCurrentRow(i)  # fires _on_select
+                if start:
+                    self._start_active()
                 return
 
     def _on_select(self) -> None:
@@ -1008,15 +1055,11 @@ class HubWindow(QMainWindow):
 
         self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(proc.state, proc.state)}")
 
-        # If this project already has a tab, just focus it (re-selecting a
-        # project should never spawn duplicates). Otherwise open a new tab.
-        existing = self._tab_index_for_project(pid)
-        if existing is not None:
-            self.tabs.setCurrentIndex(existing)
-            if proc.state in ("stopped", "error"):
-                self._start_active()
-            return
-        self._open_project_tab(rec)
+        # Opening a project's tab must not start anything. Selecting a row was
+        # a hidden "run this" button: one click in the sidebar launched a
+        # server, or a bot, or both. The tab opens on a start page instead and
+        # the project runs when Start is pressed (reported 2026-10-20).
+        self._open_project_tab(rec, start=False)
 
     def _build_welcome_pane(self) -> QWidget:
         """The starter tab's content: what this app is and how to drive it.
@@ -1047,8 +1090,9 @@ class HubWindow(QMainWindow):
             "such as <code>python3 obs_live.py</code>.<br>"
             "2. The dashboard URL is detected automatically — leave that field "
             "blank unless the project needs a fixed one.<br>"
-            "3. Click a project in the list to open its dashboard; it starts "
-            "if it is not already running. Adding a project never starts it.<br><br>"
+            "3. Click a project in the list to open its tab, then press "
+            "<b>Start</b> on that page. Opening a project — or adding one — "
+            "never starts it.<br><br>"
             "<b>Things worth knowing</b><br>"
             "• Each project gets its own tab; a project that opens its own "
             "window (a sphere view, say) gets an extra tab you can close.<br>"
@@ -1193,6 +1237,7 @@ class HubWindow(QMainWindow):
         existing = self._tab_index_for_project(rec["id"])
         if existing is not None and existing >= 0:
             self.tabs.setCurrentIndex(existing)
+            self._refresh_project_page(rec)
             if start and self._proc_for(rec).state != "running":
                 self._start_active()
             return
@@ -1201,6 +1246,8 @@ class HubWindow(QMainWindow):
         view.setProperty("hub_project_id", rec["id"])
         view.popup_opened.connect(self._on_popup_opened)
         view.loadFinished.connect(self._on_load_finished)
+        view.start_requested.connect(self._on_start_requested)
+        view.stop_requested.connect(self._on_stop_requested)
         view.titleChanged.connect(
             lambda t, v=view: self._label_tab(self.tabs.indexOf(v), t or rec["name"])
         )
@@ -1208,42 +1255,108 @@ class HubWindow(QMainWindow):
         self.tabs.setTabToolTip(idx, rec.get("description") or rec["command"])
         self.tabs.setCurrentIndex(idx)
 
+        proc = self._proc_for(rec)
         if not start:
-            # Restoring a selection must not launch anything. Show the tab with
-            # a clear message instead of a blank pane.
-            self.placeholder.setText(
-                f"{rec['name']} is not running.\nPress Start to launch it."
-            )
-            self.status.showMessage(f"{rec['name']} not started")
+            # Opening a tab never launches anything: show the start page and
+            # let the user decide (or, if it is already running, show what it
+            # has to show).
+            self._refresh_project_page(rec)
             return
 
-        proc = self._proc_for(rec)
-        if not rec.get("url"):
-            # No URL configured: start it anyway and learn the address from the
-            # server itself (its own output, or the port it opens). Returning
-            # here without starting would leave nothing to detect.
-            self.status.showMessage(
-                f"{rec['name']} has no dashboard URL yet — starting it to find one…"
-            )
-            self._append_log(
-                f"[hub] {rec['name']} has no dashboard URL; starting it to detect one",
-                rec["id"],
-            )
-            if proc.state != "running":
-                # Must go through _start_active so the port-conflict check runs:
-                # calling proc.start() here skipped it and started straight into
-                # a guaranteed "Address already in use".
+        if rec.get("url"):
+            if proc.state == "running":
+                self._show_dashboard(rec)
+            else:
                 self._start_active()
-            # Fallback for a server that never prints its address.
-            self._scan_ports_after(rec, proc)
             return
-        if proc.state == "running":
-            # Already up: load it directly, no polling needed.
-            self._show_dashboard(rec)
-        else:
-            # stopped / error / starting: (re)start and poll for readiness.
-            # _start_active() handles the already-running case itself.
+
+        # No URL configured: start it and learn the address from the server
+        # itself (its own output, or the port it opens).
+        self.status.showMessage(
+            f"{rec['name']} has no dashboard URL yet — starting it to find one…"
+        )
+        self._append_log(
+            f"[hub] {rec['name']} has no dashboard URL; starting it to detect one",
+            rec["id"],
+        )
+        if proc.state != "running":
+            # Must go through _start_active so the port-conflict check runs:
+            # calling proc.start() here skipped it and started straight into
+            # a guaranteed "Address already in use".
             self._start_active()
+        # Fallback for a server that never prints its address.
+        self._scan_ports_after(rec, proc)
+
+    # ---------- the page a tab shows when it has no dashboard ----------
+
+    def _page_colors(self) -> dict:
+        """The app's own colours, so a start page looks like the rest of it."""
+        pal = self.palette()
+        bg = pal.color(QPalette.Window)
+        fg = pal.color(QPalette.WindowText)
+        return {
+            "bg": bg.name(),
+            "fg": fg.name(),
+            "muted": pal.color(QPalette.PlaceholderText).name(),
+            "accent": pal.color(QPalette.Highlight).name(),
+            "accent_fg": pal.color(QPalette.HighlightedText).name(),
+        }
+
+    def _view_for(self, pid: str) -> "HubWebView | None":
+        """The webview of THIS project's tab, whichever tab is on screen."""
+        idx = self._tab_index_for_project(pid)
+        if idx is None:
+            return None
+        w = self.tabs.widget(idx)
+        return w if isinstance(w, HubWebView) else None
+
+    def _set_tab_page(self, rec: dict, html_text: str) -> None:
+        view = self._view_for(rec["id"])
+        if view is None:
+            return
+        # Remember what was rendered: a hub page is not a dashboard, so the URL
+        # alone cannot say which of the two a tab is showing.
+        view.setProperty("hub_page_html", html_text)
+        # setHtml with a base URL: without one the page has an opaque origin
+        # and relative links/log lines behave oddly.
+        view.setHtml(html_text, QUrl("about:blank"))
+
+    def _show_start_page(self, rec: dict, state: str = "stopped", detail: str = "") -> None:
+        self._set_tab_page(
+            rec,
+            startpage.start_page_html(
+                rec, state=state, detail=detail, colors=self._page_colors()
+            ),
+        )
+
+    def _refresh_project_page(self, rec: dict) -> None:
+        """Show the right page for a project's tab, given how it is running."""
+        if (rec.get("detected") or {}).get("type") == "desktop":
+            return  # desktop projects have no tab of their own
+        proc = self._proc_for(rec)
+        if proc.state == "running":
+            if rec.get("url"):
+                self._show_dashboard(rec)
+            else:
+                self._show_start_page(rec, state="running")
+        elif proc.state == "starting":
+            self._show_start_page(rec, state="starting")
+        else:
+            self._show_start_page(rec, state="stopped")
+
+    def _on_start_requested(self, pid: str) -> None:
+        """The Start button on a project's own page was pressed."""
+        if not pid:
+            return
+        if pid != self.active_id:
+            self._select_project(pid)
+        self._start_active()
+
+    def _on_stop_requested(self, pid: str) -> None:
+        if not pid:
+            return
+        self._select_project(pid)
+        self._stop_active()
 
     def _scan_ports_after(self, rec: dict, proc: ProjectProcess, delay_ms: int = 6000) -> None:
         """For a silent server: look at what ports it opened, once it is up.
@@ -1547,15 +1660,45 @@ class HubWindow(QMainWindow):
                         self.open_starter_tab()
                     else:
                         self.tabs.setCurrentIndex(self.starter_index())
+            else:
+                # It exited on its own: keep the tab (so the terminal is still
+                # there to read) but put the Start button back.
+                self._show_start_page(rec, state="stopped")
         if state == "running" and rec.get("url"):
             self._wait_ready(rec)
+        elif state in ("error", "starting", "running"):
+            # Keep the project's own tab honest: "Starting…" while it comes up,
+            # the status card while it runs without a dashboard, and the Start
+            # button again if it failed. A tab that is showing a real dashboard
+            # is never touched here — only the hub's OWN pages are.
+            view = self._view_for(pid)
+            if view is not None and not self._tab_shows_dashboard(view, rec):
+                if state == "error":
+                    self._show_start_page(
+                        rec, state="error",
+                        detail="It stopped with an error — its terminal has the details.",
+                    )
+                else:
+                    self._show_start_page(rec, state=state)
+
+    def _tab_shows_dashboard(self, view: "HubWebView", rec: dict) -> bool:
+        """True when this tab is showing a live dashboard, not a hub page."""
+        url = view.url().toString()
+        if not url:
+            return False
+        if url.startswith("data:") or url == "about:blank":
+            return False
+        configured = (rec.get("url") or "").rstrip("/")
+        return bool(configured) and url.rstrip("/").startswith(configured)
 
     # ---------- dashboard display ----------
 
     def _show_dashboard(self, rec: dict) -> None:
         if not rec.get("url"):
             return
-        view = self.web
+        # Target the project's OWN tab: a background project that becomes
+        # ready must not repoint whichever tab happens to be on screen.
+        view = self._view_for(rec["id"]) or self.web
         if view is None:
             return
         if view.url().toString() != rec["url"]:
@@ -1601,27 +1744,41 @@ class HubWindow(QMainWindow):
 
         def _ready():
             _cleanup()
-            if pid == self.active_id:
-                # A URL that answers is only THIS project's dashboard if this
-                # project's process is actually alive. Otherwise something else
-                # owns the port and we would be showing a stranger's page.
-                proc = self.procs.get(pid)
-                if proc is not None and proc.state != "running":
-                    self._append_log(
-                        f"[hub] {rec['url']} answered, but {rec['name']} is not running —\n"
-                        f"[hub] that page belongs to another process on the same port.\n",
-                        pid,
-                    )
-                    return
+            # A URL that answers is only THIS project's dashboard if this
+            # project's process is actually alive. Otherwise something else
+            # owns the port and we would be showing a stranger's page.
+            proc = self.procs.get(pid)
+            # "starting" counts as ours too: the waiter can answer in the gap
+            # between the port opening and the process being marked running,
+            # and treating that as a stranger's page would leave the tab stuck
+            # on "Starting…" forever.
+            if proc is not None and proc.state not in ("starting", "running"):
+                self._append_log(
+                    f"[hub] {rec['url']} answered, but {rec['name']} is not running —\n"
+                    f"[hub] that page belongs to another process on the same port.\n",
+                    pid,
+                )
+                return
+            own_tab = self._view_for(pid)
+            if own_tab is None and pid != self.active_id:
+                # Nothing of this project's is on screen, so there is nowhere
+                # to put the dashboard. Never repoint the visible tab: that is
+                # how one background project used to take over another one's
+                # page. Its tab appears (already pointed at the URL) when the
+                # user opens it.
                 self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n", pid)
-                self._show_dashboard(rec)
+                return
+            self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n", pid)
+            self._show_dashboard(rec)
         def _fail(reason: str):
             _cleanup()
             self._append_log(f"[hub] {reason}\n", pid)
             if pid == self.active_id:
                 self.status.showMessage(f"{rec['name']}: {reason}")
-                self.placeholder.setText(reason)
-                self.stack.setCurrentWidget(self.placeholder)
+            # Put the reason on the project's own page, next to a working Start
+            # button — the old code wrote it to the starter tab's placeholder,
+            # which is not on screen while a project tab is open.
+            self._show_start_page(rec, state="error", detail=reason)
 
         waiter.ready.connect(_ready)
         waiter.failed.connect(_fail)
@@ -1711,6 +1868,14 @@ class HubWindow(QMainWindow):
             # alone — it can be missed when this runs from the selection handler.
             self._wait_ready(rec)
         proc.start()
+        # Starting from the toolbar should have somewhere to look: open the
+        # project's tab on its start page so it can turn into "Starting…" and
+        # then either the dashboard or the running card.
+        if (
+            (rec.get("detected") or {}).get("type") != "desktop"
+            and self._tab_index_for_project(pid) is None
+        ):
+            self._open_project_tab(rec, start=False)
 
     def _launch(self, rec: dict, proc: ProjectProcess) -> None:
         """Start the process and begin waiting for its dashboard."""
@@ -1822,9 +1987,25 @@ class HubWindow(QMainWindow):
             return
         rec = self.store.get(pid)
         self._append_log(f"[hub] restarting {rec['name']}\n", pid)
-        self.placeholder.setText(f"Restarting {rec['name']}…")
-        self.stack.setCurrentWidget(self.placeholder)
+        self._show_start_page(rec, state="starting")
         self._proc_for(rec).restart()
+
+    def _select_project(self, pid: str) -> None:
+        """Select a project's row in the sidebar (opening its tab if needed)."""
+        if not pid:
+            return
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            if item.data(Qt.UserRole) == pid:
+                if self.list.currentItem() is item:
+                    # Already selected: _on_select will not fire, so make sure
+                    # active_id is right for whatever acts on it next. Its tab
+                    # is already open — do not reload the page under the click
+                    # that got us here.
+                    self.active_id = pid
+                else:
+                    self.list.setCurrentItem(item)
+                return
 
     def _open_external(self) -> None:
         pid = self.active_id

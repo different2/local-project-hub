@@ -711,8 +711,12 @@ def test_autostart_project_still_starts(tmp: Path) -> None:
         w.close()
 
 
-def test_clicking_a_project_still_starts_it(tmp: Path) -> None:
-    """Selecting a project by hand must still launch it (the normal path)."""
+def test_clicking_a_project_opens_it_without_launching_it(tmp: Path) -> None:
+    """Reported 2026-10-20: a click in the sidebar must not launch anything.
+
+    Selecting a project opens its tab on a start page. Running it takes Start
+    — the page's button, the toolbar action, or the autostart box.
+    """
     port = reserve_port()
     srv_py = tmp / "srv.py"
     srv_py.write_text(_SILENT_SERVER)
@@ -733,12 +737,17 @@ def test_clicking_a_project_still_starts_it(tmp: Path) -> None:
     try:
         _wait_for(lambda: False, timeout_s=2)
         assert w._proc_for(st.get(rec["id"])).state == "stopped", "started on open"
-        w.active_id = rec["id"]
-        w._on_select()
+        w._select_id(rec["id"], start=False)  # exactly what clicking the row does
+        _wait_for(lambda: False, timeout_s=2)
+        assert w._proc_for(st.get(rec["id"])).state == "stopped", (
+            "selecting the project started it"
+        )
+        # start=True is the path the Start button and the toolbar use
+        w._select_id(rec["id"], start=True)
         started = _wait_for(
             lambda: w._proc_for(st.get(rec["id"])).state == "running", timeout_s=25
         )
-        assert started, "clicking a project did not start it"
+        assert started, "pressing Start did not start the project"
     finally:
         p = w._proc_for(st.get(rec["id"]))
         stop_and_release(p, srv_py)
@@ -854,8 +863,8 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
                 lambda value, _proc=_p: setattr(_proc, "_dbg_conflict_signal", value)
             )
         try:
-            w.active_id = rec["id"]
-            w._on_select()
+            # Press Start (start=True); selecting alone no longer runs anything.
+            w._select_id(rec["id"], start=True)
             ok = _wait_for(lambda: offered, timeout_s=30)
             assert ok, (
                 "a bare-command project whose port was taken got no conflict "
@@ -921,8 +930,7 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
                 lambda value, _proc=_p: setattr(_proc, "_dbg_conflict_signal", value)
             )
         try:
-            w.active_id = no_url["id"]
-            w._on_select()
+            w._select_id(no_url["id"], start=True)
             ok = _wait_for(lambda: offered, timeout_s=30)
             assert ok, (
                 "a no-URL project whose port was taken got no conflict offer — "

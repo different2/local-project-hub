@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from helpers import reserve_port, temp_project_dir  # noqa: E402
+from hub import startpage  # noqa: E402
 from hub import store as sm  # noqa: E402
 from hub.window import HubWebView, HubWindow  # noqa: E402
 from hub import __version__  # noqa: E402
@@ -138,11 +139,11 @@ def make_window(tmp: Path) -> tuple[HubWindow, int]:
     w = HubWindow(st)
     w.show()
     # Opening the window must NOT start anything (that was a reported bug: it
-    # fired the project and its browser). Selecting the project is what a user
-    # does, so do that here.
+    # fired the project and its browser). Neither does selecting it — these
+    # tests are about the dashboard, so start it explicitly, the way pressing
+    # Start on the project's start page does.
     rec = st.ordered()[0]
-    w.active_id = rec["id"]
-    w._on_select()
+    w._select_id(rec["id"], start=True)
     return w, port
 
 
@@ -301,7 +302,7 @@ def test_download_update_shows_progress_and_verifies(tmp: Path) -> None:
 
 
 def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
-    """Selecting a project opens ITS OWN tab and loads its dashboard there."""
+    """Opening and starting a project loads its dashboard in its own tab."""
     w, port = make_window(tmp)
     try:
         assert w.active_id, "no project selected after open"
@@ -320,6 +321,172 @@ def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
             f"  proc state = {proc.state}"
         )
     finally:
+        w.close()
+
+
+def _wait_for_page_text(view, needle: str, timeout_s: float = 10.0) -> bool:
+    """True once the tab's rendered DOM contains `needle`.
+
+    setHtml() is asynchronous, so a click issued right after it lands on an
+    empty document. The DOM is read through document.title because this
+    PySide6 build's runJavaScript takes no Python callback.
+    """
+    import json
+
+    script = (
+        "document.title = (document.body && "
+        f"document.body.innerText.includes({json.dumps(needle)})) ? 'HUB_READY' : 'HUB_WAIT'"
+    )
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        view.page().runJavaScript(script)
+        _spin(200)
+        if view.title() == "HUB_READY":
+            return True
+    return False
+
+
+def _page_html(view) -> str:
+    """The hub page this tab was last asked to render.
+
+    Deliberately not read back out of the DOM: this PySide6 build's
+    runJavaScript takes no Python callback, so the page's own copy is kept as a
+    property when it is set. A test that needs PROOF the button works clicks it
+    and watches the project start (see test_pressing_start_on_the_page_runs...).
+    """
+    return view.property("hub_page_html") or ""
+
+
+def test_selecting_a_project_shows_a_start_page_and_runs_nothing(tmp: Path) -> None:
+    """Reported 2026-10-20: selecting a project should not start it.
+
+    The tab opens on a page with the project's name, its command and one Start
+    button — the same look as the hub's own tab, not a blank white pane. The
+    project's process must still be stopped, and nothing may be listening on
+    its port.
+    """
+    port = reserve_port()
+    srv = tmp / "srv.py"
+    srv.write_text(_server_src(port))
+    marker = tmp / "ran.txt"
+    st = sm.Store(tmp / "registry.json")
+    rec = sm.validate(
+        {
+            "name": "Quiet One",
+            "command": f"{sys.executable} -c \"open(r'{marker}','w').write('ran')\"",
+            "url": f"http://127.0.0.1:{port}/",
+            "working_dir": str(tmp),
+        }
+    )
+    rec = st.add(rec)  # add() assigns the id; the validated dict has none
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(rec["id"], start=False)  # exactly what clicking the row does
+        assert _wait_for(lambda: w.tabs.count() == 2), "no tab opened for the project"
+        view = w.tabs.widget(1)
+        proc = w._proc_for(rec)
+
+        assert _wait_for_page_text(view, "Start"), (
+            "the project tab did not show a start page"
+        )
+        page = _page_html(view)
+        assert view.url().toString() in ("", "about:blank"), (
+            f"the tab is not showing a hub page: {view.url().toString()!r}"
+        )
+        assert rec["name"] in page, "the start page does not name the project"
+        assert "Nothing runs until you press Start" in page, page[:600]
+        assert proc.state == "stopped", f"selecting the project started it: {proc.state}"
+        assert not marker.exists(), "selecting the project ran its command"
+    finally:
+        for p in list(w.procs.values()):
+            try:
+                p.stop()
+            except Exception:
+                pass
+        w.close()
+
+
+def test_pressing_start_on_the_page_runs_the_project(tmp: Path) -> None:
+    """The Start button's link must reach the window and launch the project."""
+    port = reserve_port()
+    srv = tmp / "srv.py"
+    srv.write_text(_server_src(port))
+    st = sm.Store(tmp / "registry.json")
+    rec = sm.validate(
+        {
+            "name": "Press Start",
+            "command": f"{sys.executable} {srv} {port}",
+            "url": f"http://127.0.0.1:{port}/",
+            "working_dir": str(tmp),
+        }
+    )
+    rec = st.add(rec)  # add() assigns the id; the validated dict has none
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(rec["id"], start=False)
+        assert _wait_for(lambda: w.tabs.count() == 2), "no tab opened"
+        view = w.tabs.widget(1)
+        proc = w._proc_for(rec)
+        assert proc.state == "stopped", proc.state
+
+        # Click the real button. A custom scheme would not work here
+        # (QtWebEngine drops those clicks without asking the page), which is why
+        # the page links to hub.invalid.
+        assert _wait_for_page_text(view, "Start"), "the start page never rendered"
+        view.page().runJavaScript("document.querySelector('a.btn').click()")
+
+        assert _wait_for(lambda: proc.state in ("starting", "running"), 10.0), (
+            f"pressing Start did nothing: {proc.state}"
+        )
+        assert _wait_for(
+            lambda: view.url().toString() == f"http://127.0.0.1:{port}/", 25.0
+        ), f"dashboard never loaded: {view.url().toString()!r}"
+    finally:
+        for p in list(w.procs.values()):
+            try:
+                p.stop()
+            except Exception:
+                pass
+        w.close()
+
+
+def test_a_project_without_a_dashboard_says_it_is_running(tmp: Path) -> None:
+    """A bot has no page to show: after Start its tab says "Project is running"."""
+    st = sm.Store(tmp / "registry.json")
+    rec = sm.validate(
+        {
+            "name": "Just A Bot",
+            "command": f"{sys.executable} -c \"import time; time.sleep(60)\"",
+            "url": "",
+            "working_dir": str(tmp),
+        }
+    )
+    rec = st.add(rec)  # add() assigns the id; the validated dict has none
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(rec["id"], start=False)
+        assert _wait_for(lambda: w.tabs.count() == 2), "no tab opened"
+        view = w.tabs.widget(1)
+        proc = w._proc_for(rec)
+
+        assert _wait_for_page_text(view, "Start"), "the start page never rendered"
+        view.page().runJavaScript("document.querySelector('a.btn').click()")
+        assert _wait_for(lambda: proc.state == "running", 20.0), (
+            f"the bot never started: {proc.state}"
+        )
+        assert _wait_for_page_text(view, "Project is running"), (
+            "a running project with no dashboard did not get its status card"
+        )
+        assert "Start</a>" not in _page_html(view), "the Start button is still there"
+    finally:
+        for p in list(w.procs.values()):
+            try:
+                p.stop()
+            except Exception:
+                pass
         w.close()
 
 
@@ -347,38 +514,33 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
     w.show()
     try:
         ids = [r["id"] for r in st.ordered()]
+        dashboards = [f"http://127.0.0.1:{p}/" for p in ports]
+
         w._select_id(ids[0])
         assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
-        # Wait for A's page to FINISH loading, not merely for a URL to appear.
-        # url() != "" is set the moment setUrl() is called, which is before the
-        # child server has necessarily bound its port -- so this check can pass
-        # while the load is still failing. That is the intermittent failure:
-        # whether it passes depends on how fast the child starts, which is why
-        # it looked like flakiness and passed 2 runs out of 3.
+        # Opening a project shows its start page; the dashboard appears only
+        # once the project is running AND its port answers. about:blank counts
+        # as "a URL", so waiting for url() != "" would pass on the start page.
         a_view = w.tabs.widget(1)
         assert isinstance(a_view, HubWebView), type(a_view).__name__
         a_done = {"ok": None}
         a_view.loadFinished.connect(lambda ok: a_done.update(ok=ok))
-        assert _wait_for(
-            lambda: a_view.url().toString() != ""
-        ), "A's tab never got a URL"
+        assert _wait_for(lambda: a_view.url().toString() == dashboards[0], timeout_s=30), (
+            f"A's tab never opened its dashboard (url={a_view.url().toString()!r})"
+        )
         assert _wait_for(lambda: a_done["ok"] is not None, timeout_s=30), (
             f"A's page never finished loading (url={a_view.url().toString()!r})"
         )
 
         w._select_id(ids[1])
         assert _wait_for(lambda: w.tabs.count() == 3), f"second project got no tab: {w.tabs.count()}"
-        # Wait for B's page to actually FINISH loading, not merely for a URL to
-        # be assigned. Under Python 3.11 (what CI uses) the second WebEngine
-        # starts later, so a url() != "" check passes while the load is still in
-        # flight and the assertion below then reads a half-built tab.
         b_view = w.tabs.widget(2)
         assert isinstance(b_view, HubWebView), type(b_view).__name__
         b_done = {"ok": None}
         b_view.loadFinished.connect(lambda ok: b_done.update(ok=ok))
-        assert _wait_for(
-            lambda: b_view.url().toString() != ""
-        ), "B's tab never got a URL"
+        assert _wait_for(lambda: b_view.url().toString() == dashboards[1], timeout_s=30), (
+            f"B's tab never opened its dashboard (url={b_view.url().toString()!r})"
+        )
         assert _wait_for(lambda: b_done["ok"] is not None, timeout_s=30), (
             f"B's page never finished loading (url={b_view.url().toString()!r})"
         )
@@ -394,7 +556,7 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
             v = w.tabs.widget(i)
             if isinstance(v, HubWebView):
                 urls.add(v.url().toString())
-        assert urls == {f"http://127.0.0.1:{p}/" for p in ports}, urls
+        assert urls == set(dashboards), urls
     finally:
         w.close()
 
@@ -530,9 +692,9 @@ def test_erroring_project_logs_the_error(tmp: Path) -> None:
     )
     w = HubWindow(st)
     w.show()
-    # Opening the window does not start anything; the user selecting it does.
-    w.active_id = st.ordered()[0]["id"]
-    w._on_select()
+    # Opening a project shows its start page; running it takes Start. The test
+    # asks for the explicit "open and run" path rather than clicking the button.
+    w._select_id(st.ordered()[0]["id"], start=True)
     try:
         proc = w._proc_for(w.store.get(w.active_id))
         ok = _wait_for(lambda: proc.state == "error", timeout_s=15)
@@ -599,7 +761,7 @@ def test_reselecting_a_project_does_not_open_a_second_tab(tmp: Path) -> None:
     st = sm.Store(tmp / "registry.json")
     rec = sm.validate({"name": "Solo", "command": "python3 x.py",
                        "url": "http://127.0.0.1:9999/", "working_dir": str(tmp)})
-    st.add(rec)
+    rec = st.add(rec)  # add() assigns the id; the validated dict has none
     w = HubWindow(st)
     w.show()
     try:
@@ -655,7 +817,7 @@ def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
         {"name": "Live", "command": f"{sys.executable} {srv}",
          "url": "", "working_dir": str(tmp)}
     )
-    st.add(rec)
+    rec = st.add(rec)  # add() assigns the id; the validated dict has none
     w = HubWindow(st)
     w.show()
     try:
