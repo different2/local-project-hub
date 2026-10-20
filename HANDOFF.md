@@ -1,10 +1,13 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-19, morning — **v0.5.0 IS LIVE** (per-project
-terminals, the display name taken from the pick and editable in the
-sidebar, and a simpler Add-project dialog — the user's three UI requests;
-plus the test runner that stops what holds a test port instead of waiting
-30 s). A fresh session should start from this file alone: read it, run
+_Last written: 2026-10-19, morning — **v0.6.0 IS LIVE: updates install
+themselves.** The dialog no longer ends by opening the disk image for a drag
+to Applications; on macOS it stages the new bundle and offers **Restart and
+Install**, and a detached script swaps it in after the app quits (old copy to
+the Trash, restored on failure). Carried in from 0.5.0: per-project terminals,
+the display name taken from the pick and editable in the sidebar, the simpler
+Add-project dialog, and the test runner that stops what holds a test port. A
+fresh session should start from this file alone: read it, run
 `git log --oneline -15`, then work the open threads below. Long sessions on
 this project have died mid-task on provider errors, so state belongs here
 and in commits — not only in chat. Developer docs (run, test, package,
@@ -12,25 +15,22 @@ release) live in DEVELOPMENT.md; the README is user-facing._
 
 ## Where things stand (verified 2026-10-19, morning)
 
-- `main` clean and pushed through `91348b6` (the 0.5.0 version bump). The
-  UI work is `0b9ed4d` (4 files, +734/−147), the runner fix is `0d9a5f0`,
-  the release commit `91348b6`; tag `v0.5.0` points at `91348b6` by design
-  — tag the code, never a `[skip ci]` docs commit.
-- **v0.5.0 IS LIVE — released and verified:**
-  - push run for `91348b6` (`#39256864511`): green;
-  - tag run (`#39260486253`): all four jobs green; release notes applied;
-    assets dmg 262,410,392 B / msi 172,077,960 B both HTTP 200
-    unauthenticated.
-  - local full suite on the same tree: **15/15 suites, 197 tests, exit 0,
-    13m 54s** (`full-suite-ui3.out` in the scratch dir). The 53-minute
-    run before it (`full-suite-ui2.out`) is what exposed the port-wait
-    bug — 30 s per isolated test because the user's own `obs_live.py`
-    held port 8787.
-- **The user's 0.4.2 click is the one to watch:** `/Applications` now has
-  **0.4.2** (installed 2026-10-19 00:16), so his update click lands on the
-  first build that can actually self-update. The 0.4.2 → 0.5.0 check,
-  download-with-progress and dmg hand-off is the flow to verify on his
-  machine. **Record the outcome here once known.**
+- `main` clean and pushed through `ec655a2` (the 0.6.0 release commit). The
+  0.5.0 work is `0b9ed4d` (UI), `0d9a5f0` (runner) and `91348b6` (bump);
+  the self-install work is `ec655a2`; tag `v0.6.0` points at `ec655a2` by
+  design — tag the code, never a `[skip ci]` docs commit.
+- **v0.6.0 IS LIVE — released and verified:**
+  - tag run (`#39368233018`): all four jobs green — `Tests (windows-latest)`,
+    `Build Windows installer`, `Build macOS installer`, `Publish to the
+    GitHub release`;
+  - assets dmg 262,419,588 B / msi 172,086,164 B, both HTTP 200
+    unauthenticated; `releases/latest` = `v0.6.0`; notes applied.
+  - local full suite on the same tree: **16/16 suites, 204 tests, exit 0**
+    (`full-suite-selfupdate.out` in the scratch dir).
+- **The user's update click is the one to watch:** `/Applications` still has
+  **0.4.2**, which cannot self-install, so his 0.4.2 → 0.6.0 step is the last
+  manual drag. From 0.6.0 on, every update is Restart and Install. **Record
+  the outcome here once known**, including the path he took.
 
 ## 2026-10-18 late: "could not reach update server" — the bundle had no CA store
 
@@ -169,6 +169,51 @@ back to pyproject when no dist metadata is installed) → push run
 all four jobs green → notes applied → README Download pins bumped
 (`[skip ci]` docs commit).
 
+## Release 0.6.0 (2026-10-19): an update is a restart, not a drag — DONE
+
+User request: *"For the install part is there any way that instead of click
+to drag over to applications folder I just need to restart the app?"*
+
+The app never overwrites itself while running. `hub/selfupdate.py` (new,
+243 lines) stages the `.app` out of the downloaded dmg (`hdiutil attach` →
+`ditto` → `detach`, quarantine dropped), writes a `/bin/sh` script and quits.
+The script waits for the pid (bounded, `timeout_s=60`), copies the new bundle
+to a sibling `.<name>.incoming-<stamp>` so the final step is a rename, moves
+the old bundle to `~/.Trash/<App> (before <old version>) <stamp>.app`, renames
+the new one in and `/usr/bin/open`s it. A failed copy or rename restores the
+old bundle and opens it; nothing is deleted; every step appends to
+`~/Library/Logs/LocalProjectHub/update.log`.
+
+- `hub/update_dialog.py` — `install_now` signal; `show_preparing(version)`
+  ("Unpacking the new version…") and `show_ready_to_install(version)` with one
+  primary button, **Restart and Install**; `_on_primary` dispatches it. On
+  macOS `show_available` now says the download is "downloaded and prepared"
+  and a restart finishes it (Windows keeps the installer wording).
+- `hub/window.py` — after a verified download, macOS calls
+  `_prepare_macos_update(dmg, release)` (gated by `can_self_install()`; any
+  failure logs `[hub] could not prepare the update: …`, shows the error and
+  falls back to the old `_launch_installer` hand-off). `_restart_and_install`
+  schedules the swap, closes the dialog and the window 100 ms later; if the
+  script cannot start, the user gets a warning naming the staged path.
+- Guard tests: `tests/test_selfupdate.py` (new, 7 tests) runs the REAL script
+  against throwaway bundles — a swap keeps the old copy in the Trash, a
+  missing staged bundle changes nothing, an app that will not exit is waited
+  for only so long, an unwritable folder leaves the old bundle in place, plus
+  the dialog contract. Off macOS (CI is Windows) the same tests assert the
+  module refuses loudly and that every guard is still in the script text.
+  `test_window_e2e.py` gained a case that drives the staged flow through the
+  dialog and asserts the window closes so the swap can run.
+
+Released 2026-10-19: `ec655a2` (feature + version bump + README/DEVELOPMENT
+text) → tag `v0.6.0` at `ec655a2` → tag run `#39368233018` (four jobs, incl.
+publish) green → notes applied from scratch `release-notes-0.6.0.md` → README
+Download pins bumped in the `[skip ci]` docs commit.
+
+**Not yet exercised against a real signed bundle:** the swap is proven with a
+real `hdiutil` dmg round-trip plus a synthetic `Fake Hub.app`; the first true
+run is the user's next update *after* he is on 0.6.0. The installed
+`/Applications` copy must never be modified by a probe.
+
 ## Still-true rationale from earlier stretches
 
 - **Pinned dependency sets** (move together — DEVELOPMENT.md "Dependency
@@ -201,16 +246,19 @@ all four jobs green → notes applied → README Download pins bumped
 
 ## Open threads, in priority order
 
-1. **Watch the user's first real update click** (see Where-things-stand):
-   0.4.2 is installed, 0.5.0 is the release to reach — check → download
-   with progress → dmg hand-off, and record the outcome here.
-2. **"One-click update" smoothness** — this 0.4.2 → 0.5.0 run is the
-   FIRST genuinely end-to-end flow (offer → TLS-clean download with progress
-   → dmg hand-off). Remaining beyond that: unsigned-build warnings need
-   paid certificates (messaging only until then); macOS
-   drag-to-Applications is deliberate (self-replace deferred); whether an
+1. **The first self-installing update.** 0.4.2 cannot self-install, so the
+   user's 0.4.2 → 0.6.0 step is still the last manual drag. The flow to prove
+   with him is the NEXT one (0.6.0 → a later release): check → download →
+   "Preparing…" → **Restart and Install** → the app quits, swaps itself and
+   reopens. `~/Library/Logs/LocalProjectHub/update.log` must end with
+   `installed; reopening`. If the window stays open, or the log says `did not
+   exit`, the quit path is the suspect. Record the outcome here.
+2. **"One-click update" smoothness, what's left** — unsigned-build warnings
+   need paid certificates (messaging only until then); whether an
    app-downloaded MSI triggers SmartScreen is unverified — check before
-   "fixing".
+   "fixing". The macOS drag-to-Applications path now exists only as the
+   fallback for the cases where self-install cannot work (source run,
+   unwritable `/Applications`, a staging error).
 3. **Windows `test_urldetect` flakiness watch** — three different tests have
    failed once each on Windows (`test_detected_suppress_flag_is_applied_to_the_launch`
    run 38917634716; `test_finish_time_output_is_drained_before_deciding_conflict`
@@ -247,9 +295,9 @@ all four jobs green → notes applied → README Download pins bumped
 
 ```bash
 git fetch && git status -sb                    # clean, in sync
-QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 15 suites, serial, ~15 min
+QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 16 suites, serial, ~14 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.5.0 = Latest (verified)
+~/.local/bin/gh release list                   # v0.6.0 = Latest (verified)
 ~/.local/bin/gh run list --branch main --limit 5
 # bundle probe (see the TLS section): rebuild, clone the built .app,
 # drop in probe_main.py, run the stub — app_fetch_latest_release must say
