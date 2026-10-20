@@ -895,6 +895,54 @@ def test_a_macos_update_is_staged_and_installing_it_just_restarts(tmp: Path) -> 
         w.close()
 
 
+def test_a_detected_url_is_saved_to_the_project_that_printed_it(tmp: Path) -> None:
+    """Reported bug (2026-10-19, by someone else): the URL went to the ACTIVE row.
+
+    A project running in the background announces its own dashboard address;
+    that address belongs to that project's entry, not to whichever row the
+    user happens to have selected. Before the fix `_on_url_detected` read
+    `self.active_id`, so Beta's address was stored on Alpha and Alpha's
+    dashboard was opened.
+    """
+    st = sm.Store(tmp / "registry.json")
+    alpha = st.add(
+        sm.validate(
+            {
+                "name": "Alpha",
+                "command": f"{sys.executable} -c 'pass'",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    beta = st.add(
+        sm.validate(
+            {
+                "name": "Beta",
+                "command": f"{sys.executable} -c 'pass'",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        w.active_id = alpha["id"]
+        # Beta is running in the background (not selected) and announces itself.
+        beta_rec = st.get(beta["id"]) or {}
+        w._proc_for(beta_rec).url_detected.emit("http://127.0.0.1:54321/")
+
+        beta_after = st.get(beta["id"]) or {}
+        alpha_after = st.get(alpha["id"]) or {}
+        assert beta_after.get("url") == "http://127.0.0.1:54321/", (
+            f"the URL was not saved to the project that printed it: {beta_after}"
+        )
+        assert not alpha_after.get("url"), (
+            f"the URL was saved to the ACTIVE project instead: {alpha_after}"
+        )
+    finally:
+        w.close()
+
+
 if __name__ == "__main__":
     import tempfile
 

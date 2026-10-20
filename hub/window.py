@@ -1261,7 +1261,7 @@ class HubWindow(QMainWindow):
             proc = ProjectProcess(rec)
             proc.state_changed.connect(lambda s, p=pid: self._on_state(p, s))
             proc.output.connect(lambda text, p=pid: self._append_log(text, p))
-            proc.url_detected.connect(self._on_url_detected)
+            proc.url_detected.connect(lambda u, p=pid: self._on_url_detected(u, p))
             proc.port_conflict_from_output.connect(
                 lambda port, p=pid: self._on_port_conflict_from_output(p, port)
             )
@@ -1362,25 +1362,34 @@ class HubWindow(QMainWindow):
                         return port
         return None
 
-    def _on_url_detected(self, url: str) -> None:
+    def _on_url_detected(self, url: str, pid: str | None = None) -> None:
         """A server announced its own address — use it and remember it.
+
+        The address belongs to the project whose process printed it, which is
+        not necessarily the selected one: a project running in the background
+        announces itself too. Writing that URL onto the active row both loses
+        it and points the wrong dashboard at it (reported 2026-10-19).
 
         Only fills a gap: if the user configured a URL themselves, theirs wins
         and nothing is overwritten. Saves to the registry so the URL field is
         filled in for next time instead of asking again.
         """
-        pid = self.active_id
+        pid = pid or self.active_id
         rec = self.store.get(pid) if pid else None
         if rec is None or rec.get("url"):
             return
-        self._append_log(f"[hub] detected dashboard URL: {url}", pid)
+        self._append_log(f"[hub] detected dashboard URL: {url}", rec["id"])
         rec["url"] = url
         try:
             self.store.update(rec)
         except store_mod.RegistryError:
             pass
         self.status.showMessage(f"Detected {rec['name']} at {url}", 6000)
-        self._show_dashboard(rec)
+        # Only the project in view gets its tab loaded now; a background
+        # project's tab is opened when the user selects it, so its announcing
+        # itself never pulls the window away from what is on screen.
+        if rec["id"] == self.active_id:
+            self._show_dashboard(rec)
 
     # ---------- popups as tabs (window.open / target="_blank") ----------
 
