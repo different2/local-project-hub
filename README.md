@@ -35,12 +35,12 @@ projects' source, virtual environments, or dependencies.
 
 ## Download
 
-Latest version: **v0.6.0**
+Latest version: **v0.6.1**
 
 | Platform | File | Install |
 |---|---|---|
-| macOS 12+ | [`Local.Project.Hub-0.6.0.dmg`](https://github.com/different2/local-project-hub/releases/download/v0.6.0/Local.Project.Hub-0.6.0.dmg) | Open the disk image, drag the app to Applications |
-| Windows | [`Local.Project.Hub-0.6.0.msi`](https://github.com/different2/local-project-hub/releases/download/v0.6.0/Local.Project.Hub-0.6.0.msi) | Double-click the installer |
+| macOS 12+ | [`Local.Project.Hub-0.6.1.dmg`](https://github.com/different2/local-project-hub/releases/download/v0.6.1/Local.Project.Hub-0.6.1.dmg) | Open the disk image, drag the app to Applications |
+| Windows | [`Local.Project.Hub-0.6.1.msi`](https://github.com/different2/local-project-hub/releases/download/v0.6.1/Local.Project.Hub-0.6.1.msi) | Double-click the installer |
 
 Older versions: [Releases](https://github.com/different2/local-project-hub/releases).
 

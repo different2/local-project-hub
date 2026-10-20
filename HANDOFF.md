@@ -1,7 +1,7 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-19, morning — **v0.6.0 IS LIVE: updates install
-themselves.** The dialog no longer ends by opening the disk image for a drag
+_Last written: 2026-10-19, evening — **v0.6.1 IS LIVE: updates install
+themselves, and a detected URL now goes to the project that printed it.** The dialog no longer ends by opening the disk image for a drag
 to Applications; on macOS it stages the new bundle and offers **Restart and
 Install**, and a detached script swaps it in after the app quits (old copy to
 the Trash, restored on failure). Carried in from 0.5.0: per-project terminals,
@@ -15,22 +15,26 @@ release) live in DEVELOPMENT.md; the README is user-facing._
 
 ## Where things stand (verified 2026-10-19, morning)
 
-- `main` clean and pushed through `ec655a2` (the 0.6.0 release commit). The
-  0.5.0 work is `0b9ed4d` (UI), `0d9a5f0` (runner) and `91348b6` (bump);
-  the self-install work is `ec655a2`; tag `v0.6.0` points at `ec655a2` by
-  design — tag the code, never a `[skip ci]` docs commit.
-- **v0.6.0 IS LIVE — released and verified:**
-  - tag run (`#39368233018`): all four jobs green — `Tests (windows-latest)`,
+- `main` clean and pushed through `fd69d81` (the 0.6.1 fix). The 0.5.0 work
+  is `0b9ed4d` (UI), `0d9a5f0` (runner) and `91348b6` (bump); the
+  self-install work is `ec655a2` (tag `v0.6.0`); the detected-URL fix is
+  `fd69d81` (tag `v0.6.1`) — tag the code, never a `[skip ci]` docs commit.
+- **v0.6.1 IS LIVE — released and verified:**
+  - tag run (`#39372517820`): all four jobs green — `Tests (windows-latest)`,
     `Build Windows installer`, `Build macOS installer`, `Publish to the
     GitHub release`;
-  - assets dmg 262,419,588 B / msi 172,086,164 B, both HTTP 200
-    unauthenticated; `releases/latest` = `v0.6.0`; notes applied.
-  - local full suite on the same tree: **16/16 suites, 204 tests, exit 0**
-    (`full-suite-selfupdate.out` in the scratch dir).
+  - assets dmg 262,489,943 B / msi 172,082,068 B, both HTTP 200
+    unauthenticated; `releases/latest` = `v0.6.1`; notes applied.
+  - local full suite on the same tree: **16/16 suites, 206 tests, exit 0**
+    (`full-suite-0.6.1.out` in the scratch dir).
+- **v0.6.0** (previous, same day): tag `v0.6.0` at `ec655a2`, tag run
+  `#39368233018` green, assets 262,419,588 B dmg / 172,086,164 B msi;
+  suite then was 16/16, 204 tests.
 - **The user's update click is the one to watch:** `/Applications` still has
-  **0.4.2**, which cannot self-install, so his 0.4.2 → 0.6.0 step is the last
-  manual drag. From 0.6.0 on, every update is Restart and Install. **Record
-  the outcome here once known**, including the path he took.
+  **0.4.2**, which cannot self-install, so his next step (0.4.2 → 0.6.1) is
+  the last manual drag. From 0.6.x on, every update is Restart and Install —
+  the 0.6.1 → later run is the first real self-install. **Record the outcome
+  here once known**, including the path he took.
 
 ## 2026-10-18 late: "could not reach update server" — the bundle had no CA store
 
@@ -214,6 +218,34 @@ real `hdiutil` dmg round-trip plus a synthetic `Fake Hub.app`; the first true
 run is the user's next update *after* he is on 0.6.0. The installed
 `/Applications` copy must never be modified by a probe.
 
+## Release 0.6.1 (2026-10-19): the detected URL belongs to the right project — DONE
+
+Reported by someone else (2026-10-19): *"A detected dashboard URL is written
+to the active project, not the one that printed it"* — `hub/window.py:1191,
+1292-1309`. Real, and older than 0.6.0: `_on_url_detected` had read
+`self.active_id` since URL auto-detection landed (`1ce591b`), so a project
+running in the background that announced its own address wrote it onto the
+selected project. The announcer kept no URL (asked again next launch) and the
+selected project's dashboard could point at the wrong server.
+
+Fix (`fd69d81`): the `url_detected` signal is connected with the emitting
+project's id (`lambda u, p=pid: self._on_url_detected(u, p)`), the handler
+takes `pid: str | None = None` (falls back to `active_id` for direct calls)
+and only calls `_show_dashboard` when that project is the one in view — a
+background project's address is saved and used on selection, so it never
+pulls the window to its tab. A user-typed URL still wins. The reporter's
+second range (`_on_port_conflict_from_output`) was already owner-aware and is
+unchanged.
+
+Guard test: `test_a_detected_url_is_saved_to_the_project_that_printed_it`
+(two projects, Alpha selected, Beta emits, registry must move on Beta only).
+It failed on the old code with "the URL was not saved to the project that
+printed it".
+
+Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
+`#39372517820` (four jobs incl. publish) green → notes applied from
+`release-notes-0.6.1.md` → README pins bumped in the `[skip ci]` docs commit.
+
 ## Still-true rationale from earlier stretches
 
 - **Pinned dependency sets** (move together — DEVELOPMENT.md "Dependency
@@ -247,8 +279,8 @@ run is the user's next update *after* he is on 0.6.0. The installed
 ## Open threads, in priority order
 
 1. **The first self-installing update.** 0.4.2 cannot self-install, so the
-   user's 0.4.2 → 0.6.0 step is still the last manual drag. The flow to prove
-   with him is the NEXT one (0.6.0 → a later release): check → download →
+   user's 0.4.2 → 0.6.1 step is still the last manual drag. The flow to prove
+   with him is the NEXT one (0.6.1 → a later release): check → download →
    "Preparing…" → **Restart and Install** → the app quits, swaps itself and
    reopens. `~/Library/Logs/LocalProjectHub/update.log` must end with
    `installed; reopening`. If the window stays open, or the log says `did not
@@ -295,9 +327,9 @@ run is the user's next update *after* he is on 0.6.0. The installed
 
 ```bash
 git fetch && git status -sb                    # clean, in sync
-QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 16 suites, serial, ~14 min
+QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 16 suites, serial, ~13 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.6.0 = Latest (verified)
+~/.local/bin/gh release list                   # v0.6.1 = Latest (verified)
 ~/.local/bin/gh run list --branch main --limit 5
 # bundle probe (see the TLS section): rebuild, clone the built .app,
 # drop in probe_main.py, run the stub — app_fetch_latest_release must say
