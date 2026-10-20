@@ -335,7 +335,10 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
 1. **The self-installing update — PROVEN on 2026-10-19 22:29.** The user's
    0.6.0 → 0.6.1 update ran the whole flow unaided: `update.log` shows
    `waiting for pid 155 to exit` → `copying` → `moving the old version to the
-   Trash` → `installed; reopening`, and the installed bundle is 0.6.1. What is
+   Trash` → `installed; reopening`, and the installed bundle is 0.6.1. The
+   0.6.1 → 0.6.2 update did the same at 10:14 on 2026-10-20 (pid 9030, old
+   copy `… (before 0.6.1) 2026-10-20 10-14-33-9030.app`), so the path has now
+   worked twice from a released build. What is
    still unproven is the **failure** half — restore-and-reopen when the copy or
    the rename fails — because it has never happened outside a test. If a future
    update leaves the app closed, look for the old bundle in `~/.Trash` and read
