@@ -31,6 +31,7 @@ class UpdateDialog(QDialog):
     """Single window that walks check -> result -> download."""
 
     request_download = Signal()
+    install_now = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -94,15 +95,23 @@ class UpdateDialog(QDialog):
         self.reveal()
 
     def show_available(self, release, asset) -> None:
+        from .platform import IS_MACOS
         from .updater import summarize_release
 
         self.headline.setText(f"Version {release.version} is available")
         text = summarize_release(release)
         if asset is not None:
-            text += (
-                f"\n\nThe {asset.name} installer will be downloaded and opened; "
-                "your projects and settings are kept."
-            )
+            if IS_MACOS:
+                text += (
+                    f"\n\n{asset.name} will be downloaded and prepared; when "
+                    "it is ready you restart the app and the new version is "
+                    "in place. Your projects and settings are kept."
+                )
+            else:
+                text += (
+                    f"\n\nThe {asset.name} installer will be downloaded and opened; "
+                    "your projects and settings are kept."
+                )
         else:
             text += "\n\nNo installer for this platform was published in this release yet."
         self.detail.setText(text)
@@ -128,6 +137,26 @@ class UpdateDialog(QDialog):
         self.bar.setValue(0)
         self.bar.setVisible(True)
         self._buttons()
+        self.reveal()
+
+    def show_preparing(self, version: str) -> None:
+        self.headline.setText(f"Preparing {version}…")
+        self.detail.setText(
+            "Unpacking the new version. Your projects and settings are kept."
+        )
+        self._busy_bar()
+        self._buttons()
+        self.reveal()
+
+    def show_ready_to_install(self, version: str) -> None:
+        self.headline.setText(f"{version} is ready to install")
+        self.detail.setText(
+            "The app will close, put the new version in place, and reopen by "
+            "itself — there is nothing to drag anywhere. Your projects and "
+            "settings are kept."
+        )
+        self._hide_bar()
+        self._buttons(primary=("Restart and Install", "install"), secondary="Later")
         self.reveal()
 
     def show_error(self, headline: str, message: str) -> None:
@@ -193,6 +222,8 @@ class UpdateDialog(QDialog):
     def _on_primary(self) -> None:
         if self._primary_action == "download":
             self.request_download.emit()
+        elif self._primary_action == "install":
+            self.install_now.emit()
         else:
             self.close()
 

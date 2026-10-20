@@ -99,6 +99,7 @@ SUITES = [
     ("test_detect_command.py", False),
     ("test_version.py", False),
     ("test_runner_ports.py", False),
+    ("test_selfupdate.py", False),
     ("test_output_encoding.py", False),
     ("test_windows_process_stop.py", False),
     ("test_isolation_contract.py", False),

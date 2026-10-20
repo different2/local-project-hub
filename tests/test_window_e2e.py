@@ -826,6 +826,75 @@ def test_renaming_a_project_in_the_sidebar_sticks(tmp: Path) -> None:
         w.close()
 
 
+def test_a_macos_update_is_staged_and_installing_it_just_restarts(tmp: Path) -> None:
+    """The user asked (2026-10-19) why an update needs a drag to Applications.
+
+    With a bundle to replace, the downloaded disk image is staged, the dialog
+    offers "Restart and Install", and choosing it starts the swap script and
+    closes the window. The old drag-the-app-across hand-off must not run as
+    well — one update, one path.
+    """
+    import os
+
+    from hub import selfupdate as su
+    from hub.updater import Release
+
+    st = sm.Store(tmp / "registry.json")
+    w = HubWindow(st)
+    w.show()
+
+    staged = tmp / "staged" / "Local Project Hub.app"
+    staged.mkdir(parents=True)
+    target = tmp / "Applications" / "Local Project Hub.app"
+    target.mkdir(parents=True)
+
+    launched = []
+    scheduled = []
+    originals = (
+        su.can_self_install,
+        su.stage_app_from_dmg,
+        su.bundle_path,
+        su.schedule_install,
+    )
+    try:
+        su.can_self_install = lambda *a, **k: (True, "")
+        su.stage_app_from_dmg = lambda dmg, work: staged
+        su.bundle_path = lambda: target
+        su.schedule_install = lambda s, t, pid, **k: (
+            scheduled.append((Path(s), Path(t), pid)) or staged.parent / "install-update.sh"
+        )
+        w._launch_installer = lambda path: launched.append(path)
+
+        dlg = w._update_widget()
+        rel = Release(version="v9.9.9", notes="", html_url="")
+        w._prepare_macos_update(tmp / "thing.dmg", rel)
+
+        assert _wait_for(lambda: getattr(w, "_pending_install", None)), (
+            "the update was never staged"
+        )
+        assert not launched, "the disk-image hand-off ran even though it did not need to"
+        assert "Restart" in dlg.primary.text(), dlg.primary.text()
+
+        dlg.primary.click()
+        assert _wait_for(lambda: scheduled), "restarting did not start the swap"
+        got_staged, got_target, pid = scheduled[0]
+        assert got_staged == staged, f"staged the wrong bundle: {got_staged}"
+        assert got_target == target, f"the swap targets the wrong bundle: {got_target}"
+        assert pid == os.getpid(), f"the swap waits on the wrong process: {pid}"
+        assert _wait_for(lambda: not w.isVisible()), (
+            "the window did not close, so the swap would wait forever"
+        )
+        assert not launched, "the disk image was opened as well"
+    finally:
+        (
+            su.can_self_install,
+            su.stage_app_from_dmg,
+            su.bundle_path,
+            su.schedule_install,
+        ) = originals
+        w.close()
+
+
 if __name__ == "__main__":
     import tempfile
 

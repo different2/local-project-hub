@@ -128,6 +128,7 @@ hub/
   platform.py            every OS difference, isolated here
   updater.py             in-app update check against GitHub Releases
   update_config.py       update endpoint + issues URL (public URLs, not secrets)
+  selfupdate.py          stages a downloaded .app, swaps it in after the app quits
   diagnostics.py         error reports (no project data, by design)
   launch_at_login.py     opt-in launch at login, per platform
   macos_buttons.py       AppKit helpers (About box window buttons)

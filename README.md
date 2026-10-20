@@ -86,8 +86,11 @@ Worth knowing:
 
 **Help → Check for Updates…** shows the newest release; **Download and
 Install** fetches the installer, verifies the download against its published
-checksum, and opens it. On macOS, drag the new copy over the old one; on
-Windows, the installer runs. Your projects and settings are untouched.
+checksum, and gets it ready. On macOS the app then offers **Restart and
+Install**: it closes, puts the new version in place and reopens by itself —
+the copy it replaces goes to the Trash, and if anything goes wrong the old
+copy is put back before you see it. On Windows, the installer runs. Your
+projects and settings are untouched.
 
 ## Where your data lives
 

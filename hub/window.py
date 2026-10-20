@@ -400,6 +400,7 @@ class HubWindow(QMainWindow):
         if dlg is None:
             dlg = self._update_dialog = UpdateDialog(self)
             dlg.request_download.connect(self._download_pending_update)
+            dlg.install_now.connect(self._restart_and_install)
         return dlg
 
     def _download_pending_update(self) -> None:
@@ -477,8 +478,13 @@ class HubWindow(QMainWindow):
                 return
             self.status.clearMessage()
             self._append_log(f"[hub] update downloaded to {dest}")
-            dlg.close()
-            self._launch_installer(dest)
+            if IS_MACOS:
+                # Stage the new .app now, so "restart" is all the user has to
+                # do; the disk-image hand-off stays as the fallback.
+                self._prepare_macos_update(dest, release)
+            else:
+                dlg.close()
+                self._launch_installer(dest)
 
         self._run_offline_safe(_work, _done)
 
@@ -518,6 +524,73 @@ class HubWindow(QMainWindow):
                 f"Could not start the installer automatically.\n\n"
                 f"The file is saved at:\n{path}\n\n({e})",
             )
+
+    def _prepare_macos_update(self, dmg: Path, release) -> None:
+        """Stage the new .app so that a restart is all the user has to do.
+
+        The swap itself happens in ``hub.selfupdate``'s script after this
+        process is gone. Anything that goes wrong here falls back to the
+        disk-image hand-off, so an update is never left half offered.
+        """
+        from . import selfupdate
+
+        ok, why = selfupdate.can_self_install()
+        if not ok:
+            self._append_log(f"[hub] self-install not available: {why}")
+            self._update_widget().close()
+            self._launch_installer(dmg)
+            return
+
+        dlg = self._update_widget()
+        dlg.show_preparing(release.version)
+
+        def _work():
+            try:
+                return selfupdate.stage_app_from_dmg(dmg, selfupdate.workdir()), None
+            except Exception as e:  # noqa: BLE001 - reported in the dialog
+                return None, f"{type(e).__name__}: {e}"
+
+        def _done(res):
+            staged, err = res
+            if err:
+                self._append_log(f"[hub] could not prepare the update: {err}")
+                dlg.show_error(
+                    "Could not prepare the update",
+                    f"{err}\n\nThe downloaded disk image has been opened "
+                    "instead — drag the app across to finish.",
+                )
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dmg)))
+                return
+            self._pending_install = str(staged)
+            self._pending_install_version = release.version
+            self._append_log(f"[hub] update staged at {staged}")
+            dlg.show_ready_to_install(release.version)
+
+        self._run_offline_safe(_work, _done)
+
+    def _restart_and_install(self) -> None:
+        """Quit so the staged script can swap the bundle and reopen the app."""
+        from . import selfupdate
+
+        staged = getattr(self, "_pending_install", None)
+        target = selfupdate.bundle_path()
+        if not staged or target is None:
+            return
+        try:
+            script = selfupdate.schedule_install(Path(staged), target, os.getpid())
+        except Exception as e:  # noqa: BLE001 - the user must see what happened
+            self._append_log(f"[hub] could not start the installer: {e}")
+            QMessageBox.warning(
+                self,
+                "Update",
+                f"Could not start the installer.\n\n{e}\n\nThe update is "
+                f"staged at:\n{staged}",
+            )
+            return
+        self._append_log(f"[hub] restarting to install the update ({script})")
+        self._update_widget().close()
+        self.status.showMessage("Installing the update…")
+        QTimer.singleShot(100, self.close)
 
     def _report_problem(self) -> None:
         """Help → Report a Problem: save a report, or open a prefilled issue."""
