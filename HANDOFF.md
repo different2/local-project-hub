@@ -1,22 +1,36 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-19, night — **v0.6.2 IS LIVE: Rename works, updates
-install themselves, and a detected URL now goes to the project that printed
-it.** The dialog no longer ends by opening the disk image for a drag
-to Applications; on macOS it stages the new bundle and offers **Restart and
-Install**, and a detached script swaps it in after the app quits (old copy to
-the Trash, restored on failure). Carried in from 0.5.0: per-project terminals,
-the display name taken from the pick and editable in the sidebar, the simpler
-Add-project dialog, and the test runner that stops what holds a test port. A
+_Last written: 2026-10-20, evening — **v0.7.0 IS LIVE: opening a project no
+longer starts it.** A click in the sidebar now only opens the project's tab,
+on a page in the app's own colours with the project's name, its command and
+one **Start** button in the middle; the project runs when Start is pressed.
+Projects with no dashboard (a Discord bot) show "Project is running" instead
+of a button once they are up. Before this, selecting a row called
+`_start_active()`, so every click in the sidebar was a hidden "run this".
+Carried in: self-installing updates (0.6.0), the detected-URL fix (0.6.1),
+Rename in the sidebar (0.6.2), per-project terminals, the display name taken
+from the pick and editable in the sidebar, the simpler Add-project dialog, and
+the test runner that stops what holds a test port. A
 fresh session should start from this file alone: read it, run
 `git log --oneline -15`, then work the open threads below. Long sessions on
 this project have died mid-task on provider errors, so state belongs here
 and in commits — not only in chat. Developer docs (run, test, package,
 release) live in DEVELOPMENT.md; the README is user-facing._
 
-## Where things stand (verified 2026-10-19, morning)
+## Where things stand (verified 2026-10-20, evening)
 
-- `main` clean and pushed through `bc8295c` (the 0.6.2 fix). The 0.5.0 work
+- **v0.7.0 IS LIVE — released and verified** (2026-10-20): opening a project
+  no longer starts it (the section below). Tag `v0.7.0` at `b25329e`; tag run
+  `#39475032062`: all four jobs green (`Build macOS installer`,
+  `Tests (windows-latest)`, `Build Windows installer`, `Publish to the GitHub
+  release`). Assets dmg **262,551,326 B** / msi **172,086,176 B**, both HTTP
+  200 unauthenticated; `releases/latest` = `v0.7.0`; notes applied.
+  Local suite on the same tree: **17/17 suites, 218 tests, exit 0**
+  (`full-suite-0.7.0b.out`).
+- The installed app on this Mac is **0.6.2** as of 2026-10-20 10:14; the
+  0.7.0 update is waiting in Check for Updates, and it is the third
+  self-install to watch (the first two are recorded below).
+- `main` carries `b25329e` (0.7.0). Earlier: `bc8295c` (the 0.6.2 fix). The 0.5.0 work
   is `0b9ed4d` (UI), `0d9a5f0` (runner) and `91348b6` (bump); the
   self-install work is `ec655a2` (tag `v0.6.0`); the detected-URL fix is
   `fd69d81` (tag `v0.6.1`), `bc8295c` (tag `v0.6.2`) — tag the code, never a
@@ -54,6 +68,69 @@ release) live in DEVELOPMENT.md; the README is user-facing._
   the old copy went to the Trash, the app reopened. The next update
   (0.6.1 → 0.6.2) is the same path again; the only untested step left in the
   chain is a swap that *fails*, which by design restores and reopens.
+
+## Release 0.7.0 (2026-10-20): opening a project no longer starts it — DONE
+
+Reported by the user:
+
+> *"when I navigate to a project in the side view it shouldn't automatically
+> start up … Instead I'd like it to open a blank browser tab with the window
+> the same color as the rest of the app, similar to the first tab with the
+> instructions on them, and in the center if the tab there is a start button.
+> Then when it starts up it runs the project. For projects that don't run in
+> the window, like the discord bots I run just replace the button with
+> 'project is now running' or something that sounds nice once it starts up."*
+
+**What changed.** `_on_select` used to call `_start_active()` (or start the
+project from `_open_project_tab`), so a click in the sidebar launched servers,
+bots and their browsers. Now selection only opens the project's tab, and the
+tab lands on a **start page**:
+
+- `hub/startpage.py` (new) renders it: the project's name, the command it
+  runs, one Start button in the middle, styled from the app palette
+  (`_page_colors()` reads `QPalette.Window/WindowText/Highlight`) so it looks
+  like the instructions tab rather than a white webview.
+- The button is an ordinary link to `https://hub.invalid/start/<project id>`,
+  and `_HubPage.acceptNavigationRequest` (a `QWebEnginePage` subclass now
+  installed on every `HubWebView`) refuses that navigation and emits
+  `start_requested` / `stop_requested`. **A custom `hub://` scheme cannot be
+  used**: a probe (`probe_startpage_nav.py`) showed QtWebEngine drops clicks on
+  an unknown scheme without ever calling `acceptNavigationRequest`; the
+  https-on-a-dead-host form does reach it.
+- No dashboard (a bot): the same page becomes a status card — green dot,
+  **Project is running**, "its output is in its terminal below". While
+  starting it says "Starting …"; a failed start shows the reason next to a
+  working Start button.
+- One tab per project: re-selecting focuses the existing tab and refreshes its
+  page. `_show_dashboard` and `_on_state` now target the project's **own**
+  view, so a background project becoming ready cannot repoint the tab on
+  screen. `_ready()` no longer requires the project to be the active one (it
+  just needs its own tab); it treats `starting` as ours as well as `running`,
+  so a fast port cannot leave the tab stuck on "Starting…".
+- A project that exits by itself keeps its tab and terminal and shows the
+  stopped page; a user Stop closes the tabs and returns to the starter tab.
+- Desktop projects (an app in its own window) still get no tab: they log
+  "press Start to launch it" and start from the toolbar.
+
+**Tests.** Three existing tests assumed selection auto-started and now start
+explicitly (`test_clicking_a_project_opens_it_without_launching_it`, the two
+port-conflict tests in `test_urldetect.py`); the clicking one asserts the new
+contract both ways (select ≠ start, Start = start). New: `tests/test_startpage.py`
+(8) for the link and the page text, `test_startpage.py` registered in
+`run_all.py`, and three window e2e tests (page shown and nothing running; the
+button actually starting the project; the running card).
+
+**Two traps worth remembering.**
+
+- `st.add(rec)` returns a **new** dict (`validate()` copies), so
+  `rec = st.add(validate({...}))` is required before `rec["id"]` means
+  anything. A test that kept the pre-add dict silently used `id == ""`, so
+  `_select_id` matched no row and the assertions passed for the wrong reason.
+- `setHtml()` is asynchronous: a click issued right after it lands on an empty
+  document. `_wait_for_page_text()` polls `document.title` (this PySide6 build's
+  `runJavaScript` takes no Python callback) until the DOM really contains the
+  text, then clicks. The real app was fine all along — only the test clicked
+  too early.
 
 ## Release 0.6.2 (2026-10-19): Rename was a no-op — DONE
 
@@ -338,7 +415,9 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
    Trash` → `installed; reopening`, and the installed bundle is 0.6.1. The
    0.6.1 → 0.6.2 update did the same at 10:14 on 2026-10-20 (pid 9030, old
    copy `… (before 0.6.1) 2026-10-20 10-14-33-9030.app`), so the path has now
-   worked twice from a released build. What is
+   worked twice from a released build. **0.6.2 → 0.7.0 is the next one** and
+   the first that the user will take from a build he has not seen before.
+   What is
    still unproven is the **failure** half — restore-and-reopen when the copy or
    the rename fails — because it has never happened outside a test. If a future
    update leaves the app closed, look for the old bundle in `~/.Trash` and read
@@ -386,9 +465,9 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
 
 ```bash
 git fetch && git status -sb                    # clean, in sync
-QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 16 suites, serial, ~13 min
+QT_QPA_PLATFORM=offscreen .hubenv/bin/python tests/run_all.py   # 17 suites, serial, ~14 min
 .hubenv/bin/python tests/test_workflow_yaml.py                  # workflow guards, seconds
-~/.local/bin/gh release list                   # v0.6.2 = Latest (verified)
+~/.local/bin/gh release list                   # v0.7.0 = Latest (verified)
 ~/.local/bin/gh run list --branch main --limit 5
 # bundle probe (see the TLS section): rebuild, clone the built .app,
 # drop in probe_main.py, run the stub — app_fetch_latest_release must say
