@@ -9,6 +9,13 @@ encoding crash meant nobody could read why.
 These tests pin the Windows branch by forcing IS_WINDOWS on. They do not prove
 Windows behaviour (nothing here can) -- they prove the branch exists, is wired
 to the right timers, and would survive a refactor that deleted it.
+
+Rewritten 2026-10-20 (Windows audit, INFO-006): three of these tests used to
+read process_manager.py as text and assert that words like "taskkill",
+"WINDOWS_TERM_GRACE_MS" and "_restart_after_port_free" appeared in the right
+function body. That cannot fail when the call is deleted but the word is left in
+a comment, and it cannot pass after a harmless rename. They now run the code
+against a fake QProcess instead.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -39,29 +47,142 @@ def test_windows_escalates_before_the_full_grace_period() -> None:
     )
 
 
+class _FakeProc:
+    """The slice of QProcess these kill paths touch. No child is ever started.
+
+    The previous version of this suite read `hub/process_manager.py` as text and
+    asserted that the words "taskkill", "/T" and "_restart_after_port_free"
+    appeared in the right function bodies. That proves a string was typed, not
+    that anything is wired: deleting the call and leaving the word in a comment
+    would have kept the suite green, and a refactor that renamed a helper broke
+    it for no reason. These fakes let the code actually run.
+    """
+
+    def __init__(self, state=None, pid: int = 4321, code: int = 0):
+        self._state = pm.QProcess.Running if state is None else state
+        self._pid = pid
+        self._code = code
+        self.terminated = False
+        self.killed = False
+
+    def state(self):
+        return self._state
+
+    def exitCode(self) -> int:
+        return self._code
+
+    def processId(self) -> int:
+        return self._pid
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self._state = pm.QProcess.NotRunning
+
+    def readAllStandardOutput(self) -> bytes:
+        return b""
+
+    def readAllStandardError(self) -> bytes:
+        return b""
+
+
+def _fake_process() -> pm.ProjectProcess:
+    rec = {"name": "server", "command": "python3 server.py", "working_dir": str(PROJECT_ROOT)}
+    proc = pm.ProjectProcess(rec)
+    proc.proc = _FakeProc()
+    return proc
+
+
 def test_force_kill_uses_taskkill_on_windows() -> None:
     """The force-kill path must call taskkill /T /F, not just QProcess.kill().
 
     kill() alone leaves anything the process spawned holding the port, and
     terminate() never reaches a console process at all.
     """
-    src = (PROJECT_ROOT / "hub" / "process_manager.py").read_text(encoding="utf-8")
-    body = src[src.index("def _force_kill") :]
-    body = body[: body.index("\n    def ", 1)]
-    assert "taskkill" in body, "Windows force-kill does not use taskkill"
-    assert "/T" in body and "/F" in body, "taskkill must take the tree (/T) forcibly (/F)"
-    assert "IS_WINDOWS" in body, "the taskkill branch is not gated on IS_WINDOWS"
+    argv_seen: list[list[str]] = []
+
+    class _Completed:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(argv, **kwargs):
+        argv_seen.append(list(argv))
+        return _Completed()
+
+    proc = _fake_process()
+    with mock.patch.object(pm.subprocess, "run", fake_run), mock.patch.object(
+        pm, "IS_WINDOWS", True
+    ):
+        proc._force_kill()
+
+    assert argv_seen, (
+        "the Windows force-kill never ran taskkill; kill() alone leaves every "
+        "child the server spawned holding its port"
+    )
+    argv = argv_seen[0]
+    assert argv[:3] == ["taskkill", "/PID", "4321"], f"taskkill was aimed wrong: {argv}"
+    assert "/T" in argv and "/F" in argv, f"taskkill must take the tree forcibly: {argv}"
+    assert proc.proc.killed, "taskkill ran but QProcess.kill() was never called"
 
 
 def test_stop_schedules_a_windows_escalation() -> None:
     """stop() must arm the short Windows timer so a hung child dies promptly."""
-    src = (PROJECT_ROOT / "hub" / "process_manager.py").read_text(encoding="utf-8")
-    body = src[src.index("    def stop(self)") :]
-    body = body[: body.index("\n    def ", 1)]
-    assert "WINDOWS_TERM_GRACE_MS" in body, (
-        "stop() does not arm the short Windows escalation timer"
+    scheduled: list[tuple[int, object]] = []
+
+    class _TimerSpy:
+        @staticmethod
+        def singleShot(ms, fn):
+            scheduled.append((ms, fn))
+
+    proc = _fake_process()
+    with mock.patch.object(pm, "IS_WINDOWS", True), mock.patch.object(pm, "QTimer", _TimerSpy):
+        proc.stop()
+
+    assert proc.proc.terminated, "stop() never asked the child to terminate"
+    assert scheduled, (
+        "stop() armed no Windows escalation: terminate() posts WM_CLOSE, which a "
+        "console child never receives, so the stop would hang for the full POSIX grace"
     )
-    assert "_force_kill" in body, "stop() has nothing to escalate to"
+    ms, fn = scheduled[0]
+    assert ms == pm.WINDOWS_TERM_GRACE_MS, (
+        f"the escalation waits {ms}ms, not the short {pm.WINDOWS_TERM_GRACE_MS}ms "
+        "Windows grace"
+    )
+    assert getattr(fn, "__name__", "") == "_force_kill", (
+        "the Windows escalation is not wired to the force-kill path"
+    )
+    proc._kill_timer.stop()
+
+
+def test_restart_waits_for_the_port_to_free() -> None:
+    """A restart must not fire while the old process still holds the port.
+
+    On Windows the terminated child keeps its listening socket briefly, so
+    restarting the instant `finished` fires makes the replacement die with
+    "Address already in use" and leaves the project stuck in 'starting'. That is
+    exactly the failure the Windows job reported: test_restart with states
+    ['starting', 'running'].
+    """
+    proc = _fake_process()
+    proc.proc = _FakeProc(state=pm.QProcess.NotRunning)
+    proc._pending_restart = True
+    proc._user_stopped = True  # a user stop, so the exit is not reported as an error
+
+    routed: list[int] = []
+    started: list[bool] = []
+    proc._restart_after_port_free = lambda attempts=40: routed.append(attempts)
+    proc.start = lambda: started.append(True)
+
+    proc._on_finished(0, pm.QProcess.NormalExit)
+
+    assert routed, "_on_finished did not route the pending restart through the port check"
+    assert not started, (
+        "_on_finished started the replacement immediately, before the old child "
+        "released its port"
+    )
 
 
 def test_taskkill_command_shape() -> None:
@@ -86,26 +207,39 @@ def test_taskkill_command_shape() -> None:
     assert "invalid" not in out, f"taskkill rejected the argv shape: {out[:200]}"
 
 
-def test_restart_waits_for_the_port_to_free() -> None:
-    """A restart must not fire while the old process still holds the port.
+def test_restart_gives_up_honestly_when_the_port_never_frees() -> None:
+    """When the port stays held, the restart must report it instead of looping.
 
-    On Windows the terminated child keeps its listening socket briefly, so
-    restarting the instant `finished` fires makes the replacement die with
-    "Address already in use" and leaves the project stuck in 'starting'. That is
-    exactly the failure the Windows job reported: test_restart with states
-    ['starting', 'running'].
+    This exercises the real probe: a socket holds the project's port, so the
+    bounded retry runs out at once (attempts=0) and the project must end in
+    'error' with nothing launched, rather than starting into a busy port.
     """
-    src = (PROJECT_ROOT / "hub" / "process_manager.py").read_text(encoding="utf-8")
-    on_finished = src[src.index("def _on_finished") :]
-    on_finished = on_finished[: on_finished.index("\n    def ", 1)]
-    assert "self.start()" not in on_finished, (
-        "_on_finished starts the replacement immediately -- the port may still "
-        "be held, so the new server fails to bind"
-    )
-    assert "_restart_after_port_free" in on_finished, (
-        "_on_finished does not route a pending restart through the port check"
-    )
-    assert "tcp_open" in src, "the restart path no longer probes the port"
+    import socket
+
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    try:
+        proc = pm.ProjectProcess(
+            {
+                "name": "held",
+                "command": "python3 held.py",
+                "working_dir": str(PROJECT_ROOT),
+                "url": f"http://127.0.0.1:{port}/",
+            }
+        )
+        states: list[str] = []
+        started: list[bool] = []
+        proc.state_changed.connect(states.append)
+        proc.start = lambda: started.append(True)
+
+        proc._restart_after_port_free(attempts=0)
+
+        assert not started, "the replacement was started while the port was still held"
+        assert "error" in states, f"giving up on a held port reported no error: {states}"
+    finally:
+        holder.close()
 
 
 if __name__ == "__main__":

@@ -473,6 +473,16 @@ def report_suite(name: str, code: int, passed: int, failed: int, out: str) -> in
     if code != 0 and failed == 0 and passed > 0:
         status = "ok  "
         code = 0
+    if code == 0 and passed == 0 and failed == 0:
+        # A suite that exits 0 having reported nothing is NOT a pass. This used
+        # to print "ok 0 passed, 0 failed" and count towards "17/17 suites
+        # passed": a test renamed past the suite's __main__ loop, a `--test=`
+        # filter matching nothing, or a module that imports and returns without
+        # running any test all looked exactly like success. The same hole hid
+        # whole files in test_popup_bridge.py, which now refuses to run nothing.
+        code = 1
+        status = "FAIL"
+        emit(f"  NOTE     {name} reported no tests at all (0 passed, 0 failed)")
     emit(f"  {status}     {name:26} {passed} passed, {failed} failed")
     if code != 0:
         report_failure(name, out)
@@ -514,8 +524,10 @@ def main() -> int:
                         f"Add it to ISOLATE_TESTS."
                     )
                     code = 0
-                if failed == 0 and code == 0 and "all passed" in out:
-                    passed = max(passed, 1)
+                # A suite that prints "--- all passed" without naming a single
+                # test used to be credited with one pass here, which masked the
+                # 0/0 hole report_suite now fails on. Every suite prints one
+                # "PASS <name>" line per test, so nothing needs that credit.
         except subprocess.TimeoutExpired:
             emit(f"  TIMEOUT  {name}")
             results.append((name, 1))

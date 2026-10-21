@@ -149,6 +149,41 @@ def test_runner_returns_at_once_when_nothing_holds_a_port() -> None:
     assert took < 0.5, f"an empty port list still cost {took:.2f}s"
 
 
+def test_a_suite_that_runs_no_tests_is_not_green() -> None:
+    """0 passed, 0 failed and exit 0 must be a failure, not a green suite.
+
+    A test renamed past its suite's `__main__` loop, a `--test=` filter that
+    matched nothing, and a module that imported and returned without running
+    anything all exited 0 and printed "ok 0 passed, 0 failed", so the runner
+    counted a suite it had not actually run. The Windows audit (2026-10-20)
+    flagged that as a test-quality defect: the count line is the only evidence
+    that a suite ran.
+    """
+    import contextlib
+    import io
+
+    def run(code: int, passed: int, failed: int) -> tuple[int, str]:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            final = run_all.report_suite("test_nothing.py", code, passed, failed, "")
+        return final, buf.getvalue()
+
+    final, printed = run(0, 0, 0)
+    assert final != 0, f"a suite that ran no tests was reported green:\n{printed}"
+    assert "FAIL" in printed, f"the empty suite's line did not say FAIL:\n{printed}"
+
+    # Positive control: the same call with real results stays green, so the
+    # assertion above is about emptiness and not about report_suite failing
+    # everything.
+    final, printed = run(0, 3, 0)
+    assert final == 0, f"a suite with 3 passing tests was failed:\n{printed}"
+
+    # And the teardown-crash rule that must survive: a signal-killed process
+    # after every test passed is a Qt crash, not a red suite.
+    final, printed = run(-11, 3, 0)
+    assert final == 0, f"a Qt teardown crash after 3 passes failed the run:\n{printed}"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

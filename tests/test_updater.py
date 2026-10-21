@@ -160,19 +160,70 @@ def test_no_endpoint_reports_clearly():
 # ---------- diagnostics ----------
 
 
-def test_report_excludes_project_data():
-    """The report must not leak projects, paths, or commands (privacy)."""
-    report = diagnostics.build_report(
-        error="boom",
-        log_tail="[hub] starting /secret/path python3 app.py",
-        project_count=5,
-    )
+REPORT_KEYS = {
+    # Every field build_report() may add. A new one must be added here, which
+    # forces the question "can this carry project data?" to be answered.
+    "app",
+    "version",
+    "platform",
+    "arch",
+    "python",
+    "qt",
+    "timestamp",
+    "registered_projects",
+    "error",
+    "traceback",
+    "log_tail",
+}
+
+
+def test_report_keeps_a_count_and_nothing_else_from_the_registry():
+    """build_report() adds a project COUNT, never a name, folder, or command.
+
+    Rewritten 2026-10-20. The old assertion was
+
+        assert "/secret/path" not in text.replace("starting /secret/path", "") or "log_tail" in report
+
+    whose right-hand side is true whenever a log tail is supplied — which is
+    every real report — so it could not fail whatever the code did. It also
+    excused the leak it was named after by deleting it from the text first.
+
+    What this covers: the builder is handed a count and nothing else, so a
+    report built from an error cannot acquire project data, and no unreviewed
+    field can appear.
+
+    What it does NOT cover, on purpose: the caller's log tail is embedded
+    verbatim, and HubWindow._report_problem passes the log pane, which holds
+    project names and full startup commands, while the dialog says the report
+    contains none of that. That is BUG-007 in the 2026-10-20 audit. It is not
+    fixed here, so the strict assertion belongs with its fix: build the report
+    the way the window builds it and assert the dialog's promise against
+    format_report(report).
+    """
+    report = diagnostics.build_report(error="boom", project_count=5)
     text = diagnostics.format_report(report)
-    assert "/secret/path" not in text.replace("starting /secret/path", "") or "log_tail" in report
-    # the count is included, but never names or folders
-    assert report["registered_projects"] == 5
-    for banned in ("working_dir", "command", "url"):
-        assert banned not in str(report.get("error", ""))
+
+    assert report["registered_projects"] == 5, "the project count is missing"
+    assert "Registered projects: 5" in text, "the count is not in the text form"
+
+    extra = set(report) - REPORT_KEYS
+    assert not extra, (
+        "build_report gained fields that were never reviewed for privacy: "
+        f"{sorted(extra)} — add them to REPORT_KEYS only after checking they "
+        "cannot carry a project's name, folder, or command"
+    )
+
+    # Nothing derived from the registry beyond the count.
+    assert not {"projects", "names", "commands", "folders", "working_dir"} & set(report)
+
+    # The freeform fields are bounded, so a runaway log cannot bloat a report
+    # past what an issue body will accept.
+    long_error = "E" * 5000
+    long_log = "L" * (diagnostics.MAX_LOG_CHARS + 500)
+    packed = diagnostics.build_report(error=long_error, log_tail=long_log)
+    assert len(packed["error"]) == 4000, "the error text is no longer capped at 4000 chars"
+    assert len(packed["log_tail"]) == diagnostics.MAX_LOG_CHARS
+    assert packed["log_tail"].endswith("L" * 10), "the log tail kept the wrong end"
 
 
 def test_report_has_version_and_platform():
