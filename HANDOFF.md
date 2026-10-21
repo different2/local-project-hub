@@ -15,7 +15,9 @@ fresh session should start from this file alone: read it, run
 `git log --oneline -15`, then work the open threads below. Long sessions on
 this project have died mid-task on provider errors, so state belongs here
 and in commits — not only in chat. Developer docs (run, test, package,
-release) live in DEVELOPMENT.md; the README is user-facing._
+release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
+the forensic-audit triage (test-quality findings fixed, product bugs open and
+recorded with file:line)._
 
 ## Where things stand (verified 2026-10-20, evening)
 
@@ -26,7 +28,11 @@ release) live in DEVELOPMENT.md; the README is user-facing._
   release`). Assets dmg **262,551,326 B** / msi **172,086,176 B**, both HTTP
   200 unauthenticated; `releases/latest` = `v0.7.0`; notes applied.
   Local suite on the same tree: **17/17 suites, 218 tests, exit 0**
-  (`full-suite-0.7.0b.out`).
+  (`full-suite-0.7.0b.out`). After the audit test fixes (`fc41b0d`) it is
+  **220 tests**, still 17/17.
+- **A forensic audit arrived** (2026-10-20, read-only, audited v0.5.0): three
+  test-quality findings are fixed in `fc41b0d`; the product bugs it reports
+  are still open and belong to someone else. Triage table below.
 - The installed app on this Mac is **0.6.2** as of 2026-10-20 10:14; the
   0.7.0 update is waiting in Check for Updates, and it is the third
   self-install to watch (the first two are recorded below).
@@ -131,6 +137,67 @@ button actually starting the project; the running card).
   `runJavaScript` takes no Python callback) until the DOM really contains the
   text, then clicks. The real app was fine all along — only the test clicked
   too early.
+
+## Forensic audit triage (2026-10-20): tests fixed, product bugs open — DONE
+
+A third-party read-only audit of `6206e22` (v0.5.0, run on Windows) arrived
+with CONFIRMED 6 / HIGH-CONFIDENCE 1 / TEST-QUALITY 1 / INFORMATIONAL 6 /
+DISMISSED 2. Scope set by the user: **fix the test-quality findings only** —
+"someone else might fix the other ones" — and BUG-006 is already fixed. The
+audit file is `~/.hermes/attachments/local_hub_forensic.txt`.
+
+Re-checked against HEAD (`fc41b0d`, 0.7.0), never against the audited commit:
+
+| Finding | On 0.7.0 | Where |
+|---|---|---|
+| BUG-001 non-object `registry.json` → raw `AttributeError` at startup | **reproduces** — `[]`, `"s"`, `42`, `null` all raise it | `hub/store.py:112` (`raw.get` before any type check); `main.py` catches only `RegistryError` |
+| BUG-002 `import_json` on a bare JSON array | **reproduces** | `hub/store.py:185` — `raw.get(...)` is evaluated before the `isinstance` that sits in its *default argument* |
+| BUG-003 rejected import leaves phantom projects | **reproduces** — `in-memory: ['good']`, nothing on disk | `hub/store.py:187-192` mutates `self.projects` per record; `save()` runs last |
+| BUG-004 stale restart timer force-kills the replacement | **present by source** — `restart()` arms an untracked `QTimer.singleShot`, `_force_kill` acts on whatever `self.proc` is then, with no generation check. Mechanism reproduced by the audit on Windows; not re-run here | `hub/process_manager.py:355-367, 494-510` |
+| BUG-005 readiness never retries after a transient HTTP error | **present by source** — `_http_done` returns on a transport error, `_tcp_tick` already stopped `_tcp_poll`, and only `_on_timeout` is armed | `hub/readiness.py:105-131` |
+| BUG-006 detected URL written to the wrong project | **FIXED in 0.6.1** — the signal carries the project id (`lambda u, p=pid: …`) and only the project in view gets its tab loaded | `hub/window.py:1383, 1484-1511` |
+| BUG-007 "Report a Problem" contradicts its own privacy claim | **reproduces** — `log_tail` *is* the log pane: `[hub] starting <name>: <command>` plus raw project output, and the issue URL carries it | `hub/window.py:641-650`; `hub/diagnostics.py:53-54, 72-73` |
+| TEST-001 vacuous privacy guard | **fixed, `fc41b0d`** | `tests/test_updater.py` |
+| INFO-005 a 0-test suite counted as green | **fixed, `fc41b0d`** | `tests/run_all.py` `report_suite` |
+| INFO-006 "guards" assert source substrings | **fixed, `fc41b0d`** — 3 of the 5 tests (the audit said 5; two were honest) | `tests/test_windows_process_stop.py` |
+
+What `fc41b0d` changed in the tests:
+
+- **TEST-001**: the old line was
+  `assert "…" not in text.replace("starting /secret/path", "") or "log_tail" in report`
+  — the right side is true for every real report, and the `replace()` excused
+  the leak it was named after. It now pins the builder's own contract: a
+  project **count**, no registry fields, and a whitelist of report keys so a
+  new field has to be reviewed for privacy. **It does not cover BUG-007** —
+  the docstring says so and names the strict assertion to add with that fix.
+- **INFO-005**: `report_suite` now fails a suite that exits 0 having reported
+  no tests, and the "`all passed` means one pass" fudge that masked it is gone.
+  Precedent: `test_popup_bridge` already refuses to run nothing.
+- **INFO-006**: the three text-scraping tests now drive `_force_kill`,
+  `stop()` and `_on_finished` against a fake `QProcess` — taskkill's argv and
+  pid, the escalation timer's interval and target, a pending restart routed
+  through the port check, and a port that never frees ending in `error`.
+
+All five rewritten guards were checked **red-first**: with the behaviour
+removed (taskkill disabled, the escalation deleted, `_on_finished` calling
+`start()`, the 0/0 guard disabled, an unreviewed field added) each FAILS.
+Script: `~/.hermes/cache/scratch/lph-verify/negctl_tests.py`. Full suite after:
+**17/17 suites, 220 tests, exit 0**.
+
+CI on the same commit: the first Windows attempt failed **4 window tests + all
+3 popup tests** with page-load errors ("the start page never rendered", "page
+never loaded") while everything else passed; `gh run rerun --failed` came back
+**17/17 green**. Both webview suites failing at once ("page never loaded" is
+Chromium, not an assertion), with every non-webview suite green and no code
+change between the attempts, points at the runner's Chromium rather than the
+tests — the audit hit the same class of failure (`0xC0000409` at QtWebEngine
+startup) on its own Windows host. Treat it as a flake to watch, not a
+regression: rerun before investigating.
+
+Still open from the audit and deliberately untouched: BUG-001/002/003/004/
+005/007 above, plus INFO-001 (unsanitised release-asset name), INFO-002
+(`kill -0` does not exist on Windows), INFO-003 (LaunchAgent quoting in dev
+mode), INFO-004 (IPv4-only port probe).
 
 ## Release 0.6.2 (2026-10-19): Rename was a no-op — DONE
 
