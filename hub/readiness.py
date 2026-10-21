@@ -55,8 +55,13 @@ class ReadinessWaiter(QObject):
         super().__init__(parent)
         self.url = url
         self.timeout_ms = timeout_ms
+        self._host = ""
+        self._port = 0
         self._nam = QNetworkAccessManager(self)
         self._inflight: QNetworkReply | None = None
+        # Set once a terminal outcome (ready/failed/cancelled) has been
+        # produced, so late replies and timers cannot emit a second outcome.
+        self._settled = False
         self._deadline = QTimer(self)
         self._deadline.setSingleShot(True)
         self._deadline.setInterval(timeout_ms)
@@ -67,8 +72,10 @@ class ReadinessWaiter(QObject):
 
     def start(self) -> None:
         if not self.url:
+            self._settled = True
             self.failed.emit("no dashboard URL configured")
             return
+        self._settled = False
         self._host, self._port = url_host_port(self.url)
         self._deadline.start()
         if tcp_open(self._host, self._port):
@@ -77,6 +84,13 @@ class ReadinessWaiter(QObject):
             self._tcp_poll.start()
 
     def stop(self) -> None:
+        """Cancel polling and settle this waiter without emitting anything.
+
+        Callers use it to abandon a project (tab closed, project removed,
+        window shutting down); the deadline and any in-flight reply are torn
+        down so nothing can fire afterwards.
+        """
+        self._settled = True
         self._tcp_poll.stop()
         self._deadline.stop()
         if self._inflight is not None:
@@ -89,12 +103,15 @@ class ReadinessWaiter(QObject):
     # ---------- phases ----------
 
     def _tcp_tick(self) -> None:
+        if self._settled:
+            self._tcp_poll.stop()
+            return
         if tcp_open(self._host, self._port):
             self._tcp_poll.stop()
             self._http_try()
 
     def _http_try(self) -> None:
-        if self._inflight is not None:
+        if self._settled or self._inflight is not None:
             return
         req = QNetworkRequest(QUrl(self.url))
         req.setMaximumRedirectsAllowed(4)
@@ -108,14 +125,24 @@ class ReadinessWaiter(QObject):
         if reply is None:
             return
         try:
+            if self._settled:
+                return
             http_status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
             was_transport_error = (
                 reply.error() != QNetworkReply.NoError
                 and http_status is None
             )
             if was_transport_error:
-                # Not up yet — keep waiting; the deadline timer will retry.
+                # A reset/refused/empty reply is not the end of the check: the
+                # server may simply not be up yet. Re-arm the poll so another
+                # HTTP attempt happens before the deadline. The previous code
+                # returned here after the TCP poll had already been stopped,
+                # so one transient error ended all retries and the project was
+                # reported as unready even though it answered moments later.
+                if not self._settled:
+                    self._tcp_poll.start()
                 return
+            # Any HTTP status (even 404/500) means the server is serving.
             self.stop()
             self.ready.emit()
         finally:
@@ -125,6 +152,8 @@ class ReadinessWaiter(QObject):
                 pass
 
     def _on_timeout(self) -> None:
+        if self._settled:
+            return
         self.stop()
         self.failed.emit(
             f"{self.url} did not respond within {self.timeout_ms // 1000}s"

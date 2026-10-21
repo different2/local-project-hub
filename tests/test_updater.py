@@ -13,7 +13,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from helpers import SkipTest  # noqa: E402
 from hub import diagnostics, updater  # noqa: E402
 
 FAKE_RELEASE = {
@@ -105,12 +107,12 @@ def test_asset_digest_is_read_from_the_release_payload():
     )
 
 
-def test_absent_or_junk_digest_means_no_verification_not_a_crash():
-    """Missing or malformed digests are tolerated: the check is skipped.
+def test_absent_or_junk_digest_means_the_update_is_not_installable():
+    """Missing or malformed digests are parsed as "no digest" without crashing.
 
-    A release published before digests existed, or one where a future API
-    changes the field, must not break updating — but it also must not let a
-    malformed string be treated as a checksum that then fails every download.
+    Parsing is tolerant; installation is not. `integrity_problem()` turns the
+    empty result into a refusal, so a release published before digests existed
+    (or one whose field changes shape) cannot install an unverified artifact.
     """
     for junk in (None, "", "md5:abc", "sha256:not-hex", "sha256:" + "a" * 63):
         payload = {
@@ -160,70 +162,217 @@ def test_no_endpoint_reports_clearly():
 # ---------- diagnostics ----------
 
 
-REPORT_KEYS = {
-    # Every field build_report() may add. A new one must be added here, which
-    # forces the question "can this carry project data?" to be answered.
-    "app",
-    "version",
-    "platform",
-    "arch",
-    "python",
-    "qt",
-    "timestamp",
-    "registered_projects",
-    "error",
-    "traceback",
-    "log_tail",
-}
+def _assert_no_markers(text: str, markers: dict) -> None:
+    """Fail if any synthetic sensitive marker survives in `text`."""
+    for label, marker in markers.items():
+        assert marker not in text, f"{label} leaked: {marker!r} in {text!r}"
 
 
-def test_report_keeps_a_count_and_nothing_else_from_the_registry():
-    """build_report() adds a project COUNT, never a name, folder, or command.
+def test_the_privacy_guard_actually_catches_a_leak():
+    """The guard must fail on forbidden output, or the report test is vacuous.
 
-    Rewritten 2026-10-20. The old assertion was
-
-        assert "/secret/path" not in text.replace("starting /secret/path", "") or "log_tail" in report
-
-    whose right-hand side is true whenever a log tail is supplied — which is
-    every real report — so it could not fail whatever the code did. It also
-    excused the leak it was named after by deleting it from the text first.
-
-    What this covers: the builder is handed a count and nothing else, so a
-    report built from an error cannot acquire project data, and no unreviewed
-    field can appear.
-
-    What it does NOT cover, on purpose: the caller's log tail is embedded
-    verbatim, and HubWindow._report_problem passes the log pane, which holds
-    project names and full startup commands, while the dialog says the report
-    contains none of that. That is BUG-007 in the 2026-10-20 audit. It is not
-    fixed here, so the strict assertion belongs with its fix: build the report
-    the way the window builds it and assert the dialog's promise against
-    format_report(report).
+    The previous assertion was `A not in text.replace(A, "") or "log_tail" in
+    report`. The right-hand side is true whenever the report contains its
+    expected field, so the test could never fail. This pins that the helper
+    used below is capable of detecting a leak.
     """
-    report = diagnostics.build_report(error="boom", project_count=5)
-    text = diagnostics.format_report(report)
-
-    assert report["registered_projects"] == 5, "the project count is missing"
-    assert "Registered projects: 5" in text, "the count is not in the text form"
-
-    extra = set(report) - REPORT_KEYS
-    assert not extra, (
-        "build_report gained fields that were never reviewed for privacy: "
-        f"{sorted(extra)} — add them to REPORT_KEYS only after checking they "
-        "cannot carry a project's name, folder, or command"
+    leaked = (
+        "Local Project Hub 0.5.0\n"
+        "Recent hub messages:\n"
+        "[hub] starting ProjectNebula42: python3 /secret/nebula.py\n"
     )
+    markers = {"name": "ProjectNebula42", "path": "/secret/nebula.py"}
+    try:
+        _assert_no_markers(leaked, markers)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("the privacy guard passed despite project data")
 
-    # Nothing derived from the registry beyond the count.
-    assert not {"projects", "names", "commands", "folders", "working_dir"} & set(report)
 
-    # The freeform fields are bounded, so a runaway log cannot bloat a report
-    # past what an issue body will accept.
-    long_error = "E" * 5000
-    long_log = "L" * (diagnostics.MAX_LOG_CHARS + 500)
-    packed = diagnostics.build_report(error=long_error, log_tail=long_log)
-    assert len(packed["error"]) == 4000, "the error text is no longer capped at 4000 chars"
-    assert len(packed["log_tail"]) == diagnostics.MAX_LOG_CHARS
-    assert packed["log_tail"].endswith("L" * 10), "the log tail kept the wrong end"
+def test_report_excludes_synthetic_project_data():
+    """Names, paths, commands, URLs and secrets must not reach any export.
+
+    The markers are deliberately unique so a failure names what leaked. The
+    same report feeds the saved file, the pasted text and the prefilled issue
+    URL; URL encoding is checked too, because encoding a secret is not
+    sanitising it.
+    """
+    import urllib.parse
+
+    from hub import update_config
+
+    markers = {
+        "name": "ProjectNebula42",
+        "path": r"C:\Users\secret\NebulaWorkspace",
+        "command": r"python3 C:\Users\secret\NebulaWorkspace\server.py --port 9876",
+        "url": "http://127.0.0.1:9876/dashboard",
+        "secret": "sk-SYNTHETIC0000000000000000",
+    }
+    log = (
+        f"[hub] starting {markers['name']}: {markers['command']}\n"
+        f"[hub] detected dashboard URL: {markers['url']}\n"
+        f"[hub] update check failed: HTTP 500 for {markers['url']}\n"
+        f"RAW PROJECT OUTPUT {markers['secret']} {markers['path']}\n"
+    )
+    report = diagnostics.build_report(
+        error=f"could not start {markers['name']} from {markers['path']}",
+        log_tail=log,
+        project_count=5,
+        sensitive=list(markers.values()),
+    )
+    text = diagnostics.format_report(report)
+    _assert_no_markers(text, markers)
+
+    # The raw project pane line is dropped entirely, not merely redacted.
+    assert "RAW PROJECT OUTPUT" not in text, text
+
+    # Useful hub-level diagnostics survive.
+    assert "update check failed" in text, text
+    assert report["registered_projects"] == 5
+    assert report["version"] and report["platform"]
+
+    # The saved file is the same sanitised text, not a second export path.
+    with tempfile.TemporaryDirectory() as d:
+        saved = diagnostics.save_report(report, directory=Path(d))
+        saved_text = saved.read_text(encoding="utf-8")
+    _assert_no_markers(saved_text, markers)
+    assert "update check failed" in saved_text, saved_text
+
+    old = update_config.ISSUES_URL
+    update_config.ISSUES_URL = "https://example.com/issues/new"
+    try:
+        url = diagnostics.issue_url(report)
+    finally:
+        update_config.ISSUES_URL = old
+    assert url and url.startswith("https://example.com/issues/new?")
+    _assert_no_markers(urllib.parse.unquote(url), markers)
+
+
+def test_report_drops_project_lines_even_without_a_sensitive_list():
+    """A project's raw stdout is never admitted, whatever the caller passes."""
+    report = diagnostics.build_report(
+        log_tail=(
+            "PROJECT-RAW-OUTPUT token=ghp_SYNTHETIC0000000000\n"
+            "[hub] process exited (code=1)\n"
+        )
+    )
+    text = diagnostics.format_report(report)
+    assert "PROJECT-RAW-OUTPUT" not in text, text
+    assert "ghp_SYNTHETIC" not in text, text
+    assert "process exited (code=1)" in text, text
+
+
+# ---------- INFO-001: release asset names are paths ----------
+
+
+def test_asset_filename_validation_rejects_traversal_and_paths():
+    bad = [
+        "",
+        "   ",
+        ".",
+        "..",
+        "../evil.msi",
+        r"..\evil.msi",
+        "/etc/passwd",
+        r"C:\evil.msi",
+        "sub/dir.msi",
+        r"sub\dir.msi",
+        ".hidden.msi",
+        "no-extension",
+        "trailing.msi.",
+        " has-space-at-front.msi",
+        "nul\x00byte.msi",
+        "CON.msi",
+        "nul.dmg",
+        "LPT1.exe",
+    ]
+    for name in bad:
+        try:
+            updater.safe_asset_filename(name)
+        except updater.UpdateError:
+            pass
+        else:
+            raise AssertionError(f"{name!r} was accepted as an asset filename")
+
+
+def test_supported_asset_names_still_work():
+    for name in (
+        "Local.Project.Hub-0.5.0.msi",
+        "LocalProjectHub-macOS-arm64.dmg",
+        "thing(1).dmg",
+        "a_b+c@2.exe",
+        "Build 42.pkg",
+    ):
+        assert updater.safe_asset_filename(name) == name
+
+
+def test_safe_destination_stays_inside_the_download_directory():
+    with tempfile.TemporaryDirectory() as d:
+        dest = updater.safe_update_destination("thing.dmg", directory=d)
+        assert dest.parent == Path(d).resolve(), dest
+        assert dest.name == "thing.dmg"
+        for bad in ("../escape.dmg", r"..\escape.dmg", r"C:\escape.dmg"):
+            try:
+                updater.safe_update_destination(bad, directory=d)
+            except updater.UpdateError:
+                pass
+            else:
+                raise AssertionError(f"{bad!r} escaped the download directory")
+
+
+# ---------- update integrity: fail closed ----------
+
+
+def test_integrity_problem_requires_a_usable_digest():
+    good = updater.Asset(name="hub.msi", url="https://example.com/a", sha256="a" * 64)
+    assert updater.integrity_problem(good) is None
+
+    missing = updater.Asset(name="hub.msi", url="https://example.com/a")
+    assert "does not publish" in (updater.integrity_problem(missing) or "")
+
+    malformed = updater.Asset(
+        name="hub.msi", url="https://example.com/a", sha256="not-a-digest"
+    )
+    assert "malformed" in (updater.integrity_problem(malformed) or "")
+
+
+def test_a_matching_digest_verifies_and_a_mismatch_does_not():
+    import hashlib
+
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "asset.bin"
+        p.write_bytes(b"release payload")
+        good = hashlib.sha256(b"release payload").hexdigest()
+        assert updater.verify_sha256(p, good) is True
+        assert updater.verify_sha256(p, "0" * 64) is False
+
+
+def test_unavailable_download_source_is_an_error_not_an_install():
+    """A failed download must raise before any installer hand-off could happen."""
+    import urllib.error
+    import urllib.request
+
+    original = urllib.request.urlopen
+
+    def offline(*a, **k):
+        raise urllib.error.URLError("connection refused")
+
+    try:
+        urllib.request.urlopen = offline
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                updater.download_asset(
+                    updater.Asset(name="thing.dmg", url="https://example.com/x"),
+                    Path(d) / "thing.dmg",
+                )
+            except Exception:
+                pass
+            else:
+                raise AssertionError("a failed download was treated as success")
+            assert not (Path(d) / "thing.dmg").exists()
+    finally:
+        urllib.request.urlopen = original
 
 
 def test_report_has_version_and_platform():
@@ -277,6 +426,85 @@ def test_current_exception_report_captures_traceback():
         report = diagnostics.current_exception_report()
     assert "deliberate" in report["error"]
     assert "ValueError" in report.get("traceback", "")
+
+
+def test_current_exception_report_uses_shared_project_context():
+    """The crash path gets the same exact identities as Report a Problem."""
+    import urllib.parse
+
+    from hub import update_config
+
+    markers = {
+        "name": "ProjectNebula42",
+        "path": r"C:\Users\secret\NebulaWorkspace",
+        "command": (
+            r"python3 C:\Users\secret\NebulaWorkspace\server.py "
+            "--token sk-SYNTHETIC0000000000000000"
+        ),
+        "url": "http://127.0.0.1:9876/dashboard",
+        "secret": "sk-SYNTHETIC0000000000000000",
+    }
+    diagnostics.set_project_context(
+        sensitive=[
+            markers["path"],
+            markers["command"],
+            markers["url"],
+            markers["secret"],
+        ],
+        project_names=[markers["name"]],
+    )
+    try:
+        try:
+            raise RuntimeError(
+                f"{markers['name']} failed at {markers['path']}: "
+                f"{markers['command']} {markers['url']} "
+                f"token={markers['secret']}"
+            )
+        except RuntimeError:
+            report = diagnostics.current_exception_report()
+    finally:
+        diagnostics.clear_project_context()
+
+    text = diagnostics.format_report(report)
+    _assert_no_markers(text, markers)
+    # Useful technical detail survives.
+    assert "RuntimeError" in text, text
+
+    with tempfile.TemporaryDirectory() as d:
+        saved = diagnostics.save_report(report, directory=Path(d))
+        _assert_no_markers(saved.read_text(encoding="utf-8"), markers)
+
+    old = update_config.ISSUES_URL
+    update_config.ISSUES_URL = "https://example.com/issues/new"
+    try:
+        issue = diagnostics.issue_url(report)
+    finally:
+        update_config.ISSUES_URL = old
+    assert issue
+    _assert_no_markers(urllib.parse.unquote(issue), markers)
+
+
+def test_one_character_project_name_is_redacted_without_destroying_prose():
+    """Short names use word boundaries; ordinary words keep their letters."""
+    import re
+
+    diagnostics.set_project_context(project_names=["q"])
+    try:
+        report = diagnostics.build_report(
+            error="q failed while reading quiet data",
+            log_tail=(
+                "[hub] starting q: python3 /tmp/server.py\n"
+                "[hub] update check failed\n"
+            ),
+            project_count=1,
+        )
+    finally:
+        diagnostics.clear_project_context()
+
+    text = diagnostics.format_report(report)
+    assert "quiet" in text, "ordinary prose was damaged"
+    assert re.search(r"(?<!\w)q(?!\w)", text) is None, text
+    assert "update check failed" in text, text
 
 
 def test_launch_at_login_off_by_default():
@@ -368,8 +596,7 @@ def test_the_update_trust_store_is_real():
 def test_trust_store_falls_back_without_certifi():
     """Source runs without certifi still verify: the system CA files are used."""
     if sys.platform == "win32":
-        print("SKIP test_trust_store_falls_back_without_certifi: Windows uses the system store")
-        return
+        raise SkipTest("Windows uses the system store")
     saved = sys.modules.get("certifi")
     sys.modules["certifi"] = None  # makes `import certifi` raise ImportError
     try:
@@ -424,11 +651,15 @@ def test_certificate_failure_is_not_reported_as_unreachable():
 
 if __name__ == "__main__":
     fails = 0
+    skipped = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             try:
                 fn()
                 print(f"PASS {name}")
+            except SkipTest as e:
+                skipped += 1
+                print(f"SKIP {name}: {e}")
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
@@ -439,5 +670,7 @@ if __name__ == "__main__":
                 # the 1. An unexpected error IS a failure -- report it as one.
                 fails += 1
                 print(f"ERROR {name}: {type(e).__name__}: {e}")
-    print("---", "FAILURES" if fails else "all passed")
+    print("---", "FAILURES" if fails else (
+        "all passed" + (f" ({skipped} skipped)" if skipped else "")
+    ))
     sys.exit(1 if fails else 0)

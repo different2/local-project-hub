@@ -60,7 +60,14 @@ from .process_manager import ProjectProcess
 from .project_dialog import ProjectDialog
 from .readiness import ReadinessWaiter
 from .update_dialog import UpdateDialog
-from .updater import UpdateError, _asset_for_platform, fetch_latest_release, is_newer, verify_sha256
+from .updater import (
+    UpdateError,
+    _asset_for_platform,
+    fetch_latest_release,
+    integrity_problem,
+    is_newer,
+    verify_sha256,
+)
 
 _STATE_LABEL = {
     "stopped": "● stopped",
@@ -104,9 +111,14 @@ class _HubPage(QWebEnginePage):
             action = parts[0] if parts else ""
             pid = unquote(parts[1]) if len(parts) > 1 else ""
             if pid and action == "start":
-                self.start_requested.emit(pid)
+                # Emitting while this navigation callback is still on the stack
+                # runs start(), which emits "starting", which renders the start
+                # page with setHtml() -- re-entering QtWebEngine mid-navigation.
+                # On Windows that crashes with 0x80000003. Defer one event-loop
+                # turn so the page callback has returned first.
+                QTimer.singleShot(0, lambda p=pid: self.start_requested.emit(p))
             elif pid and action == "stop":
-                self.stop_requested.emit(pid)
+                QTimer.singleShot(0, lambda p=pid: self.stop_requested.emit(p))
             return False
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
@@ -253,19 +265,9 @@ class LogDrawer(QWidget):
     def toPlainText(self) -> str:
         return self._edit_for(self._current).toPlainText()
 
-    def combined_text(self, labeller=None) -> str:
-        """Every pane, labelled — what a problem report wants."""
-        parts = []
-        for key, edit in self._edits.items():
-            body = edit.toPlainText().strip("\n")
-            if not body:
-                continue
-            if not key:
-                label = "hub"
-            else:
-                label = labeller(key) if labeller else key
-            parts.append(f"--- {label} ---\n{body}")
-        return "\n\n".join(parts)
+    def hub_text(self) -> str:
+        """The hub's own pane only — never a project's raw terminal output."""
+        return self._hub.toPlainText()
 
 
 class HubWindow(QMainWindow):
@@ -468,6 +470,15 @@ class HubWindow(QMainWindow):
                 "This release does not include an installer for your platform yet.",
             )
             return
+        # Fail closed BEFORE downloading: without a trustworthy expected digest
+        # there is no way to know the installer is the one the release
+        # published, so it must not be run.
+        unverifiable = integrity_problem(asset)
+        if unverifiable:
+            self.status.clearMessage()
+            self._append_log(f"[hub] update not started: {unverifiable}")
+            dlg.show_error("The update can't be verified", unverifiable)
+            return
         self._update_busy = True
         self.status.showMessage(f"Downloading {asset.name}…")
         self._append_log(f"[hub] downloading update {asset.name}")
@@ -478,11 +489,15 @@ class HubWindow(QMainWindow):
         progress = {"done": 0, "total": asset.size or 0}
 
         def _work():
-            import tempfile
+            from .updater import download_asset, safe_update_destination
 
-            from .updater import download_asset
-
-            dest = Path(tempfile.gettempdir()) / asset.name
+            try:
+                # The release asset name is metadata, not a trusted path. It is
+                # validated as a plain filename and resolved inside the temp
+                # directory before anything is written.
+                dest = safe_update_destination(asset.name)
+            except UpdateError as e:
+                return None, str(e)
             try:
                 download_asset(
                     asset,
@@ -492,13 +507,21 @@ class HubWindow(QMainWindow):
                     ),
                 )
             except Exception as e:
+                # A partial download is never left staged for an installer.
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
                 return None, f"Download failed: {e}"
-            if asset.sha256:
-                if not verify_sha256(dest, asset.sha256):
-                    return None, (
-                        "The downloaded file did not match its published checksum, "
-                        "so it was discarded."
-                    )
+            if not verify_sha256(dest, asset.sha256):
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                return None, (
+                    "The downloaded file did not match its published checksum, "
+                    "so it was discarded."
+                )
             return dest, None
 
         timer = QTimer(self)
@@ -634,24 +657,66 @@ class HubWindow(QMainWindow):
         self.status.showMessage("Installing the update…")
         QTimer.singleShot(100, self.close)
 
+    def _sensitive_context(self) -> tuple[list[str], list[str]]:
+        """Project-specific values and names for every report path."""
+        sensitive: list[str] = []
+        names: list[str] = []
+        for rec in self.store.projects.values():
+            name = rec.get("name")
+            if isinstance(name, str) and name.strip():
+                names.append(name)
+            for key in (
+                "description",
+                "command",
+                "args",
+                "working_dir",
+                "interpreter",
+                "url",
+            ):
+                value = rec.get(key)
+                if isinstance(value, str) and value.strip():
+                    sensitive.append(value)
+            env = rec.get("env")
+            if isinstance(env, dict):
+                sensitive.extend(str(v) for v in env.values())
+        return sensitive, names
+
+    def _refresh_diagnostic_context(self) -> tuple[list[str], list[str]]:
+        """Publish the current identity for the crash-report path too."""
+        sensitive, names = self._sensitive_context()
+        diagnostics_mod.set_project_context(sensitive, names)
+        return sensitive, names
+
+    def _diagnostic_report(self) -> dict:
+        """Build the sanitised report that Report a Problem actually exports.
+
+        Only the hub's own log pane is passed, and every project-specific value
+        is supplied as an exact sensitive value or a project name so the
+        formatter can remove it. This is the single source for the saved file,
+        the copied text and the prefilled issue URL; the same context is
+        registered for exception reports.
+        """
+        sensitive, names = self._refresh_diagnostic_context()
+        return diagnostics_mod.build_report(
+            log_tail=self.log_view.hub_text(),
+            project_count=len(self.store.projects),
+            sensitive=sensitive,
+            project_names=names,
+        )
+
     def _report_problem(self) -> None:
-        """Help → Report a Problem: save a report, or open a prefilled issue."""
+        """Help → Report a Problem: save a sanitised report, or open an issue."""
         from . import diagnostics
 
-        report = diagnostics.build_report(
-            log_tail=self.log_view.combined_text(
-                lambda p: (self.store.get(p) or {}).get("name") or p
-            ),
-            project_count=len(self.store.projects),
-        )
+        report = self._diagnostic_report()
 
         box = QMessageBox(self)
         box.setWindowTitle("Report a problem")
         box.setText(
             "This creates a report with the app version, your operating system, "
-            "and the recent log.\n\n"
-            "It does <b>not</b> include your projects, their folders, commands, "
-            "or anything a dashboard was showing."
+            "and a sanitised summary of the hub's own messages.\n\n"
+            "It does <b>not</b> include your projects' names, folders, commands, "
+            "raw output, dashboard contents, or URLs."
         )
         save_btn = box.addButton("Save report file…", QMessageBox.AcceptRole)
         issue_btn = None
@@ -936,6 +1001,8 @@ class HubWindow(QMainWindow):
                 self._select_id(self.list.item(0).data(Qt.UserRole), start=False)
             else:
                 self.list.setCurrentRow(0)
+        # Keep the crash-report path in sync with the live project list.
+        self._refresh_diagnostic_context()
 
     def _item_label(self, rec: dict) -> str:
         return f"{rec.get('icon') or ''}  {rec.get('name') or ''}"
@@ -1380,6 +1447,10 @@ class HubWindow(QMainWindow):
             proc = ProjectProcess(rec)
             proc.state_changed.connect(lambda s, p=pid: self._on_state(p, s))
             proc.output.connect(lambda text, p=pid: self._append_log(text, p))
+            # Carry the originating project id through the signal. Without it
+            # the handler used self.active_id, so a background project's URL
+            # was saved against whichever project the user happened to be
+            # viewing when the server announced itself.
             proc.url_detected.connect(lambda u, p=pid: self._on_url_detected(u, p))
             proc.port_conflict_from_output.connect(
                 lambda port, p=pid: self._on_port_conflict_from_output(p, port)
@@ -1482,7 +1553,11 @@ class HubWindow(QMainWindow):
         return None
 
     def _on_url_detected(self, url: str, pid: str | None = None) -> None:
-        """A server announced its own address — use it and remember it.
+        """A project announced its own address — use it and remember it.
+
+        `pid` is the project whose process emitted the signal, NOT whatever is
+        selected now: autostart can leave several projects running and the user
+        can switch tabs before one prints its banner.
 
         The address belongs to the project whose process printed it, which is
         not necessarily the selected one: a project running in the background
@@ -1503,12 +1578,13 @@ class HubWindow(QMainWindow):
             self.store.update(rec)
         except store_mod.RegistryError:
             pass
-        self.status.showMessage(f"Detected {rec['name']} at {url}", 6000)
-        # Only the project in view gets its tab loaded now; a background
-        # project's tab is opened when the user selects it, so its announcing
-        # itself never pulls the window away from what is on screen.
-        if rec["id"] == self.active_id:
-            self._show_dashboard(rec)
+        if pid == self.active_id:
+            self.status.showMessage(f"Detected {rec['name']} at {url}", 6000)
+        # Navigate the emitting project's own tab, wherever it is in the tab
+        # bar. _show_dashboard() used to read self.web (the ACTIVE tab), so a
+        # background detection either did nothing or pointed the wrong tab at
+        # the URL.
+        self._show_dashboard(rec)
 
     # ---------- popups as tabs (window.open / target="_blank") ----------
 
@@ -1534,8 +1610,13 @@ class HubWindow(QMainWindow):
             # this raised AttributeError on every popup tab whose title
             # resolved -- inside a JS callback, where Qt turned it into a
             # SystemError and killed the test.
+            # PySide6 6.7.3 (the pinned version) has no two-argument
+            # runJavaScript(script, callable) overload; the callback form is
+            # (script, worldId, callback). The newer two-argument form raised
+            # TypeError inside a Qt slot on 6.7.3, so the title callback
+            # silently never ran and popup tabs kept their placeholder label.
             view.page().runJavaScript(
-                "document.title", lambda t, i=idx: self._label_tab(i, t or s)
+                "document.title", 0, lambda t, i=idx: self._label_tab(i, t or s)
             )
             self._append_log(f"[hub] new tab: {s}", self.active_id)
             self.status.showMessage(f"New tab: {s}", 6000)
@@ -1694,11 +1775,17 @@ class HubWindow(QMainWindow):
     # ---------- dashboard display ----------
 
     def _show_dashboard(self, rec: dict) -> None:
+        """Point this project's OWN tab at its URL (not the active tab's).
+
+        If this project has no webview (a desktop app, a background autostart
+        project, or a tab the user just closed), do nothing. Falling back to
+        the current tab would navigate a DIFFERENT project's dashboard to this
+        project's URL -- for example when a closed tab's readiness callback
+        lands while another tab is selected.
+        """
         if not rec.get("url"):
             return
-        # Target the project's OWN tab: a background project that becomes
-        # ready must not repoint whichever tab happens to be on screen.
-        view = self._view_for(rec["id"]) or self.web
+        view = self._view_for(rec["id"])
         if view is None:
             return
         if view.url().toString() != rec["url"]:
@@ -2118,4 +2205,5 @@ class HubWindow(QMainWindow):
             pass
         for proc in self.procs.values():
             proc.stop()
+        diagnostics_mod.clear_project_context()
         super().closeEvent(event)

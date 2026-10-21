@@ -149,39 +149,190 @@ def test_runner_returns_at_once_when_nothing_holds_a_port() -> None:
     assert took < 0.5, f"an empty port list still cost {took:.2f}s"
 
 
-def test_a_suite_that_runs_no_tests_is_not_green() -> None:
-    """0 passed, 0 failed and exit 0 must be a failure, not a green suite.
+# ---------- INFO-005: a suite must never be green without results ----------
 
-    A test renamed past its suite's `__main__` loop, a `--test=` filter that
-    matched nothing, and a module that imported and returned without running
-    anything all exited 0 and printed "ok 0 passed, 0 failed", so the runner
-    counted a suite it had not actually run. The Windows audit (2026-10-20)
-    flagged that as a test-quality defect: the count line is the only evidence
-    that a suite ran.
+
+def test_count_results_counts_error_as_a_failure_and_skip_separately() -> None:
+    assert run_all.count_results("PASS a\nPASS b\n--- all passed") == (2, 0, 0)
+    assert run_all.count_results("PASS a\nFAIL b\nERROR c") == (1, 2, 0)
+    assert run_all.count_results("SKIP a: no IPv6\nPASS b") == (1, 0, 1)
+    # A skip is not also a pass.
+    assert run_all.count_results("SKIP a: not Windows") == (0, 0, 1)
+
+
+def test_classification_covers_every_suite_outcome() -> None:
+    # normal pass
+    assert run_all.classify_suite(0, 3, 0, 0, "PASS a\nPASS b\nPASS c")[0] == 0
+    # normal failure
+    assert run_all.classify_suite(1, 1, 1, 0, "PASS a\nFAIL b")[0] != 0
+    # exit 0 while reporting a failure is NOT green
+    assert run_all.classify_suite(0, 3, 1, 0, "PASS a\nFAIL b")[0] != 0
+    # empty / malformed output with exit 0 is NOT green
+    assert run_all.classify_suite(0, 0, 0, 0, "")[0] != 0
+    assert (
+        run_all.classify_suite(0, 0, 0, 0, "unrecognised report format")[0] != 0
+    )
+    # nonzero exit with no results (crash / timeout) is NOT green
+    assert run_all.classify_suite(1, 0, 0, 0, "")[0] != 0
+    assert run_all.classify_suite(-11, 0, 0, 0, "")[0] != 0
+    # timeout has its own blocked label
+    assert run_all.classify_suite(1, 0, 0, 0, "TIMEOUT after 5s")[1] == "TIMEOUT"
+    # skips are not passes, but a skip-only suite is not a failure either
+    code, label, reason = run_all.classify_suite(
+        0, 0, 0, 2, "SKIP a: no IPv6\nSKIP b: no IPv6"
+    )
+    assert code == 0 and label == "ok  " and "2 test(s) skipped" in reason
+    # a mixed suite is green with the skip counted separately
+    assert run_all.classify_suite(0, 3, 0, 2, "PASS a\nSKIP b")[0] == 0
+    # skips never excuse a real failure
+    assert run_all.classify_suite(0, 3, 1, 2, "PASS a\nFAIL b\nSKIP c")[0] != 0
+    # a missing result blocks the suite, even for a GUI teardown crash
+    assert (
+        run_all.classify_suite(0, 3, 0, 0, "PASS a", incomplete=1)[1]
+        == "BLOCK"
+    )
+    assert (
+        run_all.classify_suite(
+            0, 3, 0, 0, "PASS a", incomplete=1, allow_teardown_crash=True
+        )[0]
+        != 0
+    )
+    # the known Qt teardown crash is excused only when explicitly enabled
+    assert (
+        run_all.classify_suite(
+            -11, 5, 0, 0, "PASS a", allow_teardown_crash=True
+        )[0]
+        == 0
+    )
+    assert (
+        run_all.classify_suite(
+            -11, 5, 0, 0, "PASS a", allow_teardown_crash=False
+        )[0]
+        != 0
+    )
+    # a genuinely empty suite is green only when separately identified as such
+    assert run_all.classify_suite(0, 0, 0, 0, "", allow_empty=True)[0] == 0
+
+
+def test_real_skipped_test_is_reported_as_skip_not_pass() -> None:
+    """End-to-end: a host-specific skip must not be counted as a pass.
+
+    The suite harnesses used to print SKIP and then fall through to PASS. This
+    runs a real test that is guaranteed to skip offscreen, on every platform,
+    and checks the aggregate parser sees one skip and no pass.
     """
-    import contextlib
-    import io
+    # test_urldetect honours --test; this test skips before touching any
+    # platform-specific code, and run_one supplies the GUI environment.
+    suite = HERE / "test_urldetect.py"
+    name = "test_about_box_hides_extra_window_buttons"
+    _code, out = run_all.run_one(
+        suite, needs_gui=True, extra_args=[f"--test={name}"]
+    )
+    assert f"SKIP {name}" in out, out
+    assert f"PASS {name}" not in out, out
+    assert run_all.count_results(out) == (0, 0, 1), out
 
-    def run(code: int, passed: int, failed: int) -> tuple[int, str]:
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            final = run_all.report_suite("test_nothing.py", code, passed, failed, "")
-        return final, buf.getvalue()
 
-    final, printed = run(0, 0, 0)
-    assert final != 0, f"a suite that ran no tests was reported green:\n{printed}"
-    assert "FAIL" in printed, f"the empty suite's line did not say FAIL:\n{printed}"
+def _with_fake_runner(result_or_exc, fn):
+    real_one = run_all.run_one
+    real_iso = run_all.run_isolated
 
-    # Positive control: the same call with real results stays green, so the
-    # assertion above is about emptiness and not about report_suite failing
-    # everything.
-    final, printed = run(0, 3, 0)
-    assert final == 0, f"a suite with 3 passing tests was failed:\n{printed}"
+    def fake(path, needs_gui, extra_args=None):
+        if isinstance(result_or_exc, BaseException):
+            raise result_or_exc
+        return result_or_exc
 
-    # And the teardown-crash rule that must survive: a signal-killed process
-    # after every test passed is a Qt crash, not a red suite.
-    final, printed = run(-11, 3, 0)
-    assert final == 0, f"a Qt teardown crash after 3 passes failed the run:\n{printed}"
+    run_all.run_one = fake
+    run_all.run_isolated = lambda path: result_or_exc
+    try:
+        return fn()
+    finally:
+        run_all.run_one = real_one
+        run_all.run_isolated = real_iso
+
+
+def test_run_suite_empty_exit_zero_is_not_green() -> None:
+    import subprocess
+
+    def run():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert (code, passed, failed, skipped) == (0, 0, 0, 0)
+        assert run_all.classify_suite(code, passed, failed, skipped, out)[0] != 0
+
+    _with_fake_runner((0, ""), run)
+
+    def run_malformed():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert run_all.classify_suite(code, passed, failed, skipped, out)[0] != 0
+
+    _with_fake_runner((0, "not a test report"), run_malformed)
+
+    def run_timeout():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert code != 0 and "TIMEOUT" in out
+        assert (
+            run_all.classify_suite(code, passed, failed, skipped, out)[1]
+            == "TIMEOUT"
+        )
+
+    _with_fake_runner(subprocess.TimeoutExpired("python", 5), run_timeout)
+
+
+def test_run_suite_normal_and_failing_runs() -> None:
+    def passing():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert run_all.classify_suite(code, passed, failed, skipped, out)[0] == 0
+        assert (passed, failed, skipped) == (2, 0, 0)
+
+    _with_fake_runner((0, "PASS a\nPASS b\n--- all passed"), passing)
+
+    def skipped():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert run_all.classify_suite(code, passed, failed, skipped, out)[0] == 0
+        assert (passed, failed, skipped) == (0, 0, 1)
+
+    _with_fake_runner((0, "SKIP a: not Windows\n--- all passed (1 skipped)"), skipped)
+
+    def failing():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert run_all.classify_suite(code, passed, failed, skipped, out)[0] != 0
+        assert (passed, failed, skipped) == (1, 1, 0)
+
+    _with_fake_runner((1, "PASS a\nFAIL b"), failing)
+
+    def crash():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), False
+        )
+        assert code != 0
+        assert run_all.classify_suite(code, passed, failed, skipped, out)[0] != 0
+
+    _with_fake_runner((-11, ""), crash)
+
+    def nonzero_after_passes_is_only_ok_for_gui():
+        code, passed, failed, skipped, out = run_all.run_suite(
+            "test_fake.py", Path("test_fake.py"), True
+        )
+        assert run_all.classify_suite(
+            code, passed, failed, skipped, out, allow_teardown_crash=False
+        )[0] != 0
+        assert run_all.classify_suite(
+            code, passed, failed, skipped, out, allow_teardown_crash=True
+        )[0] == 0
+
+    _with_fake_runner((-11, "PASS a"), nonzero_after_passes_is_only_ok_for_gui)
 
 
 if __name__ == "__main__":

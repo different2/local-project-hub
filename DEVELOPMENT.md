@@ -100,7 +100,7 @@ set — they never ship.
 python3 tests/run_all.py
 ```
 
-- **15 suites, run serially**: the GUI suites bind fixed ports on 127.0.0.1
+- **18 suites, run serially**: the GUI suites bind fixed ports on 127.0.0.1
   and cannot run concurrently — `run_all.py` serialises them and is what CI
   calls. A full run takes about half an hour on the author's Mac, more on CI
   runners.

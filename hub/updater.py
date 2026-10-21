@@ -6,10 +6,15 @@ Design constraints from the spec, and how each is met:
     that executes arbitrary downloaded scripts" — this module only *reads*
     release metadata and hands the artifact to the platform installer. It
     never executes a downloaded payload itself.
-  * "Do not rely on HTTPS alone" — the release endpoint may publish a
-    checksum (SHA-256) alongside the artifact, which is verified here.
-    Signature verification is delegated to the installer where the platform
-    supports it (see PHASE plan: macOS notarization / Windows Authenticode).
+  * "Do not rely on HTTPS alone" — the only integrity metadata this updater
+    trusts is the per-asset SHA-256 digest GitHub reports in the release API
+    (`assets[].digest`, shaped `sha256:<64 hex>`). There is no separate
+    SHA256SUMS asset support. An update is FAIL-CLOSED: if the release gives
+    no usable digest, `integrity_problem()` refuses to install it, and a
+    downloaded file whose digest does not match is discarded. Missing metadata
+    is never treated as successful verification. Signature verification is
+    delegated to the installer where the platform supports it (see PHASE plan:
+    macOS notarization / Windows Authenticode).
   * "Never replace a running executable in an unsafe manner" — the download is
     staged to a temp file, then the OS installer is invoked; the running app
     is never overwritten in place.
@@ -169,15 +174,14 @@ def _sha256_from_asset(a: dict) -> str:
     """The sha256 for a release asset, or "" when the API supplied none.
 
     GitHub reports the digest of an uploaded asset under `digest` as
-    `"sha256:<64 hex chars>"`. This is the only checksum a release carries
-    unless a separate SHA256SUMS file is published alongside the installers.
+    `"sha256:<64 hex chars>"`. This is the ONLY checksum source this updater
+    trusts; a separate SHA256SUMS asset is not read.
 
-    Reading it is what makes the integrity check real. `_download_update` only
-    verifies when `asset.sha256` is non-empty, so a release with no digest and
-    no SHA256SUMS file meant EVERY update installed an unverified download
-    while the code looked like it was checking. The previous implementation
-    read a `_digests` key that the GitHub API never returns, so the check could
-    not have fired even once.
+    Reading it is what makes the integrity check real. The previous
+    implementation read a `_digests` key that the GitHub API never returns, so
+    the check could not have fired even once. Missing or malformed digests now
+    make the update non-installable (see integrity_problem), rather than
+    silently bypassing verification.
     """
     digest = str(a.get("digest") or "").strip()
     if not digest.lower().startswith("sha256:"):
@@ -241,6 +245,96 @@ def verify_sha256(path, expected: str) -> bool:
         for chunk in iter(lambda: fh.read(1024 * 256), b""):
             h.update(chunk)
     return h.hexdigest().lower() == expected.strip().lower()
+
+
+def integrity_problem(asset: Asset) -> str | None:
+    """Why this asset cannot be verified, or None when its digest is usable.
+
+    Fail-closed policy: an automated update must not install a download whose
+    expected digest is absent or malformed. The user is told plainly instead
+    of being handed an unverified installer.
+    """
+    digest = (asset.sha256 or "").strip()
+    if not digest:
+        return (
+            "This release does not publish a SHA-256 digest for the installer, "
+            "so the download cannot be verified and will not be installed."
+        )
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        return (
+            "This release's published SHA-256 digest is malformed, so the "
+            "download cannot be verified and will not be installed."
+        )
+    return None
+
+
+_ALLOWED_ASSET_NAME = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9 ._()+@-]*\.[A-Za-z0-9]{2,8}"
+)
+
+# Windows treats these stems as device names, so writing `CON.msi` targets a
+# device rather than a file. The download runs on the user's platform, so the
+# name is rejected everywhere for consistency.
+_WINDOWS_RESERVED_STEMS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def safe_asset_filename(name: str) -> str:
+    """Validate a release asset name as a plain filename.
+
+    Release metadata is attacker-influenced if the repository or its release
+    is ever compromised, and the name is used to build a download path. Reject
+    anything that is not a simple filename: absolute paths, directory
+    separators, traversal segments, control characters and shell-ish names.
+    """
+    raw = name or ""
+    if raw != raw.strip() or not raw:
+        raise UpdateError("The update asset has no usable filename.")
+    if "\x00" in raw or any(ch in raw for ch in ("/", "\\")):
+        raise UpdateError(
+            f"The update asset name {raw!r} contains a path separator; "
+            "refusing to write it."
+        )
+    if raw in (".", "..") or raw.startswith(".") or re.match(r"^[A-Za-z]:", raw):
+        raise UpdateError(
+            f"The update asset name {raw!r} is not a plain filename; "
+            "refusing to write it."
+        )
+    if not _ALLOWED_ASSET_NAME.fullmatch(raw):
+        raise UpdateError(
+            f"The update asset name {raw!r} is not a supported filename; "
+            "refusing to write it."
+        )
+    if raw.split(".", 1)[0].upper() in _WINDOWS_RESERVED_STEMS:
+        raise UpdateError(
+            f"The update asset name {raw!r} is a reserved device name; "
+            "refusing to write it."
+        )
+    return raw
+
+
+def safe_update_destination(name: str, directory=None) -> "Path":
+    """A destination inside the temporary directory for this asset name."""
+    import tempfile
+    from pathlib import Path
+
+    filename = safe_asset_filename(name)
+    base = Path(directory or tempfile.gettempdir()).resolve()
+    dest = (base / filename).resolve()
+    # Belt and braces: even a name that passed the pattern must resolve to a
+    # direct child of the intended directory.
+    if dest.parent != base:
+        raise UpdateError(
+            f"The update asset name {name!r} escapes the download directory; "
+            "refusing to write it."
+        )
+    return dest
 
 
 def download_asset(asset: Asset, dest, on_progress=None, chunk_size: int = 256 * 1024) -> None:
