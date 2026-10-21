@@ -952,6 +952,259 @@ def test_each_project_has_its_own_terminal(tmp: Path) -> None:
         w.close()
 
 
+def _announcing_src(port: int) -> str:
+    return f'''
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+    def log_message(self, *a): pass
+print("my dashboard is at http://127.0.0.1:{port}", flush=True)
+HTTPServer(("127.0.0.1", {port}), H).serve_forever()
+'''
+
+
+def test_background_project_url_is_saved_to_its_own_record(tmp: Path) -> None:
+    """BUG-006: a detected URL belongs to the project that emitted it.
+
+    Two projects have no configured URL. Alpha starts and announces its
+    address; Beta is the ACTIVE project when the announcement arrives. The old
+    handler read self.active_id, so Alpha's URL would have been stored on
+    Beta's record (and Beta's tab pointed at it). The test drives the real tab
+    selection rather than setting active_id by hand, so the defect is actually
+    exercised.
+    """
+    from hub import diagnostics
+
+    port = reserve_port()
+    (tmp / "announce.py").write_text(_announcing_src(port))
+    st = sm.Store(tmp / "registry.json")
+    alpha = st.add(
+        sm.validate(
+            {
+                "name": "Alpha",
+                "command": f"{sys.executable} {tmp / 'announce.py'} {port}",
+                "url": "",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    beta = st.add(
+        sm.validate(
+            {
+                "name": "Beta",
+                "command": f'{sys.executable} -c "pass"',
+                "url": "",
+                "working_dir": str(tmp),
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(alpha["id"])
+        assert _wait_for(
+            lambda: w._tab_index_for_project(alpha["id"]) is not None
+        ), "Alpha never got a tab"
+        assert _wait_for(
+            lambda: w.procs.get(alpha["id"]) is not None
+            and w.procs[alpha["id"]].state == "running",
+            timeout_s=25,
+        ), "Alpha never started"
+
+        # Switch to Beta WITHOUT starting it. This is the user-viewed project
+        # when Alpha's server announces itself.
+        w._select_id(beta["id"], start=False)
+        assert w.active_id == beta["id"], w.active_id
+
+        expected = f"http://127.0.0.1:{port}/"
+        ok = _wait_for(
+            lambda: (st.get(alpha["id"]) or {}).get("url") != "", timeout_s=30
+        )
+        assert ok, "Alpha's detected URL was never saved"
+        assert st.get(alpha["id"])["url"].rstrip("/") == expected.rstrip("/"), (
+            st.get(alpha["id"])["url"]
+        )
+        # Beta's record must be untouched.
+        assert st.get(beta["id"])["url"] == "", st.get(beta["id"])["url"]
+
+        # Alpha's OWN tab navigates, even while Beta is active.
+        alpha_view = w._view_for(alpha["id"])
+        assert alpha_view is not None, "Alpha lost its tab"
+        assert _wait_for(
+            lambda: alpha_view.url().toString().rstrip("/") == expected.rstrip("/"),
+            timeout_s=30,
+        ), f"Alpha's tab went to {alpha_view.url().toString()!r}"
+        beta_view = w._view_for(beta["id"])
+        assert beta_view is None or beta_view.url().toString() in ("", "about:blank"), (
+            f"Beta's tab was pointed at Alpha's URL: "
+            f"{beta_view.url().toString()!r}"
+        )
+
+        # The report path must not leak either project's data either.
+        report = w._diagnostic_report()
+        text = diagnostics.format_report(report)
+        assert "Alpha" not in text and "Beta" not in text, text
+        assert report["registered_projects"] == 2
+    finally:
+        for proc in list(w.procs.values()):
+            try:
+                proc.stop()
+            except Exception:
+                pass
+        for proc in list(w.procs.values()):
+            _wait_for(lambda p=proc: p.state == "stopped", timeout_s=20)
+        w.close()
+
+
+def test_no_tab_dashboard_does_not_navigate_the_active_tab(tmp: Path) -> None:
+    """A project with no tab must never redirect another project's dashboard.
+
+    Reproduces the window between removing a project's tab and the state
+    handler clearing active_id: active_id still names the removed project, but
+    the current webview belongs to the other project. The old fallback used
+    self.web here and pointed the wrong tab at the URL.
+    """
+    st = sm.Store(tmp / "registry.json")
+    a = st.add(
+        sm.validate(
+            {"name": "Alpha", "command": f'{sys.executable} -c "pass"',
+             "working_dir": str(tmp)}
+        )
+    )
+    b = st.add(
+        sm.validate(
+            {"name": "Beta", "command": f'{sys.executable} -c "pass"',
+             "working_dir": str(tmp)}
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(a["id"], start=False)
+        w._select_id(b["id"], start=False)
+        w._select_id(a["id"], start=False)  # make Alpha the active tab
+        assert w.active_id == a["id"]
+        beta_view = w._view_for(b["id"])
+        assert beta_view is not None
+        idx = w._tab_index_for_project(a["id"])
+        assert idx is not None
+        removed = w.tabs.widget(idx)
+        w.tabs.removeTab(idx)  # direct removal leaves active_id == Alpha
+        if removed is not None:
+            removed.deleteLater()
+        assert w.active_id == a["id"], w.active_id
+        assert w._view_for(a["id"]) is None
+        assert w.web is beta_view, "the test did not select Beta's view"
+
+        before = beta_view.url().toString()
+        st.get(a["id"])["url"] = "http://127.0.0.1:9876/alpha"
+        w._show_dashboard(st.get(a["id"]))
+        assert beta_view.url().toString() == before, (
+            "a no-tab project redirected the active project's dashboard"
+        )
+    finally:
+        w.close()
+
+
+def test_window_registers_context_for_crash_reports(tmp: Path) -> None:
+    """The live window's project identity reaches current_exception_report."""
+    import re
+
+    from hub import diagnostics
+
+    st = sm.Store(tmp / "registry.json")
+    st.add(
+        sm.validate(
+            {"name": "Q", "command": f'{sys.executable} -c "pass"',
+             "working_dir": str(tmp)}
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        try:
+            raise RuntimeError("Q crashed while loading")
+        except RuntimeError:
+            report = diagnostics.current_exception_report()
+        text = diagnostics.format_report(report)
+        assert "RuntimeError" in text, text
+        assert re.search(r"(?<!\w)Q(?!\w)", text) is None, text
+    finally:
+        w.close()
+        diagnostics.clear_project_context()
+
+
+def test_report_problem_exports_no_project_data(tmp: Path) -> None:
+    """BUG-007: the real Report a Problem report is sanitised end to end.
+
+    Synthetic markers are placed in a project's name, working directory,
+    startup command, URL and environment, and in its raw terminal output. The
+    report the Help menu actually builds must contain none of them, while
+    keeping the useful hub-level error message.
+    """
+    import urllib.parse
+
+    from hub import diagnostics
+
+    markers = {
+        "name": "ProjectNebula42",
+        "path": str(tmp / "ProjectNebula42-Workspace"),
+        "url": "http://127.0.0.1:9876/nebula-dashboard",
+        "secret": "sk-SYNTHETIC0000000000000000",
+    }
+    workdir = Path(markers["path"])
+    workdir.mkdir(exist_ok=True)
+    script = workdir / "nebula_server.py"
+    script.write_text("print('x')\n", encoding="utf-8")
+    markers["command"] = f"{sys.executable} {script} --token {markers['secret']}"
+
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(
+        sm.validate(
+            {
+                "name": markers["name"],
+                "command": markers["command"],
+                "working_dir": markers["path"],
+                "url": markers["url"],
+                "env": {"API_KEY": markers["secret"]},
+            }
+        )
+    )
+    w = HubWindow(st)
+    w.show()
+    try:
+        # A project's own terminal carries raw output; the hub pane carries the
+        # diagnostic messages. Only the latter may contribute to the report.
+        w.log_view.append_for(
+            f"RAW-PROJECT-OUTPUT {markers['secret']} {markers['path']}",
+            rec["id"],
+        )
+        w._append_log(f"[hub] starting {markers['name']}: {markers['command']}")
+        w._append_log(
+            f"[hub] update check failed: HTTP 500 for {markers['url']}"
+        )
+
+        report = w._diagnostic_report()
+        text = diagnostics.format_report(report)
+        for label, marker in markers.items():
+            assert marker not in text, f"{label} leaked into the report: {text!r}"
+        assert "RAW-PROJECT-OUTPUT" not in text, text
+        assert "update check failed" in text, text
+        assert report["registered_projects"] == 1
+
+        url = diagnostics.issue_url(report)
+        if url:
+            decoded = urllib.parse.unquote(url)
+            for label, marker in markers.items():
+                assert marker not in decoded, (
+                    f"{label} leaked into the prefilled issue URL"
+                )
+    finally:
+        w.close()
+
+
 def test_renaming_a_project_in_the_sidebar_sticks(tmp: Path) -> None:
     """Renaming in the sidebar updates the store, the row and the tab.
 

@@ -1,265 +1,340 @@
-"""Guard the Windows process-stop path, which no macOS run can exercise.
+"""Behavioural tests for the Windows process-stop path.
 
 QProcess::terminate() on Windows posts WM_CLOSE. A console application -- which
 is exactly what `python server.py` is -- has no window and never receives it,
-so terminate() is a no-op and the process keeps holding its port. The Windows CI
-job's test_process_e2e failed 1 passed / 2 failed for this reason, and the
-encoding crash meant nobody could read why.
+so terminate() is a no-op and the process keeps holding its port. The Windows
+path therefore escalates to `taskkill /T /F`, which takes the whole tree.
 
-These tests pin the Windows branch by forcing IS_WINDOWS on. They do not prove
-Windows behaviour (nothing here can) -- they prove the branch exists, is wired
-to the right timers, and would survive a refactor that deleted it.
-
-Rewritten 2026-10-20 (Windows audit, INFO-006): three of these tests used to
-read process_manager.py as text and assert that words like "taskkill",
-"WINDOWS_TERM_GRACE_MS" and "_restart_after_port_free" appeared in the right
-function body. That cannot fail when the call is deleted but the word is left in
-a comment, and it cannot pass after a harmless rename. They now run the code
-against a fake QProcess instead.
+Earlier versions of this file asserted that the source text contained
+"taskkill", "/T" and "/F". That proves nothing about the target PID, argument
+separation, failure handling, or whether the command is ever reached. These
+tests exercise the code instead, with controlled doubles for the Windows-only
+subprocess call, plus one real tree-kill integration test where taskkill
+exists. The only static assertion left is the grace-period ordering, which
+cannot be verified behaviourally without waiting out the production timeout.
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
-from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from PySide6.QtCore import QCoreApplication, QEventLoop, QProcess, QTimer  # noqa: E402
+
+from helpers import SkipTest, reserve_port  # noqa: E402
 from hub import process_manager as pm  # noqa: E402
+from hub import store as sm  # noqa: E402
+from hub import urldetect  # noqa: E402
 
 
-def test_windows_escalates_before_the_full_grace_period() -> None:
-    """Windows must not wait out the 20s POSIX grace to force-kill.
+def _spin(ms: int = 100) -> None:
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
 
-    Waiting would stall every stop on Windows, since terminate() cannot end a
-    console child there.
-    """
-    # Do NOT assert the host is non-Windows: this suite has to pass on the
-    # Windows runner too, and an earlier version did assert it, so the guard
-    # failed exactly on the platform it exists to protect.
-    assert pm.WINDOWS_TERM_GRACE_MS < pm.TERM_GRACE_MS, (
-        f"Windows grace ({pm.WINDOWS_TERM_GRACE_MS}ms) must be shorter than the "
-        f"POSIX grace ({pm.TERM_GRACE_MS}ms) or every Windows stop stalls"
-    )
+
+def _wait_until(pred, timeout_s: float = 10.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if pred():
+            return True
+        _spin(50)
+    return pred()
+
+
+def _rec(**kw) -> dict:
+    base = {
+        "name": "P",
+        "command": f'{sys.executable} -c "pass"',
+        "working_dir": "",
+    }
+    base.update(kw)
+    return sm.validate(base)
 
 
 class _FakeProc:
-    """The slice of QProcess these kill paths touch. No child is ever started.
+    """The QProcess surface the escalation code uses; no real signal is sent."""
 
-    The previous version of this suite read `hub/process_manager.py` as text and
-    asserted that the words "taskkill", "/T" and "_restart_after_port_free"
-    appeared in the right function bodies. That proves a string was typed, not
-    that anything is wired: deleting the call and leaving the word in a comment
-    would have kept the suite green, and a refactor that renamed a helper broke
-    it for no reason. These fakes let the code actually run.
-    """
-
-    def __init__(self, state=None, pid: int = 4321, code: int = 0):
-        self._state = pm.QProcess.Running if state is None else state
-        self._pid = pid
-        self._code = code
-        self.terminated = False
-        self.killed = False
+    def __init__(self, pid: int = 4242, running: bool = True):
+        self.pid = pid
+        self._state = QProcess.Running if running else QProcess.NotRunning
+        self.terminated = 0
+        self.killed = 0
 
     def state(self):
         return self._state
 
-    def exitCode(self) -> int:
-        return self._code
+    def processId(self):
+        return self.pid
 
-    def processId(self) -> int:
-        return self._pid
+    def terminate(self):
+        self.terminated += 1
 
-    def terminate(self) -> None:
-        self.terminated = True
+    def kill(self):
+        self.killed += 1
+        self._state = QProcess.NotRunning
 
-    def kill(self) -> None:
-        self.killed = True
-        self._state = pm.QProcess.NotRunning
-
-    def readAllStandardOutput(self) -> bytes:
-        return b""
-
-    def readAllStandardError(self) -> bytes:
+    def readAllStandardOutput(self):
         return b""
 
 
-def _fake_process() -> pm.ProjectProcess:
-    rec = {"name": "server", "command": "python3 server.py", "working_dir": str(PROJECT_ROOT)}
-    proc = pm.ProjectProcess(rec)
-    proc.proc = _FakeProc()
-    return proc
+def test_windows_grace_is_shorter_than_the_posix_grace() -> None:
+    """Static by necessity: proving this behaviourally means a 20s wait.
 
-
-def test_force_kill_uses_taskkill_on_windows() -> None:
-    """The force-kill path must call taskkill /T /F, not just QProcess.kill().
-
-    kill() alone leaves anything the process spawned holding the port, and
-    terminate() never reaches a console process at all.
+    The invariant matters: waiting out the POSIX grace on Windows would stall
+    every stop, because terminate() cannot end a console child there.
     """
-    argv_seen: list[list[str]] = []
+    assert pm.WINDOWS_TERM_GRACE_MS < pm.TERM_GRACE_MS, (
+        f"Windows grace ({pm.WINDOWS_TERM_GRACE_MS}ms) must be shorter than the "
+        f"POSIX grace ({pm.TERM_GRACE_MS}ms)"
+    )
 
-    class _Completed:
+
+def test_taskkill_argv_targets_the_pid_and_the_tree() -> None:
+    assert pm._taskkill_argv(4321) == ["taskkill", "/PID", "4321", "/T", "/F"]
+    # /PID takes the numeric target as its own argument, not a joined string.
+    assert pm._taskkill_argv("4321")[1:3] == ["/PID", "4321"]
+
+
+def test_kill_process_tree_runs_the_expected_command() -> None:
+    calls = []
+    real_run = pm.subprocess.run
+
+    class _Result:
         returncode = 0
-        stdout = b""
-        stderr = b""
 
     def fake_run(argv, **kwargs):
-        argv_seen.append(list(argv))
-        return _Completed()
+        calls.append((argv, kwargs))
+        return _Result()
 
-    proc = _fake_process()
-    with mock.patch.object(pm.subprocess, "run", fake_run), mock.patch.object(
-        pm, "IS_WINDOWS", True
-    ):
-        proc._force_kill()
-
-    assert argv_seen, (
-        "the Windows force-kill never ran taskkill; kill() alone leaves every "
-        "child the server spawned holding its port"
-    )
-    argv = argv_seen[0]
-    assert argv[:3] == ["taskkill", "/PID", "4321"], f"taskkill was aimed wrong: {argv}"
-    assert "/T" in argv and "/F" in argv, f"taskkill must take the tree forcibly: {argv}"
-    assert proc.proc.killed, "taskkill ran but QProcess.kill() was never called"
-
-
-def test_stop_schedules_a_windows_escalation() -> None:
-    """stop() must arm the short Windows timer so a hung child dies promptly."""
-    scheduled: list[tuple[int, object]] = []
-
-    class _TimerSpy:
-        @staticmethod
-        def singleShot(ms, fn):
-            scheduled.append((ms, fn))
-
-    proc = _fake_process()
-    with mock.patch.object(pm, "IS_WINDOWS", True), mock.patch.object(pm, "QTimer", _TimerSpy):
-        proc.stop()
-
-    assert proc.proc.terminated, "stop() never asked the child to terminate"
-    assert scheduled, (
-        "stop() armed no Windows escalation: terminate() posts WM_CLOSE, which a "
-        "console child never receives, so the stop would hang for the full POSIX grace"
-    )
-    ms, fn = scheduled[0]
-    assert ms == pm.WINDOWS_TERM_GRACE_MS, (
-        f"the escalation waits {ms}ms, not the short {pm.WINDOWS_TERM_GRACE_MS}ms "
-        "Windows grace"
-    )
-    assert getattr(fn, "__name__", "") == "_force_kill", (
-        "the Windows escalation is not wired to the force-kill path"
-    )
-    proc._kill_timer.stop()
-
-
-def test_restart_waits_for_the_port_to_free() -> None:
-    """A restart must not fire while the old process still holds the port.
-
-    On Windows the terminated child keeps its listening socket briefly, so
-    restarting the instant `finished` fires makes the replacement die with
-    "Address already in use" and leaves the project stuck in 'starting'. That is
-    exactly the failure the Windows job reported: test_restart with states
-    ['starting', 'running'].
-    """
-    proc = _fake_process()
-    proc.proc = _FakeProc(state=pm.QProcess.NotRunning)
-    proc._pending_restart = True
-    proc._user_stopped = True  # a user stop, so the exit is not reported as an error
-
-    routed: list[int] = []
-    started: list[bool] = []
-    proc._restart_after_port_free = lambda attempts=40: routed.append(attempts)
-    proc.start = lambda: started.append(True)
-
-    proc._on_finished(0, pm.QProcess.NormalExit)
-
-    assert routed, "_on_finished did not route the pending restart through the port check"
-    assert not started, (
-        "_on_finished started the replacement immediately, before the old child "
-        "released its port"
-    )
-
-
-def test_taskkill_command_shape() -> None:
-    """The taskkill argv must be well-formed if it ever runs.
-
-    Checked by calling the real command on a PID that does not exist: taskkill
-    fails cleanly, proving the arguments parse rather than erroring on syntax.
-    Skipped where taskkill is absent (every non-Windows host), since only its
-    shape can be verified here.
-    """
+    pm.subprocess.run = fake_run
     try:
-        subprocess.run(["taskkill", "--help"], capture_output=True, timeout=5, check=False)
-    except (FileNotFoundError, OSError):
-        # taskkill is Windows-only; the argument shape is still asserted above
-        # from source, which is all a macOS host can honestly do.
-        return
-    argv = ["taskkill", "/PID", "999999", "/T", "/F"]
-    r = subprocess.run(argv, capture_output=True, timeout=10, check=False)
-    # A nonexistent PID fails, but must fail as "no such process", not because
-    # the command line was malformed.
-    out = (r.stdout + r.stderr).decode("utf-8", "replace").lower()
-    assert "invalid" not in out, f"taskkill rejected the argv shape: {out[:200]}"
-
-
-def test_restart_gives_up_honestly_when_the_port_never_frees() -> None:
-    """When the port stays held, the restart must report it instead of looping.
-
-    This exercises the real probe: a socket holds the project's port, so the
-    bounded retry runs out at once (attempts=0) and the project must end in
-    'error' with nothing launched, rather than starting into a busy port.
-    """
-    import socket
-
-    holder = socket.socket()
-    holder.bind(("127.0.0.1", 0))
-    holder.listen(1)
-    port = holder.getsockname()[1]
-    try:
-        proc = pm.ProjectProcess(
-            {
-                "name": "held",
-                "command": "python3 held.py",
-                "working_dir": str(PROJECT_ROOT),
-                "url": f"http://127.0.0.1:{port}/",
-            }
-        )
-        states: list[str] = []
-        started: list[bool] = []
-        proc.state_changed.connect(states.append)
-        proc.start = lambda: started.append(True)
-
-        proc._restart_after_port_free(attempts=0)
-
-        assert not started, "the replacement was started while the port was still held"
-        assert "error" in states, f"giving up on a held port reported no error: {states}"
+        pm._kill_process_tree(4321)
     finally:
-        holder.close()
+        pm.subprocess.run = real_run
+
+    assert len(calls) == 1, calls
+    argv, kwargs = calls[0]
+    assert argv == ["taskkill", "/PID", "4321", "/T", "/F"], argv
+    assert kwargs.get("capture_output") is True, kwargs
+    assert kwargs.get("timeout") == 10, kwargs
+    assert kwargs.get("check") is False, kwargs
+
+
+def test_kill_process_tree_survives_taskkill_failures() -> None:
+    real_run = pm.subprocess.run
+
+    def missing(*a, **k):
+        raise OSError("taskkill not found")
+
+    def timed_out(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="taskkill", timeout=10)
+
+    try:
+        pm.subprocess.run = missing
+        pm._kill_process_tree(4321)  # must not raise
+        pm.subprocess.run = timed_out
+        pm._kill_process_tree(4321)  # must not raise
+    finally:
+        pm.subprocess.run = real_run
+
+
+def test_force_kill_targets_the_process_it_was_given() -> None:
+    proc = _FakeProc(pid=4242)
+    trees = []
+    real_tree = pm._kill_process_tree
+    real_windows = pm.IS_WINDOWS
+    pm._kill_process_tree = trees.append
+    pm.IS_WINDOWS = True
+    try:
+        pm.ProjectProcess(_rec(), term_grace_ms=50)._force_kill(proc)
+    finally:
+        pm._kill_process_tree = real_tree
+        pm.IS_WINDOWS = real_windows
+
+    assert trees == [4242], f"taskkill was not given the target PID: {trees}"
+    assert proc.killed == 1, "kill() was not called after taskkill"
+
+
+def test_force_kill_without_a_pid_skips_taskkill_but_still_kills() -> None:
+    proc = _FakeProc(pid=0)
+    trees = []
+    real_tree = pm._kill_process_tree
+    real_windows = pm.IS_WINDOWS
+    pm._kill_process_tree = trees.append
+    pm.IS_WINDOWS = True
+    try:
+        pm.ProjectProcess(_rec(), term_grace_ms=50)._force_kill(proc)
+    finally:
+        pm._kill_process_tree = real_tree
+        pm.IS_WINDOWS = real_windows
+
+    assert trees == [], f"taskkill was called without a PID: {trees}"
+    assert proc.killed == 1
+
+
+def test_force_kill_ignores_an_already_exited_process() -> None:
+    proc = _FakeProc(pid=4242, running=False)
+    trees = []
+    real_tree = pm._kill_process_tree
+    pm._kill_process_tree = trees.append
+    try:
+        pm.ProjectProcess(_rec(), term_grace_ms=50)._force_kill(proc)
+    finally:
+        pm._kill_process_tree = real_tree
+
+    assert trees == [] and proc.killed == 0
+
+
+def test_stop_escalates_after_the_short_grace() -> None:
+    """stop() must terminate, then force-kill when the child does not exit."""
+    proc = pm.ProjectProcess(_rec(), term_grace_ms=60)
+    fake = _FakeProc(pid=4242)
+    proc.proc = fake
+    proc._generation = 1
+
+    trees = []
+    real_tree = pm._kill_process_tree
+    real_windows = pm.IS_WINDOWS
+    pm._kill_process_tree = trees.append
+    pm.IS_WINDOWS = True
+    try:
+        proc.stop()
+        assert fake.terminated == 1, "the child was never asked to terminate"
+        assert _wait_until(lambda: fake.killed == 1, timeout_s=2), (
+            "the escalation timer never force-killed the child"
+        )
+    finally:
+        pm._kill_process_tree = real_tree
+        pm.IS_WINDOWS = real_windows
+
+    assert trees == [4242], trees
+
+
+def test_restart_waits_for_the_port_to_free_before_starting() -> None:
+    port = reserve_port()
+    proc = pm.ProjectProcess(
+        _rec(url=f"http://127.0.0.1:{port}/"), term_grace_ms=50
+    )
+    probes = []
+    started = []
+
+    def busy_twice_then_free(p):
+        probes.append(p)
+        return len(probes) <= 2
+
+    real_probe = pm.urldetect.port_in_use
+    real_start = proc.start
+    pm.urldetect.port_in_use = busy_twice_then_free
+    proc.start = lambda: started.append(True)
+    try:
+        proc._restart_after_port_free(attempts=5, generation=proc._generation)
+        assert _wait_until(lambda: bool(started), timeout_s=5), (
+            f"the replacement never started; probes={probes}"
+        )
+    finally:
+        pm.urldetect.port_in_use = real_probe
+        proc.start = real_start
+
+    assert len(probes) >= 3, f"the port was not re-probed: {probes}"
+    assert all(p == port for p in probes), probes
+
+
+def test_restart_gives_up_when_the_port_never_frees() -> None:
+    port = reserve_port()
+    proc = pm.ProjectProcess(
+        _rec(url=f"http://127.0.0.1:{port}/"), term_grace_ms=50
+    )
+    states = []
+    started = []
+    proc.state_changed.connect(states.append)
+    real_probe = pm.urldetect.port_in_use
+    real_start = proc.start
+    pm.urldetect.port_in_use = lambda p: True  # never free
+    proc.start = lambda: started.append(True)
+    try:
+        proc._restart_after_port_free(attempts=0, generation=proc._generation)
+    finally:
+        pm.urldetect.port_in_use = real_probe
+        proc.start = real_start
+
+    assert not started, "a restart ran while the port was still held"
+    assert "error" in states, states
+
+
+_CHILD_TREE_SRC = """
+import subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+print(child.pid, flush=True)
+time.sleep(120)
+"""
+
+
+def test_taskkill_ends_a_real_child_tree() -> None:
+    """Integration: taskkill /T really ends the child and its descendant.
+
+    Runs only where taskkill exists (Windows). The tree is one this test
+    started, so nothing unrelated is signalled.
+    """
+    if not pm.IS_WINDOWS:
+        raise SkipTest("not Windows")
+    parent = subprocess.Popen(
+        [sys.executable, "-u", "-c", _CHILD_TREE_SRC],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        line = parent.stdout.readline().strip()
+        assert line.isdigit(), f"child pid was not reported: {line!r}"
+        child_pid = int(line)
+        assert urldetect._windows_process_alive(parent.pid) is True
+        assert urldetect._windows_process_alive(child_pid) is True
+
+        pm._kill_process_tree(parent.pid)
+
+        assert _wait_until(
+            lambda: not urldetect._windows_process_alive(parent.pid), timeout_s=10
+        ), "the parent survived taskkill"
+        assert _wait_until(
+            lambda: not urldetect._windows_process_alive(child_pid), timeout_s=10
+        ), "the child survived taskkill /T"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        try:
+            parent.wait(timeout=10)
+        except subprocess.SubprocessError:
+            pass
+        if parent.stdout is not None:
+            parent.stdout.close()
 
 
 if __name__ == "__main__":
+    QCoreApplication.instance() or QCoreApplication([])
     fails = 0
+    skipped = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             try:
                 fn()
                 print(f"PASS {name}")
+            except SkipTest as e:
+                skipped += 1
+                print(f"SKIP {name}: {e}")
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
             except Exception as e:
-                # Only AssertionError used to be caught, so any other exception
-                # killed the runner mid-suite: later tests never printed and the
-                # summary claimed "N passed, 1 failed" with no FAIL line to name
-                # the 1. An unexpected error is a failure -- report it as one.
                 fails += 1
                 print(f"ERROR {name}: {type(e).__name__}: {e}")
-    print("---", "FAILURES" if fails else "all passed")
+    print("---", "FAILURES" if fails else (
+        "all passed" + (f" ({skipped} skipped)" if skipped else "")
+    ))
     sys.exit(1 if fails else 0)
-
-
