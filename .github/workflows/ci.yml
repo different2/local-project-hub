@@ -292,3 +292,23 @@ jobs:
           ls -la artifacts/
           gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* \
             --clobber --repo "${GITHUB_REPOSITORY}"
+      - name: Verify every published asset has a SHA-256 digest
+        # The in-app updater is fail-closed: it refuses to install an asset
+        # whose release metadata carries no usable `sha256:` digest. GitHub
+        # computes that digest when an asset is uploaded through the API, and
+        # this step makes a release FAIL rather than publish installers the
+        # app will then refuse to update from.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          missing="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" \
+              --jq '[.assets[] | select(((.digest // "") | startswith("sha256:")) | not) | .name] | join(", ")'
+          )"
+          if [ -n "$missing" ]; then
+            echo "::error::release $tag has assets without a SHA-256 digest: $missing"
+            exit 1
+          fi
+          echo "All release assets carry a sha256 digest."

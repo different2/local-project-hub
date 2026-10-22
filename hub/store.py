@@ -109,6 +109,25 @@ class Store:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             raise RegistryError(f"could not read registry {self.path}: {e}") from e
+        # JSON that parses but is not an object (an array, string, number or
+        # null) has no schema at all. Accessing .get() on it raised a bare
+        # AttributeError that escaped main.py's RegistryError handler, so the
+        # app died at startup instead of explaining the problem. Never reset or
+        # overwrite this file: it may be a user's registry that was edited by
+        # hand, and their projects must survive them fixing the structure.
+        if not isinstance(raw, dict):
+            raise RegistryError(
+                f"registry {self.path} has an unsupported structure "
+                f"(top-level {type(raw).__name__}, expected a JSON object); "
+                "move it aside and re-register your projects"
+            )
+        projects = raw.get("projects", [])
+        if not isinstance(projects, list):
+            raise RegistryError(
+                f"registry {self.path} has an unsupported 'projects' value "
+                f"({type(projects).__name__}, expected a list); "
+                "move it aside and re-register your projects"
+            )
         version = raw.get("version", SCHEMA_VERSION)
         if version != SCHEMA_VERSION:
             if version == 1 and SCHEMA_VERSION == 2:
@@ -121,7 +140,7 @@ class Store:
                     f"registry version {version} != {SCHEMA_VERSION}; "
                     "move it aside and re-register your projects"
                 )
-        for rec in raw.get("projects", []):
+        for rec in projects:
             # Migrate BEFORE validate: validate() normalises the `detected`
             # block, and running it on a v1 record would replace the migration's
             # honest "unknown" with a blank one.
@@ -133,9 +152,26 @@ class Store:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": SCHEMA_VERSION, "projects": self.ordered()}
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        os.replace(tmp, self.path)  # atomic on POSIX
+        # A unique temp file in the same directory: a failed write/replace can
+        # only ever remove this operation's own file, never another writer's,
+        # and no stale `.tmp` is left behind. os.replace() is the atomic commit.
+        import tempfile
+
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=self.path.name + ".",
+            suffix=".tmp",
+            dir=str(self.path.parent),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, indent=2))
+            os.replace(tmp_name, self.path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
     # ---------- queries ----------
 
@@ -148,14 +184,32 @@ class Store:
 
     # ---------- mutations ----------
 
+    def _commit(self, previous: dict[str, dict]) -> None:
+        """Save the live registry, restoring memory if the write fails.
+
+        Without this a failed save left the in-memory registry ahead of the
+        file: the operation appeared to succeed for the rest of the session and
+        vanished on restart (or, worse, was saved by an unrelated later edit).
+        Memory and disk are kept in step by putting the old mapping back.
+        """
+        try:
+            self.save()
+        except Exception as e:
+            # Any persistence failure (locked target, disk full, serialisation
+            # error) must restore memory; otherwise the session diverges from
+            # the file and a later unrelated save would persist the change.
+            self.projects = previous
+            raise RegistryError(f"could not save registry {self.path}: {e}") from e
+
     def add(self, rec: dict) -> dict:
         rec = validate(rec)
         if "id" not in rec or not rec["id"]:
             rec["id"] = new_id()
         if rec["id"] in self.projects:
             raise RegistryError(f"project id {rec['id']} already exists")
+        previous = dict(self.projects)
         self.projects[rec["id"]] = rec
-        self.save()
+        self._commit(previous)
         return rec
 
     def update(self, rec: dict) -> dict:
@@ -163,34 +217,76 @@ class Store:
         pid = rec.get("id")
         if pid not in self.projects:
             raise RegistryError(f"no project with id {pid}")
+        previous = dict(self.projects)
         self.projects[pid] = rec
-        self.save()
+        self._commit(previous)
         return rec
 
     def remove(self, project_id: str) -> None:
         if project_id not in self.projects:
             raise RegistryError(f"no project with id {project_id}")
+        previous = dict(self.projects)
         del self.projects[project_id]
-        self.save()
+        self._commit(previous)
 
     def export_json(self) -> str:
         return json.dumps({"version": SCHEMA_VERSION, "projects": self.ordered()}, indent=2)
 
     def import_json(self, text: str) -> int:
-        """Merge projects from an export. Returns how many were added/updated."""
+        """Merge projects from an export. Returns how many were added/updated.
+
+        Accepts the two shapes this app produces or documents: an export object
+        ``{"version": ..., "projects": [...]}`` and a bare JSON array of
+        records. Validating the payload type BEFORE reading dictionary fields
+        is what stops a bare array from raising AttributeError (``raw.get`` on
+        a list).
+
+        The batch is all-or-nothing. Every record is validated into staging
+        first; the live registry is only touched once the whole batch has been
+        accepted, and it is saved exactly once. An invalid record therefore
+        cannot leave its predecessors behind in memory, where a later unrelated
+        save would silently persist them.
+        """
         try:
             raw = json.loads(text)
         except json.JSONDecodeError as e:
             raise RegistryError(f"not valid JSON: {e}") from e
-        recs = raw.get("projects", raw if isinstance(raw, list) else [])
-        n = 0
+
+        if isinstance(raw, list):
+            recs = raw
+        elif isinstance(raw, dict):
+            if "projects" not in raw:
+                # A stray object (settings, an unrelated export) is not an
+                # empty project list. Treating it as one silently "succeeded"
+                # while importing nothing.
+                raise RegistryError(
+                    "import data is an object but has no 'projects' list"
+                )
+            recs = raw["projects"]
+            if not isinstance(recs, list):
+                raise RegistryError(
+                    "'projects' must be a list, not "
+                    f"{type(recs).__name__}"
+                )
+        else:
+            raise RegistryError(
+                "import data must be a project list or an object with a "
+                f"'projects' list, not {type(raw).__name__}"
+            )
+
+        # Stage the whole batch first. Import is a merge: an id already in the
+        # registry is updated (existing behaviour), and a later record with the
+        # same id replaces an earlier one from the same batch.
+        staged: dict[str, dict] = {}
         for rec in recs:
             rec = validate(rec)
             rec["id"] = rec.get("id") or new_id()
-            self.projects[rec["id"]] = rec
-            n += 1
-        self.save()
-        return n
+            staged[rec["id"]] = rec
+
+        previous = dict(self.projects)
+        self.projects.update(staged)
+        self._commit(previous)
+        return len(recs)
 
 
 _STR_FIELDS = (

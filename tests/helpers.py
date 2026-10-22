@@ -25,6 +25,16 @@ if str(PROJECT_ROOT) not in sys.path:
 from hub import urldetect  # noqa: E402
 
 
+class SkipTest(Exception):
+    """Raised by a test that cannot run on this host.
+
+    The standalone suite harnesses catch it and print `SKIP <name>` instead of
+    `PASS <name>`; the aggregate runner counts it separately. Printing SKIP and
+    then letting the harness print PASS made skipped tests indistinguishable
+    from executed ones.
+    """
+
+
 def victim_server_source(port: int) -> str:
     """Script text for a project that must FAIL to bind an occupied port.
 

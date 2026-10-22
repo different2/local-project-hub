@@ -90,6 +90,7 @@ GUI_ENV = {"QT_QPA_PLATFORM": "offscreen"}
 SUITES = [
     ("test_store.py", False),
     ("test_platform.py", False),
+    ("test_launch_at_login.py", False),
     ("test_updater.py", False),
     ("test_process_e2e.py", True),
     ("test_window_e2e.py", True),
@@ -366,17 +367,16 @@ def run_isolated_test(path: Path, test_name: str, attempts: int = 3):
         if attempt:
             time.sleep(WEBENGINE_COOLDOWN_S * attempt)
         code, out = run_one(path, needs_gui=True, extra_args=[f"--test={test_name}"])
-        n_pass = out.count("PASS ")
-        n_fail = out.count("FAIL ")
-        started = bool(n_pass or n_fail)
+        n_pass, n_fail, n_skip = count_results(out)
+        started = bool(n_pass or n_fail or n_skip)
         if started or code == 0:
-            return code, out, n_pass, n_fail
+            return code, out, n_pass, n_fail, n_skip
         # died before running anything: wait for the helper to exit and retry
         free_test_ports(timeout_s=10)
-    return code, out, n_pass, n_fail
+    return code, out, n_pass, n_fail, n_skip
 
 
-def run_isolated(path: Path) -> tuple[int, int, int, str]:
+def run_isolated(path: Path) -> tuple[int, int, int, int, str]:
     """Run a GUI suite one test per process and aggregate.
 
     QtWebEngine segfaults at interpreter shutdown once several views have been
@@ -386,9 +386,10 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
     names = discover_tests(path)
     if not names:
         code, out = run_one(path, needs_gui=True)
-        return code, out.count("PASS "), out.count("FAIL "), out
+        passed, failed, skipped = count_results(out)
+        return code, passed, failed, skipped, out
 
-    passed = failed = 0
+    passed = failed = skipped = 0
     worst = 0
     chunks = []
     for test_name in names:
@@ -396,26 +397,25 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
         # process. Without this, a predecessor's server still holds the port,
         # the new server fails to bind, and the test fails — or worse, crashes.
         free_test_ports()
-        code, out, n_pass, n_fail = run_isolated_test(path, test_name)
+        code, out, n_pass, n_fail, n_skip = run_isolated_test(path, test_name)
         passed += n_pass
         failed += n_fail
-        if code != 0 and not (n_pass or n_fail):
-            # Retries exhausted and this test never reported at all. That is not
-            # the known teardown crash (which happens AFTER a test prints PASS
-            # and surfaces as a signal-kill), it is a crash the runner would
-            # otherwise count as neither passed nor failed — and report_suite's
-            # teardown-crash rule (nonzero exit, failed == 0, passed > 0) would
-            # then quietly turn the suite green, hiding whatever broke. Count it
-            # as a failure; the output, which includes the traceback, is
-            # appended below.
+        skipped += n_skip
+        if not (n_pass or n_fail or n_skip):
+            # This isolated process never reported a result. Whether it exited
+            # 0 silently or crashed, the test did not run to a verdict: that is
+            # a failure/blocked result, not a pass. Counting only crashes here
+            # let a silently-skipped test disappear from the totals.
             failed += 1
+            n_fail += 1
         # A negative code is a signal-kill (SIGSEGV = -11). QtWebEngine crashes
         # during interpreter shutdown even when the test itself passed, so a
         # signal-kill AFTER a clean PASS is a known Qt teardown crash, not a
         # test failure — count the pass and note it instead of failing CI.
         crashed_after_pass = code < 0 and n_pass and not n_fail
         chunks.append(
-            f"--- {test_name}: rc={code} ({n_pass} passed, {n_fail} failed)"
+            f"--- {test_name}: rc={code} "
+            f"({n_pass} passed, {n_skip} skipped, {n_fail} failed)"
             + ("  [crashed at Qt shutdown after passing]" if crashed_after_pass else "")
         )
         if code != 0 and not crashed_after_pass:
@@ -424,7 +424,7 @@ def run_isolated(path: Path) -> tuple[int, int, int, str]:
             # useful evidence, and the Windows conflict failures needed the whole
             # message to be diagnosable from the artifact.
             chunks.append("\n".join(out.strip().splitlines()[-25:]))
-    return worst, passed, failed, "\n".join(chunks)
+    return worst, passed, failed, skipped, "\n".join(chunks)
 
 
 def report_failure(name: str, out: str) -> None:
@@ -463,40 +463,151 @@ def report_failure(name: str, out: str) -> None:
     emit(f"           -- last output --\n{tail}\n")
 
 
-def report_suite(name: str, code: int, passed: int, failed: int, out: str) -> int:
-    """Print one suite's result line plus failure detail. Returns the final code.
+def count_results(out: str) -> tuple[int, int, int]:
+    """Recognised PASS/FAIL/ERROR/SKIP lines in a suite's output.
 
-    A QtWebEngine segfault at interpreter shutdown exits non-zero even when
-    every test passed, so that case is reported as ok rather than failing CI.
+    ERROR counts as a failure: a suite that prints `ERROR ...` and exits zero is
+    not green, and the old parser only counted FAIL, so such a run passed.
+    SKIP is counted separately: a skipped test did not execute its assertions,
+    so counting it as PASS overstates coverage.
     """
-    status = "ok  " if code == 0 else "FAIL"
-    if code != 0 and failed == 0 and passed > 0:
-        status = "ok  "
-        code = 0
-    if code == 0 and passed == 0 and failed == 0:
-        # A suite that exits 0 having reported nothing is NOT a pass. This used
-        # to print "ok 0 passed, 0 failed" and count towards "17/17 suites
-        # passed": a test renamed past the suite's __main__ loop, a `--test=`
-        # filter matching nothing, or a module that imports and returns without
-        # running any test all looked exactly like success. The same hole hid
-        # whole files in test_popup_bridge.py, which now refuses to run nothing.
-        code = 1
-        status = "FAIL"
-        emit(f"  NOTE     {name} reported no tests at all (0 passed, 0 failed)")
-    emit(f"  {status}     {name:26} {passed} passed, {failed} failed")
+    def count(token: str) -> int:
+        return out.count(f"\n{token} ") + (1 if out.startswith(f"{token} ") else 0)
+
+    return count("PASS"), count("FAIL") + count("ERROR"), count("SKIP")
+
+
+def classify_suite(
+    code: int,
+    passed: int,
+    failed: int,
+    skipped: int,
+    out: str,
+    incomplete: int = 0,
+    allow_empty: bool = False,
+    allow_teardown_crash: bool = False,
+) -> tuple[int, str, str]:
+    """Decide a suite's real status. Returns (exit_code, label, reason).
+
+    A suite is green ONLY when it produced at least one recognised result and
+    reported no failures. In particular:
+
+      * exit 0 with no recognised results (empty output, a crash before tests,
+        or an unrecognised report format) is BLOCKED, not a green suite;
+      * exit 0 with a recognised FAIL/ERROR line is a FAILURE;
+      * a non-zero exit is a FAILURE unless it is the known QtWebEngine
+        teardown crash after every test passed (`allow_teardown_crash`, only
+        for GUI suites);
+      * SKIP lines are counted separately. A skipped test did not run its
+        assertions, so it is not a pass; a suite with only skips is green but
+        explicitly reported as skipped;
+      * `incomplete` (expected tests minus recognised results) blocks the
+        suite. A test that silently produced no result is not a pass, and it
+        must not be excused by the GUI teardown-crash rule.
+
+    `allow_empty` exists for a suite explicitly known to have no tests; no
+    suite in SUITES uses it, so an accidental empty run cannot be green.
+    """
+    if failed > 0:
+        return 1, "FAIL", f"{failed} failure(s) reported"
+    if incomplete > 0:
+        if (out or "").strip().startswith("TIMEOUT"):
+            return 1, "TIMEOUT", "suite exceeded its time budget"
+        return (
+            1,
+            "BLOCK",
+            f"{incomplete} expected test(s) produced no result",
+        )
+    if passed == 0 and skipped == 0:
+        if allow_empty and code == 0:
+            return 0, "ok  ", "no tests (explicitly allowed)"
+        if (out or "").strip().startswith("TIMEOUT"):
+            return 1, "TIMEOUT", "suite exceeded its time budget"
+        if code == 0:
+            return 1, "BLOCK", "exit 0 but no recognised test results"
+        return 1, "BLOCK", f"exited {code} with no recognised test results"
+    if passed == 0 and skipped > 0:
+        if code == 0:
+            return 0, "ok  ", f"{skipped} test(s) skipped"
+        return 1, "BLOCK", f"exited {code} after {skipped} skipped test(s)"
     if code != 0:
+        if allow_teardown_crash:
+            return 0, "ok  ", f"Qt teardown crash after {passed} passing test(s)"
+        return 1, "FAIL", f"exited {code} after {passed} passing test(s)"
+    if skipped:
+        return 0, "ok  ", f"{skipped} test(s) skipped"
+    return 0, "ok  ", ""
+
+
+def report_suite(
+    name: str,
+    code: int,
+    passed: int,
+    failed: int,
+    skipped: int,
+    out: str,
+    needs_gui: bool = False,
+    incomplete: int = 0,
+) -> tuple[int, bool]:
+    """Print one suite's result and failure detail.
+
+    Returns (final_code, blocked). `blocked` means the suite produced no
+    recognised verdict at all (timeout, startup crash, empty/malformed output),
+    so its tests were not run to completion.
+    """
+    final, status, reason = classify_suite(
+        code,
+        passed,
+        failed,
+        skipped,
+        out,
+        incomplete=incomplete,
+        allow_teardown_crash=needs_gui,
+    )
+    emit(
+        f"  {status}     {name:26} "
+        f"{passed} passed, {skipped} skipped, {failed} failed"
+    )
+    if status != "ok  " and reason:
+        emit(f"           {reason}")
+    if needs_gui and reason.startswith("Qt teardown crash"):
+        emit(
+            f"  NOTE     {name} exited {code} with all {passed} tests passing "
+            "- a QtWebEngine teardown crash. Add it to ISOLATE_TESTS."
+        )
+    if final != 0:
         report_failure(name, out)
-    return code
+    return final, status in ("BLOCK", "TIMEOUT")
+
+
+def run_suite(name: str, path: Path, needs_gui: bool) -> tuple[int, int, int, int, str]:
+    """Run one suite and return (exit_code, passed, failed, skipped, output).
+
+    Timeouts are converted into a blocked result rather than escaping; a suite
+    that never produced a verdict must never be counted as green.
+    """
+    try:
+        if name in ISOLATE_TESTS:
+            return run_isolated(path)
+        code, out = run_one(path, needs_gui)
+        passed, failed, skipped = count_results(out)
+        return code, passed, failed, skipped, out
+    except subprocess.TimeoutExpired as e:
+        return 1, 0, 0, 0, f"TIMEOUT after {e.timeout}s: {name}"
 
 
 def main() -> int:
     emit(f"Running {len(SUITES)} suites serially (GUI suites cannot overlap)\n")
     results = []
+    total_passed = total_skipped = total_failed = 0
+    blocked_suites = 0
+    not_run = 0
     for name, needs_gui in SUITES:
         path = HERE / name
         if not path.exists():
             emit(f"  MISSING  {name}")
             results.append((name, 1))
+            blocked_suites += 1
             continue
         # Wait for the PREVIOUS suite's servers to release their ports before
         # starting this one. This has to happen between suites, not only inside
@@ -507,37 +618,38 @@ def main() -> int:
         # bug. That is what macOS CI was hitting.
         if results:
             free_test_ports()
+        code, passed, failed, skipped, out = run_suite(name, path, needs_gui)
         try:
-            if name in ISOLATE_TESTS:
-                code, passed, failed, out = run_isolated(path)
-            else:
-                code, out = run_one(path, needs_gui)
-                passed = out.count("\nPASS ") + (1 if out.startswith("PASS ") else 0)
-                failed = out.count("\nFAIL ") + (1 if out.startswith("FAIL ") else 0)
-                # Safety net for a suite not listed in ISOLATE_TESTS that still
-                # segfaults at Qt teardown. Without this the next view-creating
-                # suite silently turns CI red while every test passes.
-                if code != 0 and passed and not failed:
-                    emit(
-                        f"  NOTE     {name} exited {code} with all "
-                        f"{passed} tests passing - a QtWebEngine teardown crash. "
-                        f"Add it to ISOLATE_TESTS."
-                    )
-                    code = 0
-                # A suite that prints "--- all passed" without naming a single
-                # test used to be credited with one pass here, which masked the
-                # 0/0 hole report_suite now fails on. Every suite prints one
-                # "PASS <name>" line per test, so nothing needs that credit.
-        except subprocess.TimeoutExpired:
-            emit(f"  TIMEOUT  {name}")
-            results.append((name, 1))
-            continue
-        code = report_suite(name, code, passed, failed, out)
+            expected = len(discover_tests(path))
+        except Exception:
+            expected = passed + skipped + failed
+        suite_not_run = max(0, expected - (passed + skipped + failed))
+        code, blocked = report_suite(
+            name,
+            code,
+            passed,
+            failed,
+            skipped,
+            out,
+            needs_gui=needs_gui,
+            incomplete=suite_not_run,
+        )
         results.append((name, code))
+        total_passed += passed
+        total_skipped += skipped
+        total_failed += failed
+        if blocked:
+            blocked_suites += 1
+        not_run += suite_not_run
 
     ok = sum(1 for _, c in results if c == 0)
     total = len(results)
     emit(f"\n{ok}/{total} suites passed")
+    emit(
+        f"Totals: {total_passed} passed, {total_skipped} skipped, "
+        f"{total_failed} failed, {blocked_suites} blocked suite(s), "
+        f"{not_run} not-run test(s)"
+    )
     if ok != total:
         emit("A busy port is the usual cause when GUI suites fail together.")
         emit("The runner stops whatever holds a test port before each test;")
