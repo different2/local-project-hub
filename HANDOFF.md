@@ -30,9 +30,11 @@ a failed termination of an IPv6 holder cannot cause a misleading retry.
 Both new regressions went RED before their own minimal fix, then GREEN; all
 17 safety tests pass on actual Python 3.9 and 3.11. The prior Windows-only
 `os.killpg` mock setup errors are also fixed, without skipped assertions.
-The previous full Mac run passed **19/19, 307 passed, 3 skipped, no failures**;
-a fresh full suite is running on edfc1f0, log
-`~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`. The native Cocoa
+The final full Mac run on edfc1f0 passed **19/19, 309 passed, 3 skipped, no
+failures/blocked suites/not-run tests**; all suite rows were independently
+counted against the summary. Log:
+`~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`. Windows CI is
+still in progress and remains the merge gate. The native Cocoa
 Start/Restart/Stop check passed, with rendered screenshots and HTTP/PID/listener
 checks. Read the CURRENT FINAL VALIDATION block in
 `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` before any merge. Earlier
