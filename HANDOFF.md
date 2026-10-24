@@ -21,20 +21,23 @@ recorded with file:line)._
 
 ## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
 
-**Afternoon resume update:** current unmerged PR head is
-`f73967be21c0b303a9f966b827e950d29d86fb28`; Windows CI `40137048230` is the
-current exact-head check. `1aba952` completed endpoint propagation through the
-GUI's delayed launch callback; `f73967b` changes only three Windows test mocks
-(`os.killpg` does not exist there), with no further application changes. The
-15 safety tests pass under real Python 3.9 and 3.11, including a simulated
-missing-killpg environment. Native Cocoa Start/Restart/Stop passed on the final
-application code. The final Mac suite is running in `lph-pr2-final`, log
-`macos-final-py311.log`; independent re-review retry `deleg_719e59fb` is pending
-(the earlier re-review failed provider quota and returned **no verdict**).
-Read the LATEST RESUME block in
-`~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` before any merge. Older CI
-runs and the earlier progress below are superseded; **no merge/release/install
-has happened yet**.
+**Latest validation checkpoint:** current unmerged PR head is
+`edfc1f017e64e1a9bcabccae7a5b4cf3d0c96660`; Windows CI `40137689745` is the
+current exact-head check. The allowed two-pass independent review is complete.
+Its final low-severity finding was confirmed and fixed: the two port-only
+conflict producers now preserve `host=None`, not an invented IPv4 endpoint, so
+a failed termination of an IPv6 holder cannot cause a misleading retry.
+Both new regressions went RED before their own minimal fix, then GREEN; all
+17 safety tests pass on actual Python 3.9 and 3.11. The prior Windows-only
+`os.killpg` mock setup errors are also fixed, without skipped assertions.
+The previous full Mac run passed **19/19, 307 passed, 3 skipped, no failures**;
+a fresh full suite is running on edfc1f0, log
+`~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`. The native Cocoa
+Start/Restart/Stop check passed, with rendered screenshots and HTTP/PID/listener
+checks. Read the CURRENT FINAL VALIDATION block in
+`~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` before any merge. Earlier
+review/CI checkpoints below are historical. **No merge/release/install has
+happened yet.**
 
 ### Earlier integration checkpoint (historical)
 
