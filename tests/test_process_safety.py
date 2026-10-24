@@ -431,6 +431,68 @@ def test_accepted_conflict_launch_ignores_a_disjoint_ipv6_listener() -> None:
         )
 
 
+def _assert_port_only_conflict_stays_blocked_after_failed_termination(use_window: bool) -> None:
+    """Drive actual port-only producers through the accepted-dialog callback."""
+    from hub import window as wm
+
+    with _ipv6_listener() as listener:
+        port = listener.getsockname()[1]
+        conflict = (
+            wm.HubWindow._conflict_for_port(cast(wm.HubWindow, object()), port, set())
+            if use_window else pm._find_foreign_port_holder("", set(), fallback_port=port)
+        )
+        assert conflict is not None, "port-only producer missed the IPv6 listener"
+        scheduled, launched, logs = [], [], []
+        selected = object()
+
+        class AcceptedDialog:
+            Warning = AcceptRole = RejectRole = 0
+
+            def __init__(self, *_args):
+                pass
+
+            def __getattr__(self, _name):
+                return lambda *_args: None
+
+            def addButton(self, label, *_args):
+                return selected if label == "End that process" else object()
+
+            def clickedButton(self):
+                return selected
+
+        owner = SimpleNamespace(
+            _can_show_dialog=lambda: True,
+            _append_log=lambda *args: logs.append(args),
+            _launch=lambda *_args: launched.append(True),
+        )
+        with mock.patch.object(wm, "QMessageBox", AcceptedDialog), \
+             mock.patch.object(wm, "QTimer", SimpleNamespace(
+                 singleShot=lambda _ms, callback: scheduled.append(callback))), \
+             mock.patch.object(urldetect, "kill_process", return_value=False) as kill:
+            wm.HubWindow._offer_to_free_port(
+                cast(wm.HubWindow, owner), {"id": "fixture", "name": "Port-only fixture"},
+                cast(pm.ProjectProcess, object()), conflict,
+            )
+            assert kill.called and len(scheduled) == 1, (kill.call_args_list, scheduled)
+            scheduled[0]()
+
+        assert urldetect.port_in_use(port, "::1"), "surviving listener was lost"
+        assert launched == [], (
+            "port-only conflict retried after failed termination of its IPv6 holder: "
+            f"producer={'window' if use_window else 'process'}, conflict={conflict}, logs={logs}"
+        )
+        assert any("still in use" in entry[0] for entry in logs), logs
+        assert conflict.get("host") is None, "a port-only producer invented an IPv4 endpoint"
+
+
+def test_port_only_window_conflict_retains_generic_delayed_recheck() -> None:
+    _assert_port_only_conflict_stays_blocked_after_failed_termination(use_window=True)
+
+
+def test_port_only_process_conflict_retains_generic_delayed_recheck() -> None:
+    _assert_port_only_conflict_stays_blocked_after_failed_termination(use_window=False)
+
+
 if __name__ == "__main__":
     only = next((arg.split("=", 1)[1] for arg in sys.argv[1:]
                  if arg.startswith("--test=")), None)
