@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import subprocess
 import sys
@@ -72,23 +73,36 @@ def diagnostic() -> int:
     subprocess.run(["git", "worktree", "add", "--detach", str(base), base_sha],
                    cwd=ROOT, check=True, timeout=60)
     modes = [
-        ("offscreen", {"QT_QPA_PLATFORM": "offscreen"}),
-        ("offscreen-logged", {"QT_QPA_PLATFORM": "offscreen",
-                              "QT_FORCE_STDERR_LOGGING": "1"}),
+        ("offscreen", {"QT_QPA_PLATFORM": "offscreen", "QT_FORCE_STDERR_LOGGING": "1"}),
+        ("offscreen-no-sandbox", {"QT_QPA_PLATFORM": "offscreen",
+                                  "QT_FORCE_STDERR_LOGGING": "1",
+                                  "QTWEBENGINE_CHROMIUM_FLAGS": "--no-sandbox"}),
+        ("offscreen-no-gpu", {"QT_QPA_PLATFORM": "offscreen",
+                              "QT_FORCE_STDERR_LOGGING": "1",
+                              "QTWEBENGINE_CHROMIUM_FLAGS": "--disable-gpu"}),
         ("native-windows", {"QT_QPA_PLATFORM": "windows",
                              "QT_FORCE_STDERR_LOGGING": "1"}),
+        ("native-no-sandbox", {"QT_QPA_PLATFORM": "windows",
+                               "QT_FORCE_STDERR_LOGGING": "1",
+                               "QTWEBENGINE_CHROMIUM_FLAGS": "--no-sandbox"}),
+        ("native-no-gpu", {"QT_QPA_PLATFORM": "windows",
+                           "QT_FORCE_STDERR_LOGGING": "1",
+                           "QTWEBENGINE_CHROMIUM_FLAGS": "--disable-gpu"}),
         ("offscreen-confirm", {"QT_QPA_PLATFORM": "offscreen",
                                "QT_FORCE_STDERR_LOGGING": "1"}),
     ]
     report = {"diagnostic_only": True, "base_sha": base_sha,
               "pr_head_sha": os.environ["PR_HEAD_SHA"],
+              "runner_label": os.environ["PROBE_IMAGE"],
+              "windows_version": platform.platform(), "python": sys.version,
               "checkout_sha": subprocess.check_output(
                   ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "results": []}
     destination = ROOT / "renderer-probe.json"
     for name, changes in modes:
         env = dict(os.environ)
-        for key in ("QT_QPA_PLATFORM", "QT_FORCE_STDERR_LOGGING", "QTWEBENGINE_CHROMIUM_FLAGS"):
+        for key in ("QT_QPA_PLATFORM", "QT_FORCE_STDERR_LOGGING",
+                    "QTWEBENGINE_CHROMIUM_FLAGS", "QTWEBENGINE_DISABLE_SANDBOX"):
             env.pop(key, None)
         env.update(changes)
         for subject, path, args in [
