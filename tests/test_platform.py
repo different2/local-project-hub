@@ -151,12 +151,15 @@ def test_hub_is_not_python_only():
     """Nothing in the record rules out a non-Python project (Node/Go/Rust/script)."""
     from hub import store as sm
 
+    # /tmp is not a directory on a fresh Windows runner. This test validates
+    # records without launching them; the suite's own folder exists everywhere.
+    working_dir = str(Path(__file__).resolve().parent)
     rec = sm.validate(
         {
             "name": "Node app",
             "command": "npm run dev",  # no python anywhere
             "url": "http://127.0.0.1:5173/",
-            "working_dir": "/tmp",
+            "working_dir": working_dir,
         }
     )
     assert rec["command"] == "npm run dev"
@@ -168,7 +171,7 @@ def test_hub_is_not_python_only():
             "name": "Go app",
             "command": "run .",
             "interpreter": "/opt/homebrew/bin/go",
-            "working_dir": "/tmp",
+            "working_dir": working_dir,
         }
     )
     assert rec2["interpreter"] == "/opt/homebrew/bin/go"

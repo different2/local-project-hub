@@ -226,7 +226,7 @@ def test_restart_waits_for_the_port_to_free_before_starting() -> None:
     probes = []
     started = []
 
-    def busy_twice_then_free(p):
+    def busy_twice_then_free(p, host=None):
         probes.append(p)
         return len(probes) <= 2
 
@@ -257,7 +257,7 @@ def test_restart_gives_up_when_the_port_never_frees() -> None:
     proc.state_changed.connect(states.append)
     real_probe = pm.urldetect.port_in_use
     real_start = proc.start
-    pm.urldetect.port_in_use = lambda p: True  # never free
+    pm.urldetect.port_in_use = lambda p, host=None: True  # never free
     proc.start = lambda: started.append(True)
     try:
         proc._restart_after_port_free(attempts=0, generation=proc._generation)

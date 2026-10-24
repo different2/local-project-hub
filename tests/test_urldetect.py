@@ -1972,16 +1972,37 @@ def test_port_in_use_reports_busy_when_the_table_cannot_be_read(tmp: Path) -> No
 
 def test_kill_process_actually_ends_its_target(tmp: Path) -> None:
     import os
+    import threading
 
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    reap_errors = []
+
+    def reap() -> None:
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired as exc:
+            reap_errors.append(exc)
+
+    # This test owns the Popen child and therefore must reap it while
+    # kill_process polls. On POSIX, delaying wait() until after kill_process
+    # returns leaves an exited zombie: kill(pid, 0) correctly still sees its
+    # PID, so the old fixture could never observe successful termination.
+    reaper = threading.Thread(target=reap, daemon=True)
+    reaper.start()
     try:
-        assert urldetect.kill_process(child.pid, timeout_s=3) is True
-        child.wait(timeout=10)
-        assert child.returncode is not None
+        killed = urldetect.kill_process(child.pid, timeout_s=3)
+        reaper.join(timeout=10)
+        assert killed is True, f"kill_process returned {killed}; exit={child.returncode}"
+        assert not reaper.is_alive(), "child was not reaped within the deadline"
+        assert not reap_errors, reap_errors
+        assert child.returncode is not None, "child did not actually terminate"
+        assert not urldetect.process_alive(child.pid), "terminated child still exists"
     finally:
         if child.poll() is None:
             child.kill()
-            child.wait()
+        reaper.join(timeout=16)
+        child.wait(timeout=10)
+        assert not reaper.is_alive(), "reaper thread survived fixture cleanup"
     # Never reports success for our own PID, which it must not signal.
     assert urldetect.kill_process(os.getpid()) is False
 
