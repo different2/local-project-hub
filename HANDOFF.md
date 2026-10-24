@@ -34,17 +34,20 @@ its PR-only, read-only workflow were added. They must be removed before merge.
   process-safety suite passed, 16 passed/1 skip. The Windows mock setup bugs
   and reviewed process/endpoint corrections are not the remaining failures.
   Full artifacts are in `lph-pr2-final/windows-edfc1f0-attempt{1,2}/`.
-- No further blind full reruns. Narrow diagnostic run **40142997866** is
-  underway: bare Qt vs the exact failing Hub test vs unchanged main, with
-  offscreen/native Windows settings and reversion controls. Its observer was
-  calibrated locally positive → deliberate wrong-title failure → positive.
-  It persists real results in the `TEMP-windows-renderer-probe` artifact.
-  **Diagnostic completion is not a passing product check.** Ordinary CI
-  `40142997779` on the TEMP head is deliberately unapproved.
-- Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` for the
-  next action. Diagnose from the probe, make only a supported correction,
-  archive/remove `.github/workflows/windows-renderer-probe.yml` and
-  `tools/windows_renderer_probe.py`, then run final ordinary verification.
+- Narrow diagnostic **40142997866 completed**: all nine observed cases failed.
+  A bare Qt 6.7.3 browser renderer crashes with `0xc0000005` before loading,
+  even with the native Windows platform; unchanged pre-PR main fails the same
+  Hub page test. Runtime/tests/ordinary CI on current main are identical to
+  that baseline. Thus this blocker exists below the contribution; its exact
+  GPU/sandbox/OS cause remains **unknown**, and a QPA-only fix is disproved.
+  Real results: `lph-pr2-final/renderer-probe-result/renderer-probe.json`.
+  **Diagnostic completion is not a passing product check.**
+- **User decision pending:** finish Windows CI investigation, merge with the
+  existing CI failure explicitly accepted/documented, or clean up and leave
+  the PR open. No auto-merge of red checks or framework-version changes.
+  Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md`.
+  In every completion path archive/remove both TEMP files first. Ordinary CI
+  `40142997779` on the diagnostic head remains deliberately unapproved.
 - Two allowed independent-review passes completed; confirmed endpoint findings
   were minimally corrected with observed RED/GREEN regressions. No more
   review loop. Native Cocoa Start/Restart/Stop was also exercised during review
