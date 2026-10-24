@@ -21,6 +21,23 @@ recorded with file:line)._
 
 ## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
 
+**Afternoon resume update:** current unmerged PR head is
+`f73967be21c0b303a9f966b827e950d29d86fb28`; Windows CI `40137048230` is the
+current exact-head check. `1aba952` completed endpoint propagation through the
+GUI's delayed launch callback; `f73967b` changes only three Windows test mocks
+(`os.killpg` does not exist there), with no further application changes. The
+15 safety tests pass under real Python 3.9 and 3.11, including a simulated
+missing-killpg environment. Native Cocoa Start/Restart/Stop passed on the final
+application code. The final Mac suite is running in `lph-pr2-final`, log
+`macos-final-py311.log`; independent re-review retry `deleg_719e59fb` is pending
+(the earlier re-review failed provider quota and returned **no verdict**).
+Read the LATEST RESUME block in
+`~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` before any merge. Older CI
+runs and the earlier progress below are superseded; **no merge/release/install
+has happened yet**.
+
+### Earlier integration checkpoint (historical)
+
 - User authorized checking and merging the existing contribution, with explicit
   credit, and then approved appending narrowly scoped corrective commits to the
   same PR after review reproduced three blockers. **Not merged yet.**
