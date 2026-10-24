@@ -357,6 +357,78 @@ def test_unreadable_posix_listener_table_stays_conservatively_busy() -> None:
         assert urldetect.port_owners(53001, "127.0.0.1") == set()
 
 
+def test_accepted_conflict_launch_ignores_a_disjoint_ipv6_listener() -> None:
+    """The GUI's delayed launch must use the endpoint it offered to free.
+
+    The dialog and timer are seams only: two real sockets establish that IPv4
+    can be freed while a disjoint IPv6-only listener survives. No Qt window or
+    real process signal is needed to drive the actual dialog callback.
+    """
+    from hub import window as wm
+
+    with _ipv6_listener() as v6, socket.socket() as v4:
+        port = v6.getsockname()[1]
+        v4.bind(("127.0.0.1", port))
+        v4.listen(1)
+        ended, scheduled, launched, logs = [], [], [], []
+        selected = object()
+
+        class AcceptedDialog:
+            Warning = AcceptRole = RejectRole = 0
+
+            def __init__(self, *_args):
+                pass
+
+            def __getattr__(self, _name):
+                return lambda *_args: None
+
+            def addButton(self, label, *_args):
+                return selected if label == "End that process" else object()
+
+            def clickedButton(self):
+                return selected
+
+        def end_overlapping_holder(pid):
+            assert pid == 4100001, "attempted to end a disjoint listener"
+            ended.append(pid)
+            v4.close()
+            return True
+
+        def launch(rec, _proc):
+            with socket.socket() as replacement:
+                replacement.bind(("127.0.0.1", port))
+                replacement.listen(1)
+            launched.append(rec["id"])
+
+        owner = SimpleNamespace(
+            _can_show_dialog=lambda: True,
+            _append_log=lambda *args: logs.append(args),
+            _launch=launch,
+        )
+        rec = {"id": "fixture", "name": "IPv4 fixture"}
+        conflict = {
+            "port": port, "host": "127.0.0.1",
+            "holders": [{"pid": 4100001, "command": "overlapping IPv4 fixture"}],
+        }
+        with mock.patch.object(wm, "QMessageBox", AcceptedDialog), \
+             mock.patch.object(wm, "QTimer", SimpleNamespace(
+                 singleShot=lambda _ms, callback: scheduled.append(callback))), \
+             mock.patch.object(urldetect, "kill_process", side_effect=end_overlapping_holder):
+            wm.HubWindow._offer_to_free_port(
+                cast(wm.HubWindow, owner), rec,
+                cast(pm.ProjectProcess, object()), conflict,
+            )
+            assert ended == [4100001], ended
+            assert len(scheduled) == 1, scheduled
+            scheduled[0]()
+
+        assert urldetect.port_in_use(port, "::1"), "disjoint listener was lost"
+        assert launched == [rec["id"]], (
+            "accepted IPv4 conflict did not launch after freeing IPv4: "
+            f"launched={launched}, logs={logs}"
+        )
+
+
 if __name__ == "__main__":
     only = next((arg.split("=", 1)[1] for arg in sys.argv[1:]
                  if arg.startswith("--test=")), None)

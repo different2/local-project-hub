@@ -2047,8 +2047,9 @@ class HubWindow(QMainWindow):
         )
 
         def _start_after_free():
-            # Give the OS a moment to release the socket.
-            if not urldetect.port_in_use(conflict["port"]):
+            # Recheck the endpoint whose overlapping holder was ended, not a
+            # disjoint IPv4/IPv6 listener that the conflict deliberately spared.
+            if not urldetect.port_in_use(conflict["port"], conflict.get("host")):
                 self._launch(rec, proc)
             else:
                 self._append_log(
