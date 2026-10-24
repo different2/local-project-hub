@@ -21,31 +21,38 @@ recorded with file:line)._
 
 ## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
 
-**Latest validation checkpoint:** current unmerged PR head is
-`edfc1f017e64e1a9bcabccae7a5b4cf3d0c96660`; Windows CI `40137689745` is the
-current exact-head check. The allowed two-pass independent review is complete.
-Its final low-severity finding was confirmed and fixed: the two port-only
-conflict producers now preserve `host=None`, not an invented IPv4 endpoint, so
-a failed termination of an IPv6 holder cannot cause a misleading retry.
-Both new regressions went RED before their own minimal fix, then GREEN; all
-17 safety tests pass on actual Python 3.9 and 3.11. The prior Windows-only
-`os.killpg` mock setup errors are also fixed, without skipped assertions.
-The final full Mac run on edfc1f0 passed **19/19, 309 passed, 3 skipped, no
-failures/blocked suites/not-run tests**; all suite rows were independently
-counted against the summary. Log:
-`~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`.
-Windows attempt 1 finished red: **17/19 suites, 299 passed, 6 skipped,
-7 failed**, all seven in the previously observed window/popup page-loading
-pattern. The process-safety suite passed (16 passed, 1 platform skip), so the
-missing-`killpg` setup defects are cleared on Windows too. One failed-job rerun
-is queued on the **unchanged edfc1f0**, run `40137689745`, attempt 2. Do not
-merge while it is red; if the same browser failures persist, stop blind retries
-and diagnose the Windows renderer/test seam. The native Cocoa
-Start/Restart/Stop check passed, with rendered screenshots and HTTP/PID/listener
-checks. Read the CURRENT FINAL VALIDATION block in
-`~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` before any merge. Earlier
-review/CI checkpoints below are historical. **No merge/release/install has
-happened yet.**
+**Temporary diagnostic head — DO NOT MERGE:** PR #2 is now at
+`7c383fe4f9c1a837cb1008248b9d90921905ddf9`. Application code and the ordinary
+CI runner remain identical to `edfc1f0`; only a temporary renderer probe and
+its PR-only, read-only workflow were added. They must be removed before merge.
+
+- Final application-code Mac run passed **19/19 suites, 309 passed, 3 skipped,
+  zero failures/blocked/not-run**, exit 0, log
+  `~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`.
+- **Both Windows attempts failed identically:** 17/19 suites, 299 passed,
+  6 skipped, 7 failed (four window and three popup page-load cases). The
+  process-safety suite passed, 16 passed/1 skip. The Windows mock setup bugs
+  and reviewed process/endpoint corrections are not the remaining failures.
+  Full artifacts are in `lph-pr2-final/windows-edfc1f0-attempt{1,2}/`.
+- No further blind full reruns. Narrow diagnostic run **40142997866** is
+  underway: bare Qt vs the exact failing Hub test vs unchanged main, with
+  offscreen/native Windows settings and reversion controls. Its observer was
+  calibrated locally positive → deliberate wrong-title failure → positive.
+  It persists real results in the `TEMP-windows-renderer-probe` artifact.
+  **Diagnostic completion is not a passing product check.** Ordinary CI
+  `40142997779` on the TEMP head is deliberately unapproved.
+- Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` for the
+  next action. Diagnose from the probe, make only a supported correction,
+  archive/remove `.github/workflows/windows-renderer-probe.yml` and
+  `tools/windows_renderer_probe.py`, then run final ordinary verification.
+- Two allowed independent-review passes completed; confirmed endpoint findings
+  were minimally corrected with observed RED/GREEN regressions. No more
+  review loop. Native Cocoa Start/Restart/Stop was also exercised during review
+  with inspected screenshots plus HTTP/PID/listener checks.
+- Original `174e90c`, Tahir Masood's authorship and existing co-author trailer
+  remain intact. README acknowledgement is in the PR, and explicit credit and
+  honest progress were [posted/read back](https://github.com/different2/local-project-hub/pull/2#issuecomment-6390548019).
+  **PR still open/unmerged. No release/install has happened.**
 
 ### Earlier integration checkpoint (historical)
 
