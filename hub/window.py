@@ -1466,7 +1466,8 @@ class HubWindow(QMainWindow):
             return None
         return {
             "port": port,
-            "host": "127.0.0.1",
+            # The port came from output, not a verified endpoint address.
+            "host": None,
             "holders": [
                 {"pid": p, "command": urldetect.process_command(p)} for p in sorted(foreign)
             ],

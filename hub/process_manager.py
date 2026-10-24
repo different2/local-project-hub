@@ -203,7 +203,9 @@ def _find_foreign_port_holder(
     details = []
     for pid in sorted(foreign):
         details.append({"pid": pid, "command": urldetect.process_command(pid)})
-    return {"port": port, "host": host or "127.0.0.1", "holders": details}
+    # A port recovered without a URL does not establish an address family.
+    # Keep that uncertainty for consumers that recheck after termination.
+    return {"port": port, "host": host, "holders": details}
 
 
 def _detected_suppress_flag(rec: dict) -> str:
