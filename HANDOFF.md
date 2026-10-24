@@ -22,7 +22,7 @@ recorded with file:line)._
 ## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
 
 **Temporary diagnostic head — DO NOT MERGE:** PR #2 is now at
-`7c383fe4f9c1a837cb1008248b9d90921905ddf9`. Application code and the ordinary
+`19da3e6f239ae2a6793d6d9f5451a3cabd387696`. Application code and the ordinary
 CI runner remain identical to `edfc1f0`; only a temporary renderer probe and
 its PR-only, read-only workflow were added. They must be removed before merge.
 
@@ -34,7 +34,7 @@ its PR-only, read-only workflow were added. They must be removed before merge.
   process-safety suite passed, 16 passed/1 skip. The Windows mock setup bugs
   and reviewed process/endpoint corrections are not the remaining failures.
   Full artifacts are in `lph-pr2-final/windows-edfc1f0-attempt{1,2}/`.
-- Narrow diagnostic **40142997866 completed**: all nine observed cases failed.
+- First diagnostic **40142997866 completed**: all nine observed cases failed.
   A bare Qt 6.7.3 browser renderer crashes with `0xc0000005` before loading,
   even with the native Windows platform; unchanged pre-PR main fails the same
   Hub page test. Runtime/tests/ordinary CI on current main are identical to
@@ -42,12 +42,17 @@ its PR-only, read-only workflow were added. They must be removed before merge.
   GPU/sandbox/OS cause remains **unknown**, and a QPA-only fix is disproved.
   Real results: `lph-pr2-final/renderer-probe-result/renderer-probe.json`.
   **Diagnostic completion is not a passing product check.**
-- **User decision pending:** finish Windows CI investigation, merge with the
-  existing CI failure explicitly accepted/documented, or clean up and leave
-  the PR open. No auto-merge of red checks or framework-version changes.
+- **User chose to fix Windows CI BEFORE merging** (answered clarification).
+  Targeted phase-2 run **40144633615** is underway on `windows-latest` and
+  `windows-2022`, keeping Python/Qt pins identical. Each image observes 15
+  bounded children: baseline, sandbox/GPU controls, native/offscreen settings
+  and baseline reversion. Flags affect only TEMP test children; shipped app
+  security, dependencies and product source remain unchanged. First probe
+  took 155 seconds; the expanded per-job budget is explicitly bounded.
   Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md`.
-  In every completion path archive/remove both TEMP files first. Ordinary CI
-  `40142997779` on the diagnostic head remains deliberately unapproved.
+  Apply only a correction supported by real positive/negative controls,
+  archive/remove both TEMP files, then run ordinary final verification.
+  Ordinary CI `40144633608` on the TEMP head is deliberately unapproved.
 - Two allowed independent-review passes completed; confirmed endpoint findings
   were minimally corrected with observed RED/GREEN regressions. No more
   review loop. Native Cocoa Start/Restart/Stop was also exercised during review
