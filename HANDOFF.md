@@ -19,6 +19,41 @@ release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
 the forensic-audit triage (test-quality findings fixed, product bugs open and
 recorded with file:line)._
 
+## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
+
+- User authorized checking and merging the existing contribution, with explicit
+  credit, and then approved appending narrowly scoped corrective commits to the
+  same PR after review reproduced three blockers. **Not merged yet.**
+- PR head is `ada1c9946a0777b01dbb96d853e7f2bdd9ce8971`. The contributor's original
+  `174e90c` is retained unchanged, including Tahir Masood's authorship and the
+  CommandCodeBot co-author trailer. Maintainer followup `ada1c99` corrects
+  TIME_WAIT restart refusal, explicit IPv4/IPv6 endpoint conflict ownership,
+  coherent ancestry/identity capture, and two platform-specific test fixtures.
+  README now explicitly acknowledges [@tahirmasood2](https://github.com/tahirmasood2)
+  and links the contribution. Progress/thanks were posted on [PR #2](https://github.com/different2/local-project-hub/pull/2#issuecomment-6387132320).
+- Native Cocoa Start → rendered dashboard / HTTP 200 → Restart with a new PID
+  → rendered dashboard → Stop / tab closed / no listener: **passed**, exit 0;
+  screenshots inspected. The 14 safety and 17 platform tests passed on real
+  Python 3.9 and 3.11. Eight remove-fix controls went RED and restored GREEN.
+- **Still running:** full corrected macOS suite, 19 suites, log
+  `~/.hermes/cache/scratch/lph-pr2-fixes/macos-corrected-py311.log` (process
+  `proc_91f0f254b239`); corrected Windows PR run `40116836083` at the exact head
+  above (watcher `proc_bdb5473db03a`). Original-head Windows run `39731581450`
+  failed and is superseded, not evidence about the corrections.
+- Independent read-only review checkpoint `deleg_70627ccd` is also pending.
+  Detailed working checkpoint and artifacts:
+  `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md`. Review/fix worktrees live
+  beside it in `lph-pr2-review/tree` and `lph-pr2-fixes/tree`; `.hubenv` there
+  is an untracked test-environment symlink, never a file to stage.
+- **NEXT ACTION:** read the actual final Mac log and exact-head Windows result,
+  inspect the review checkpoint, then merge **the existing PR** with a merge
+  commit pinned to the tested head if those checks justify it. Preserve original
+  commit ancestry and read back remote merged state. If Windows shows only the
+  previously recorded page-never-loaded Chromium pattern, one failed-job rerun
+  precedes any diagnosis; do not excuse a persistent failure. Refresh this
+  section with the final result. **Do not release or install a new app** as part
+  of this request; installed/latest released version remains 0.7.0.
+
 ## Resume checkpoint (2026-10-24 — read this before the historical sections)
 
 - The prior session is `20261018_231911_c86025`. Its last user question was
