@@ -326,7 +326,7 @@ def _waiting_project() -> tuple[ProjectProcess, dict[str, bool]]:
     p.proc = _FakeProc(1001, running=False)
     p._generation = 1
     busy = {"value": True}
-    pm.urldetect.port_in_use = lambda port: busy["value"]
+    pm.urldetect.port_in_use = lambda port, host=None: busy["value"]
     return p, busy
 
 

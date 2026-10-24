@@ -177,16 +177,17 @@ def _find_foreign_port_holder(
     a listener was actually found, not on every start.
     """
     try:
+        host = None
         if url:
-            _, port = urldetect.url_host_port(url)
+            host, port = urldetect.url_host_port(url)
         else:
             port = fallback_port
     except Exception:
         return None
-    if not port or not urldetect.port_in_use(port):
+    if not port or not urldetect.port_in_use(port, host):
         return None
 
-    owners = urldetect.port_owners(port)
+    owners = urldetect.port_owners(port, host)
     if not owners:
         # Cannot tell who holds it. Refusing to start on an unidentifiable
         # holder would break legitimate restarts (the OS can lag releasing a
@@ -202,7 +203,7 @@ def _find_foreign_port_holder(
     details = []
     for pid in sorted(foreign):
         details.append({"pid": pid, "command": urldetect.process_command(pid)})
-    return {"port": port, "host": "127.0.0.1", "holders": details}
+    return {"port": port, "host": host or "127.0.0.1", "holders": details}
 
 
 def _detected_suppress_flag(rec: dict) -> str:
@@ -563,14 +564,31 @@ class ProjectProcess(QObject):
             return {}
         # No recorded identity means no evidence this PID is ours. Never
         # enumerate or signal it on the strength of a number alone.
-        if self._live_identity.get(pid) is None:
+        expected = self._live_identity.get(pid)
+        if expected is None:
             return {}
-        tree = urldetect.process_tree_pids({pid})
+        rows = urldetect.process_snapshot()
+        root = rows.get(pid)
+        if root is None or root[1] != expected:
+            return {}
+        if urldetect.process_identity(pid) != expected:
+            return {}
+        children: dict[int, list[int]] = {}
+        for member, (parent, _identity) in rows.items():
+            children.setdefault(parent, []).append(member)
         out: dict[int, str | None] = {}
-        for member in tree:
-            if member == os.getpid():
+        queue = [pid]
+        while queue:
+            member = queue.pop()
+            if member == os.getpid() or member in out:
                 continue
-            out[member] = urldetect.process_identity(member)
+            # Adopt only the identity paired with this member's ancestry row,
+            # never a fresh identity read from a possibly reused PID.
+            identity = rows[member][1]
+            if identity is None:
+                continue
+            out[member] = identity
+            queue.extend(children.get(member, ()))
         return out
 
     def _group_verified(self, pid: int, identity: str | None) -> bool:
@@ -1020,10 +1038,18 @@ class ProjectProcess(QObject):
         # than starting a second server on a port the old child may still hold.
         self._restart_waiting = generation
         port = self._expected_port()
-        # Use the same occupancy check as the rest of the hub: it covers IPv4,
-        # IPv6 and dual-stack listeners, so an IPv6-only replacement is not
-        # started into a port the old child still holds.
-        if port and urldetect.port_in_use(port):
+        host = None
+        url = self.rec.get("url")
+        if url:
+            try:
+                url_host, url_port = urldetect.url_host_port(url)
+                if url_port == port:
+                    host = url_host
+            except ValueError:
+                pass
+        # A known literal endpoint must not be blocked by a disjoint family.
+        # If only a port is known, still check both IPv4 and IPv6.
+        if port and urldetect.port_in_use(port, host):
             if attempts > 0:
                 QTimer.singleShot(
                     RESTART_PORT_RETRY_MS,

@@ -110,6 +110,12 @@ names, folders, commands, raw output, dashboard contents, or URLs — and can
 save it or open a pre-filled issue. Or open an
 [issue](https://github.com/different2/local-project-hub/issues/new) directly.
 
+## Acknowledgements
+
+Thanks to [Tahir Masood (@tahirmasood2)](https://github.com/tahirmasood2) for
+investigating bugs and contributing the audit-remediation fixes and regression
+tests in [PR #2](https://github.com/different2/local-project-hub/pull/2).
+
 ## License
 
 [MIT](LICENSE). Working on the Hub itself (running from source, tests,

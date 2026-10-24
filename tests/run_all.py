@@ -92,6 +92,7 @@ SUITES = [
     ("test_platform.py", False),
     ("test_launch_at_login.py", False),
     ("test_updater.py", False),
+    ("test_process_safety.py", False),
     ("test_process_e2e.py", True),
     ("test_window_e2e.py", True),
     ("test_popup_bridge.py", True),

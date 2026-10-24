@@ -306,6 +306,65 @@ def process_tree_pids(root_pids) -> set[int]:
     return found
 
 
+def process_snapshot() -> dict[int, tuple[int, str]]:
+    """POSIX PID -> (parent PID, identity), from the SAME process record.
+
+    A PID-only ancestry scan followed by per-PID identity queries can attach an
+    unrelated replacement's identity to an exited child. Keep the parent and
+    start token together here; callers must verify their known root identity
+    before following descendants, and identities again before signalling.
+    """
+    if IS_WINDOWS:
+        return {}  # Windows tree termination uses taskkill, not this fallback.
+    from pathlib import Path
+
+    rows: dict[int, tuple[int, str]] = {}
+    if IS_LINUX:
+        try:
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            boot = ""
+        try:
+            entries = list(Path("/proc").iterdir())
+        except OSError:
+            return {}
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text(encoding="utf-8")
+                fields = stat.rsplit(")", 1)[1].split()
+                rows[int(entry.name)] = (
+                    int(fields[1]), f"linux:{boot}:{fields[19]}"
+                )
+            except (OSError, IndexError, ValueError):
+                continue
+        return rows
+
+    import os
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,ppid=,lstart="],
+            capture_output=True, text=True, timeout=6,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode:
+        return {}
+    for line in result.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            start = fields[2].strip()
+            if start:
+                rows[int(fields[0])] = (int(fields[1]), f"ps:{start}")
+    return rows
+
+
 def _windows_process_identity(pid: int, kernel32=None, last_error=None) -> str | None:
     """A stable creation-time token for the process currently at `pid`."""
     import ctypes
@@ -632,9 +691,10 @@ def _bind_state(family: int, host: str, port: int) -> str:
     try:
         sock.settimeout(0.3)
         try:
-            # Deliberately NOT SO_REUSEADDR: with it, bind() can succeed even
-            # when another socket holds the port on macOS, so a busy port
-            # would be reported free.
+            # No SO_REUSEADDR: on macOS a reusable specific-address socket can
+            # even listen beside an active wildcard listener. A failed bind is
+            # only a candidate conflict; port_in_use checks the LISTEN table
+            # to distinguish a real listener from closed TIME_WAIT sockets.
             sock.bind((host, port))
         except OSError as e:
             if _is_addr_in_use(e):
@@ -649,7 +709,36 @@ def _bind_state(family: int, host: str, port: int) -> str:
         sock.close()
 
 
-def port_in_use(port: int) -> bool:
+def _numeric_address(host: str | None):
+    """A literal endpoint address, or None when only a port is known."""
+    import ipaddress
+
+    try:
+        return ipaddress.ip_address(host or "")
+    except ValueError:
+        # Do not guess which family an unresolved hostname will bind. Retain
+        # the existing either-loopback fallback for localhost/unknown hosts.
+        return None
+
+
+def _endpoint_overlaps(local: str, host: str | None) -> bool:
+    """Whether a listener-table address can cover a known literal endpoint."""
+    expected = _numeric_address(host)
+    actual = _numeric_address(local.rsplit(":", 1)[0].strip("[]"))
+    if expected is None or actual is None:
+        return True
+    # IPv4-mapped addresses refer to the same IPv4 endpoint.
+    expected = getattr(expected, "ipv4_mapped", None) or expected
+    actual = getattr(actual, "ipv4_mapped", None) or actual
+    if expected.version != actual.version:
+        # Tables do not expose IPV6_V6ONLY. An IPv6 wildcard may be dual-stack;
+        # do not discard it as if it were an explicitly IPv6-only address.
+        return ((actual.version == 6 and actual.is_unspecified)
+                or (expected.version == 6 and expected.is_unspecified))
+    return expected == actual or expected.is_unspecified or actual.is_unspecified
+
+
+def port_in_use(port: int, host: str | None = None) -> bool:
     """True when something is listening on the port, IPv4 OR IPv6.
 
     Checking only 127.0.0.1 missed a listener bound solely to ::1 (a common
@@ -660,6 +749,9 @@ def port_in_use(port: int) -> bool:
 
     A dual-stack listener is still ONE service: this returns a boolean, so it
     cannot double-count the IPv4 and IPv6 views of the same socket.
+
+    A literal `host` narrows the check to that endpoint. Without one (including
+    unresolved hostnames), retain the conservative either-family check.
     """
     if not port:
         return False
@@ -674,17 +766,60 @@ def port_in_use(port: int) -> bool:
             # The table could not be read. Do not claim the port is free:
             # callers treat "busy" as "do not start yet" and retry/report.
             return True
-        return any(_netstat_local_port(local) == port for local, _owner in rows)
+        return any(_netstat_local_port(local) == port
+                   and _endpoint_overlaps(local, host) for local, _owner in rows)
     import socket
 
-    if _bind_state(socket.AF_INET, "127.0.0.1", port) == "in_use":
+    address = _numeric_address(host)
+    if address is not None:
+        family = socket.AF_INET if address.version == 4 else socket.AF_INET6
+        busy = _bind_state(family, str(address), port) == "in_use"
+    else:
+        busy = (_bind_state(socket.AF_INET, "127.0.0.1", port) == "in_use"
+                or _bind_state(socket.AF_INET6, "::1", port) == "in_use")
+    if not busy:
+        return False
+    # TIME_WAIT can reject a non-reusable bind long after the listener exited.
+    # Only an overlapping LISTEN row blocks restart. An unreadable table is
+    # uncertainty, not permission to start into a possibly occupied endpoint.
+    rows = _posix_listening_rows(port)
+    if rows is None:
         return True
-    if _bind_state(socket.AF_INET6, "::1", port) == "in_use":
-        return True
-    return False
+    return any(_endpoint_overlaps(local, host) for local, _owner in rows)
 
 
-def port_owners(port: int) -> set[int]:
+def _posix_listening_rows(port: int) -> list[tuple[str, int]] | None:
+    """Local endpoint + owner from the same lsof listener record."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-Fptn"],
+            capture_output=True, text=True, timeout=6,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # lsof exits 1 with empty output when no rows match. A failed invocation
+    # or diagnostic is not the same evidence as an empty listener table.
+    if result.returncode not in (0, 1) or (result.returncode and result.stderr):
+        return None
+    rows = []
+    pid, family = None, ""
+    for line in result.stdout.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:]) if line[1:].isdigit() else None
+            family = ""
+        elif line.startswith("t"):
+            family = line[1:]
+        elif line.startswith("n") and pid is not None:
+            local = line[1:]
+            if local.startswith("*:"):
+                local = ("[::]" if family == "IPv6" else "0.0.0.0") + local[1:]
+            rows.append((local, pid))
+    return rows
+
+
+def port_owners(port: int, host: str | None = None) -> set[int]:
     """PIDs listening on the port. Empty set when undeterminable.
 
     lsof is a Unix tool and is not present on Windows runners, where the port
@@ -698,8 +833,13 @@ def port_owners(port: int) -> set[int]:
     import subprocess
 
     if IS_WINDOWS:
-        return _port_owners_netstat(port)
+        return _port_owners_netstat(port, host)
 
+    if _numeric_address(host) is not None:
+        # A port-only PID list includes explicitly disjoint listeners, which
+        # must not become foreign-holder/kill candidates.
+        return {pid for local, pid in (_posix_listening_rows(port) or [])
+                if _endpoint_overlaps(local, host)}
     try:
         out = subprocess.run(
             ["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
@@ -709,6 +849,7 @@ def port_owners(port: int) -> set[int]:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return set()
+
     pids = set()
     for line in out.split():
         if line.strip().isdigit():
@@ -776,7 +917,7 @@ def _netstat_local_port(local: str) -> int | None:
     return int(tail) if tail.isdigit() else None
 
 
-def _port_owners_netstat(port: int) -> set[int]:
+def _port_owners_netstat(port: int, host: str | None = None) -> set[int]:
     """PIDs listening on the port, via `netstat -ano` (Windows).
 
     netstat prints one row per local endpoint, with the owning PID last:
@@ -790,7 +931,7 @@ def _port_owners_netstat(port: int) -> set[int]:
     return {
         pid
         for local, pid in (_netstat_listening_rows() or [])
-        if _netstat_local_port(local) == port
+        if _netstat_local_port(local) == port and _endpoint_overlaps(local, host)
     }
 
 
