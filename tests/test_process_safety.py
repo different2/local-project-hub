@@ -1,7 +1,9 @@
 """Non-GUI socket and process-ownership regressions.
 
 All real listeners use OS-assigned ports. PID-reuse scenarios must mock both
-os.kill and os.killpg; no fake PID may receive a real signal.
+os.kill and os.killpg; no fake PID may receive a real signal. The killpg mocks
+use create=True because these POSIX simulations also run on Windows, where
+os.killpg does not exist.
 """
 from __future__ import annotations
 
@@ -246,7 +248,7 @@ def test_tree_capture_does_not_adopt_a_reused_descendant_pid() -> None:
          mock.patch.object(urldetect, "process_identity", side_effect=lambda pid:
                            {root: original_root, child: replacement}.get(pid)), \
          mock.patch.object(pm.os, "kill") as kill, \
-         mock.patch.object(pm.os, "killpg") as killpg:
+         mock.patch.object(pm.os, "killpg", create=True) as killpg:
         captured = pm.ProjectProcess._snapshot_tree(owner, root)
         pm.ProjectProcess._signal_owned_tree(owner, captured, root, pm._SIGTERM)
         signalled = [call.args[0] for call in kill.call_args_list]
@@ -275,7 +277,7 @@ def test_tree_capture_rejects_an_unverified_root() -> None:
     ]
     with mock.patch.object(pm, "IS_WINDOWS", False), \
          mock.patch.object(pm.os, "kill") as kill, \
-         mock.patch.object(pm.os, "killpg") as killpg:
+         mock.patch.object(pm.os, "killpg", create=True) as killpg:
         for rows, current in cases:
             with mock.patch.object(urldetect, "process_snapshot", return_value=rows), \
                  mock.patch.object(urldetect, "process_identity", return_value=current):
@@ -299,7 +301,7 @@ def test_tree_capture_still_signals_verified_descendants() -> None:
          mock.patch.object(urldetect, "process_snapshot", return_value=rows), \
          mock.patch.object(urldetect, "process_identity", side_effect=identities.get), \
          mock.patch.object(pm.os, "kill") as kill, \
-         mock.patch.object(pm.os, "killpg") as killpg:
+         mock.patch.object(pm.os, "killpg", create=True) as killpg:
         captured = pm.ProjectProcess._snapshot_tree(owner, root)
         assert captured == identities, captured
         pm.ProjectProcess._signal_owned_tree(owner, captured, root, pm._SIGTERM)
