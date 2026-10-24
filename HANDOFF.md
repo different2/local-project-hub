@@ -33,8 +33,14 @@ Both new regressions went RED before their own minimal fix, then GREEN; all
 The final full Mac run on edfc1f0 passed **19/19, 309 passed, 3 skipped, no
 failures/blocked suites/not-run tests**; all suite rows were independently
 counted against the summary. Log:
-`~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`. Windows CI is
-still in progress and remains the merge gate. The native Cocoa
+`~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`.
+Windows attempt 1 finished red: **17/19 suites, 299 passed, 6 skipped,
+7 failed**, all seven in the previously observed window/popup page-loading
+pattern. The process-safety suite passed (16 passed, 1 platform skip), so the
+missing-`killpg` setup defects are cleared on Windows too. One failed-job rerun
+is queued on the **unchanged edfc1f0**, run `40137689745`, attempt 2. Do not
+merge while it is red; if the same browser failures persist, stop blind retries
+and diagnose the Windows renderer/test seam. The native Cocoa
 Start/Restart/Stop check passed, with rendered screenshots and HTTP/PID/listener
 checks. Read the CURRENT FINAL VALIDATION block in
 `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md` before any merge. Earlier
