@@ -1,6 +1,6 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-20, evening — **v0.7.0 IS LIVE: opening a project no
+_Last written: 2026-10-24, resume checkpoint — **v0.7.0 IS LIVE: opening a project no
 longer starts it.** A click in the sidebar now only opens the project's tab,
 on a page in the app's own colours with the project's name, its command and
 one **Start** button in the middle; the project runs when Start is pressed.
@@ -19,6 +19,36 @@ release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
 the forensic-audit triage (test-quality findings fixed, product bugs open and
 recorded with file:line)._
 
+## Resume checkpoint (2026-10-24 — read this before the historical sections)
+
+- The prior session is `20261018_231911_c86025`. Its last user question was
+  whether the test fixes would interfere with the product fixes being worked
+  on separately; it was answered. There is no dropped implementation request
+  at that session's end. Do not start competing audit fixes by default.
+- At this check, local `main` and `origin/main` were both `75e9fb6`, with a
+  clean worktree. The only change in this resume is this handoff refresh.
+- Latest main CI remains run `39552285135`, testing `fc41b0d`: the Windows
+  test job is successful after the previously documented rerun; installer and
+  publish jobs were skipped on that push. Latest release remains **v0.7.0**,
+  with both the DMG and MSI assets uploaded. The full local suite was **not
+  rerun** during this resume; the 220-test result below is historical.
+- **New since the prior session: [PR #2](https://github.com/different2/local-project-hub/pull/2)**,
+  "Fix forensic audit findings and process lifecycle defects", is **OPEN**,
+  based on `75e9fb6`, head `174e90c55b696f592d58ed83f5f5e8552a51242a`, branch
+  `fix/forensic-audit-remediation`. GitHub reports it mergeable, but
+  `gh pr checks 2` reports **no checks**. No merge or review was performed here.
+  Its description reports 18/18 suites, 290 passed / 5 skipped on Windows 11,
+  Python 3.13.14; those are the contributor's results, not verified locally.
+  macOS/Linux runtime, packaging and real login-item integration are explicitly
+  unverified there. It also changes all four files from our test-fix commit;
+  check that the guards' intent survives rather than blindly reapplying them.
+- **Installed app is now 0.7.0**, not 0.6.2: the live bundle's Info.plist
+  reports 0.7.0; update.log records the third self-install at 2026-10-20
+  12:24:04–12:24:08, and the old 0.6.2 bundle is present in the Trash.
+- Next decision for the user: review and test PR #2 on this Mac before any
+  merge/release, or work on a different request. Do not treat an open PR or its
+  self-reported test results as fixes already present in `main` or the app.
+
 ## Where things stand (verified 2026-10-20, evening)
 
 - **v0.7.0 IS LIVE — released and verified** (2026-10-20): opening a project
@@ -33,9 +63,9 @@ recorded with file:line)._
 - **A forensic audit arrived** (2026-10-20, read-only, audited v0.5.0): three
   test-quality findings are fixed in `fc41b0d`; the product bugs it reports
   are still open and belong to someone else. Triage table below.
-- The installed app on this Mac is **0.6.2** as of 2026-10-20 10:14; the
-  0.7.0 update is waiting in Check for Updates, and it is the third
-  self-install to watch (the first two are recorded below).
+- The installed app on this Mac is **0.7.0** (rechecked 2026-10-24); the third
+  self-install, 0.6.2 → 0.7.0, completed at 12:24 on 2026-10-20. The log and
+  preserved old bundle are recorded in the resume checkpoint above.
 - `main` carries `b25329e` (0.7.0). Earlier: `bc8295c` (the 0.6.2 fix). The 0.5.0 work
   is `0b9ed4d` (UI), `0d9a5f0` (runner) and `91348b6` (bump); the
   self-install work is `ec655a2` (tag `v0.6.0`); the detected-URL fix is
@@ -482,10 +512,11 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
    Trash` → `installed; reopening`, and the installed bundle is 0.6.1. The
    0.6.1 → 0.6.2 update did the same at 10:14 on 2026-10-20 (pid 9030, old
    copy `… (before 0.6.1) 2026-10-20 10-14-33-9030.app`), so the path has now
-   worked twice from a released build. **0.6.2 → 0.7.0 is the next one** and
-   the first that the user will take from a build he has not seen before.
-   What is
-   still unproven is the **failure** half — restore-and-reopen when the copy or
+   worked twice from a released build. **0.6.2 → 0.7.0 also completed** at
+   12:24 on 2026-10-20 (pid 96146, old copy
+   `Local Project Hub (before 0.6.2) 2026-10-20 12-24-04-96146.app` in the
+   Trash), as rechecked from the live bundle, log and old copy on 2026-10-24.
+   What is still unproven is the **failure** half — restore-and-reopen when the copy or
    the rename fails — because it has never happened outside a test. If a future
    update leaves the app closed, look for the old bundle in `~/.Trash` and read
    the log's last line; `did not exit` means the quit path, anything else means
