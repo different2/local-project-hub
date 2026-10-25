@@ -12,6 +12,7 @@ hub.log
 # packaging output
 build/
 dist/
+release-assets/
 *.egg-info/
 .venv/
 .buildenv/

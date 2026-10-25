@@ -13,7 +13,13 @@ name: CI
   pull_request:
     branches:
       - main
-  workflow_dispatch: null
+  workflow_dispatch:
+    inputs:
+      linux_only:
+        description: Build only Linux for packaging diagnosis (no publication)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +28,7 @@ jobs:
   test:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'workflow_dispatch' || !inputs.linux_only
     # The cap has to cover the real work, and that is dominated by one suite:
     # test_urldetect takes ~6 minutes because 9 of its tests create a real
     # QtWebEngine window and each is isolated into its own process (running the
@@ -45,11 +52,10 @@ jobs:
         # Pinned to 24.04: the ubuntu-latest label moves to Ubuntu 26, which
         # this project has not been tested against.
         #
-        # Windows needs a runner because the developer's machine is macOS,
-        # where the full suite is verified locally. Native Linux has not been
-        # rerun for PR #2. Add another platform deliberately when it needs
-        # validation: each entry costs runner capacity.
+        # macOS is verified locally. Linux packages target Ubuntu 24.04 amd64;
+        # these target platforms execute on their actual GitHub runners.
         os:
+          - ubuntu-24.04
           # Cover both Windows hosts with the validated Qt 6.12.0 stack and
           # normal sandboxing. macOS keeps 6.7.3 and its existing OS floor.
           - windows-2022
@@ -58,16 +64,14 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ runner.os == 'Linux' && '3.12' || '3.11' }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # QtWebEngineWidgets lives in the base PySide6 wheel, NOT in
-          # PySide6-Addons/Essentials. Naming only the Addons/Essentials
-          # packages installs a PySide6 that imports fine and then fails with
-          # "No module named PySide6.QtWebEngineWidgets", which makes every GUI
-          # suite exit non-zero with zero tests run.
+          # Addons contains QtWebEngineWidgets/the renderer helper; the PySide6
+          # metapackage resolves the matching pair. Pin the complete trio and
+          # assert the real WebEngine import below, not only import PySide6.
           #
           # PyYAML is needed by tests/test_workflow_yaml.py, which guards this
           # very file. Without it that guard dies with ModuleNotFoundError on
@@ -82,7 +86,7 @@ jobs:
           # the Linux and Windows runners from installing it) is the AppKit
           # piece of the About-box fix, pinned to what the shipped bundles
           # contain.
-          python -m pip install "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0" "PySide6==6.12.0" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
+          python -m pip install "PySide6-Essentials==6.7.3; sys_platform != 'win32'" "PySide6-Addons==6.7.3; sys_platform != 'win32'" "PySide6==6.7.3; sys_platform != 'win32'" "PySide6-Essentials==6.12.0; sys_platform == 'win32'" "PySide6-Addons==6.12.0; sys_platform == 'win32'" "PySide6==6.12.0; sys_platform == 'win32'" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
           python -m pip install pytest PyYAML
 
       # Must come BEFORE the import check below: the check needs libEGL and
@@ -92,25 +96,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          # Install each package individually and tolerate a name that does not
-          # exist in this image: one wrong name must not abort the whole job and
-          # hide the real Qt error. The import guard below is the actual check.
-          for p in \
-            libegl1 libgl1 libglib2.0-0 libdbus-1-3 \
-            libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 libxcb-cursor0 libxcb-glx0 \
-            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-render-util0 \
-            libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xkb1 libxext6 \
-            libxfixes3 libxi6 libxrender1 libfontconfig1 libfreetype6 libgbm1 libasound2 libnss3 \
-            libnspr4 libexpat1 ; do
-            sudo apt-get install -y --no-install-recommends "$p" \
-              || echo "::warning::$p unavailable in this image (continuing)"
-          done
-          sudo apt-get install -y --no-install-recommends xvfb
+          # Exact Noble dependencies are shared with the .deb; missing packages
+          # fail rather than hiding an incomplete installer.
+          packages="$(python -c 'import tomllib; d=tomllib.load(open("pyproject.toml", "rb")); print(" ".join(d["tool"]["briefcase"]["app"]["hub"]["linux"]["system"]["ubuntu"]["noble"]["system_runtime_requires"]))')"
+          sudo apt-get install -y --no-install-recommends $packages xvfb xauth dbus-daemon libgl1-mesa-dri fonts-dejavu-core
 
       - name: Verify QtWebEngine is importable
         shell: bash
         run: |
-          # QtWebEngineWidgets ships in the base PySide6 wheel. Assert it imports
+          # QtWebEngineWidgets ships in the Addons wheel. Assert it imports
           # so a resolution problem names itself here instead of surfacing later
           # as a bare "Run the test suite" failure with no output to read.
           python -c "import PySide6, os; d=os.path.dirname(PySide6.__file__); print('PySide6', PySide6.__version__, 'at', d)"
@@ -141,7 +135,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # The two build jobs run on a version tag OR on a manual dispatch. Dispatch
+  # All three build jobs run on a version tag OR on a manual dispatch. Dispatch
   # exists because these jobs are otherwise unreachable until a release is cut,
   # so a broken packaging change could only be discovered by spending a tag on
   # it — which is exactly how the `--msi` and `--dmg` typos survived unnoticed.
@@ -150,7 +144,7 @@ jobs:
   build-macos:
     name: Build macOS installer
     runs-on: macos-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.linux_only)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -191,21 +185,17 @@ jobs:
         # on first launch, the same as the local .dmg.
         run: briefcase package macOS -p dmg --adhoc-sign
       - name: Collect the installer
-        shell: bash
-        run: |
-          mkdir -p dist
-          find build -name "*.dmg" -exec cp {} dist/ \;
-          ls -la dist/
+        run: python tools/release_artifacts.py collect macos
       - uses: actions/upload-artifact@v5
         with:
           name: LocalProjectHub-macOS
-          path: dist/*.dmg
+          path: release-assets/Local.Project.Hub.dmg
           if-no-files-found: error
 
   build-windows:
     name: Build Windows installer
     runs-on: windows-2025
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.linux_only)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -233,26 +223,62 @@ jobs:
         # what both the runner's Briefcase and the local .buildenv (0.4.5) accept.
         run: briefcase package windows -p msi
       - name: Collect the installer
-        shell: bash
-        run: |
-          mkdir -p dist
-          find build -name "*.msi" -exec cp {} dist/ \;
-          ls -la dist/
+        run: python tools/release_artifacts.py collect windows
       - uses: actions/upload-artifact@v5
         with:
           name: LocalProjectHub-Windows
-          path: dist/*.msi
+          path: release-assets/Local.Project.Hub.msi
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Ubuntu 24.04 amd64 installer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: /usr/bin/python3 tools/check_tag_version.py "${{ github.ref_name }}"
+      - name: Install native build and runtime dependencies
+        run: |
+          sudo apt-get update
+          packages="$(/usr/bin/python3 -c 'import tomllib; d=tomllib.load(open("pyproject.toml", "rb")); print(" ".join(d["tool"]["briefcase"]["app"]["hub"]["linux"]["system"]["ubuntu"]["noble"]["system_runtime_requires"]))')"
+          sudo apt-get install -y --no-install-recommends build-essential dpkg-dev pkg-config git python3-dev python3-venv $packages xvfb xauth dbus-daemon libgl1-mesa-dri fonts-dejavu-core openbox wmctrl
+      - name: Install pinned toolchain under the system Python
+        # Native-system Briefcase must exactly match /usr/bin/python3, not an
+        # actions/setup-python interpreter. Noble uses Python 3.12.
+        run: |
+          /usr/bin/python3 -m venv "$RUNNER_TEMP/linux-buildenv"
+          echo "$RUNNER_TEMP/linux-buildenv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/linux-buildenv/bin/python" -m pip install "briefcase==0.4.6" "PySide6==6.7.3" "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "Pillow==11.3.0" "websocket-client==1.8.0"
+      - name: Build and package the native .deb
+        run: |
+          briefcase build linux system --no-input
+          briefcase package linux system -p deb --adhoc-sign --no-input
+          python tools/release_artifacts.py collect linux
+      - name: Inspect and install the actual package
+        run: |
+          dpkg-deb --info release-assets/*.deb
+          dpkg-deb --contents release-assets/*.deb
+          sudo apt-get install -y "$PWD/release-assets/Local.Project.Hub.Ubuntu-24.04-amd64.deb"
+          ldd /usr/bin/hub
+          test -x /usr/lib/hub/app_packages/PySide6/Qt/libexec/QtWebEngineProcess
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LocalProjectHub-Linux
+          path: release-assets/Local.Project.Hub.Ubuntu-24.04-amd64.deb
           if-no-files-found: error
 
   publish:
     name: Publish to the GitHub release
     runs-on: ubuntu-24.04
     needs:
-      # Both platforms, deliberately. `needs` is a hard gate: if either build
-      # fails, nothing is published and the run is red, rather than quietly
-      # shipping a release one platform cannot update from.
+      # Tests AND every supported platform deliberately gate publication.
+      - test
       - build-macos
       - build-windows
+      - build-linux
     # TAGS ONLY — never add `|| github.event_name == 'workflow_dispatch'` here.
     # The build jobs above accept a manual dispatch so packaging can be tested
     # without cutting a release; this job is what actually creates the release
@@ -268,9 +294,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
+          pattern: LocalProjectHub-*
           merge-multiple: true
       - name: Create the release if it does not exist
         # `gh release upload` only attaches to a release that already exists —
@@ -284,7 +312,7 @@ jobs:
           tag="${GITHUB_REF#refs/tags/}"
           gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || \
             gh release create "$tag" --repo "${GITHUB_REPOSITORY}" \
-              --title "$tag" --generate-notes
+              --title "$tag" --generate-notes --draft --prerelease=false --latest=false
       - name: Upload installers to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -292,7 +320,7 @@ jobs:
           ls -la artifacts/
           gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* \
             --clobber --repo "${GITHUB_REPOSITORY}"
-      - name: Verify every published asset has a SHA-256 digest
+      - name: Verify the complete draft before making it public
         # The in-app updater is fail-closed: it refuses to install an asset
         # whose release metadata carries no usable `sha256:` digest. GitHub
         # computes that digest when an asset is uploaded through the API, and
@@ -303,12 +331,8 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          missing="$(
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" \
-              --jq '[.assets[] | select(((.digest // "") | startswith("sha256:")) | not) | .name] | join(", ")'
-          )"
-          if [ -n "$missing" ]; then
-            echo "::error::release $tag has assets without a SHA-256 digest: $missing"
-            exit 1
-          fi
-          echo "All release assets carry a sha256 digest."
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" > release.json
+          python3 tools/release_artifacts.py verify --metadata release.json --version "${tag#v}" --repo "$GITHUB_REPOSITORY" --allow-draft
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" > published.json
+          python3 tools/release_artifacts.py verify --metadata published.json --version "${tag#v}" --repo "$GITHUB_REPOSITORY"

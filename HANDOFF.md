@@ -19,7 +19,34 @@ release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
 PR #3's two source fixes are merged; the installed release is unchanged. Read the
 current task and integration status below; the older audit triage is historical._
 
-## PR #3 merged — both requested source fixes complete
+## Current task — first Linux release and always-latest downloads (in progress)
+
+User explicitly authorized Linux distribution and a new release on 2026-10-25;
+this supersedes the previous task's Linux exclusion/no-release restriction.
+No replacement of the installed Mac app was requested. The planned coherent
+next version is 0.7.1, including the already-merged source fixes on all platforms.
+
+Worktree `~/.hermes/cache/scratch/lph-linux-release/tree`, branch
+`feat/linux-release`; scratch `STATUS.md` carries detailed run/head/evidence state.
+The first Linux binary is narrowly scoped to Ubuntu 24.04 amd64, native-system
+Briefcase 0.4.6, system Python 3.12 and Qt 6.7.3. AppImage is discouraged by the
+pinned builder for binary-wheel GUI stacks; no all-distro support is claimed.
+macOS remains Qt 6.7.3/minimum12.0 and Windows Qt 6.12.0; no sandbox bypass.
+
+Initial configuration guards reproduced both missing features RED; the new
+latest-link/Linux coverage guards now pass. Stable installer names and a
+complete-asset/digest draft-before-publication gate have pure positive/negative
+tests. Preliminary Linux build/install CI is next; actual packaged-app smoke,
+full Linux regression and release/anonymous live-link acceptance remain pending.
+Do NOT equate a packaging-only manual green with runtime or release acceptance.
+
+An external installed-app smoke harness is delegated in isolated `smoke/` on
+`feat/linux-installed-smoke`; no product hooks or Mac GUI execution are allowed.
+README latest links are staged on this branch, not yet main: retain the old
+working front page until the new assets are actually published. No tag/release
+has been created. Linux updates are initially APT/manual, not one-click in-app.
+
+## Historical: PR #3 merged — both requested source fixes complete
 
 This section supersedes the older deferred/known-issue statuses below.
 Linux was explicitly excluded. No release, version tag, package installation,

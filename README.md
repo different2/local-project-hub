@@ -2,8 +2,8 @@
 
 A desktop app that keeps your local projects in one window: register a folder,
 press start, and its web dashboard opens in a tab. Works with anything
-launchable — **Python, Node, Go, Rust, or a shell script** — and runs on macOS
-and Windows.
+launchable — **Python, Node, Go, Rust, or a shell script** — and runs on macOS,
+Windows, and Linux (Ubuntu 24.04 x86-64).
 
 [![CI](https://github.com/different2/local-project-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/different2/local-project-hub/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -35,12 +35,14 @@ projects' source, virtual environments, or dependencies.
 
 ## Download
 
-Latest version: **v0.7.0**
+[Latest release and release notes](https://github.com/different2/local-project-hub/releases/latest).
+These download links always follow the latest published release.
 
 | Platform | File | Install |
 |---|---|---|
-| macOS 12+ | [`Local.Project.Hub-0.7.0.dmg`](https://github.com/different2/local-project-hub/releases/download/v0.7.0/Local.Project.Hub-0.7.0.dmg) | Open the disk image, drag the app to Applications |
-| Windows | [`Local.Project.Hub-0.7.0.msi`](https://github.com/different2/local-project-hub/releases/download/v0.7.0/Local.Project.Hub-0.7.0.msi) | Double-click the installer |
+| macOS 12+ (Apple silicon) | [Download `.dmg`](https://github.com/different2/local-project-hub/releases/latest/download/Local.Project.Hub.dmg) | Open the disk image, drag the app to Applications |
+| Windows x86-64 | [Download `.msi`](https://github.com/different2/local-project-hub/releases/latest/download/Local.Project.Hub.msi) | Double-click the installer |
+| Linux: Ubuntu 24.04 LTS x86-64 | [Download `.deb`](https://github.com/different2/local-project-hub/releases/latest/download/Local.Project.Hub.Ubuntu-24.04-amd64.deb) | In the download folder: `sudo apt install ./Local.Project.Hub.Ubuntu-24.04-amd64.deb` |
 
 Older versions: [Releases](https://github.com/different2/local-project-hub/releases).
 
@@ -55,10 +57,14 @@ Older versions: [Releases](https://github.com/different2/local-project-hub/relea
 
 ## Requirements
 
-- The Hub itself needs **nothing installed** — no Python, no runtimes.
+- macOS/Windows installers bundle the runtime. On Ubuntu, APT installs the
+  required system Python and libraries automatically; no manual Python setup.
 - Your projects need their own tooling, as usual: the Hub runs the command
   you give it and does not install or manage dependencies.
 - The macOS build needs macOS 12 or newer.
+- The Linux package targets **Ubuntu 24.04 on x86-64**, not every Linux
+  distribution or CPU. A graphical desktop and working Qt WebEngine sandbox
+  support are required. Do not run the Hub as root or disable its sandbox.
 
 ## Using it
 
@@ -92,6 +98,10 @@ then offers **Restart and Install**: it closes, puts the new version in place
 and reopens by itself — the copy it replaces goes to the Trash, and if anything
 goes wrong the old copy is put back before you see it. On Windows, the
 installer runs. Your projects and settings are untouched.
+
+**Linux:** download the latest `.deb` above and run the same `sudo apt install`
+command again. Linux updates currently use APT/manual installation, not the
+macOS/Windows in-app installer flow.
 
 ## Where your data lives
 
