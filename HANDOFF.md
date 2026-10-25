@@ -21,15 +21,16 @@ recorded with file:line)._
 
 ## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
 
-**Temporary diagnostic head — DO NOT MERGE:** PR #2 is now at
-`19da3e6f239ae2a6793d6d9f5451a3cabd387696`. Application code and the ordinary
-CI runner remain identical to `edfc1f0`; only a temporary renderer probe and
-its PR-only, read-only workflow were added. They must be removed before merge.
+**Final candidate, full checks pending:** PR #2 is at
+`9d4e75ad5fc82470d3436ff25a45a75317f36825`. Application code is unchanged
+from `edfc1f0`; CI now pins the validated Windows 2022 test image with normal
+sandboxing. A regression guard and developer documentation accompany the pin.
+Both TEMP diagnostic files were archived and removed from the final Git tree.
 
-- Final application-code Mac run passed **19/19 suites, 309 passed, 3 skipped,
+- Prior application-code Mac run on edfc1f0 passed **19/19, 309 passed, 3 skipped,
   zero failures/blocked/not-run**, exit 0, log
   `~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`.
-- **Both Windows attempts failed identically:** 17/19 suites, 299 passed,
+- Before the image pin, **both Windows 2025 attempts failed identically:** 17/19 suites, 299 passed,
   6 skipped, 7 failed (four window and three popup page-load cases). The
   process-safety suite passed, 16 passed/1 skip. The Windows mock setup bugs
   and reviewed process/endpoint corrections are not the remaining failures.
@@ -42,21 +43,25 @@ its PR-only, read-only workflow were added. They must be removed before merge.
   GPU/sandbox/OS cause remains **unknown**, and a QPA-only fix is disproved.
   Real results: `lph-pr2-final/renderer-probe-result/renderer-probe.json`.
   **Diagnostic completion is not a passing product check.**
-- **User chose to fix Windows CI BEFORE merging** (answered clarification).
-  Targeted phase-2 run **40144633615** is underway on `windows-latest` and
-  `windows-2022`, keeping Python/Qt pins identical. Each image observes 15
-  bounded children: baseline, sandbox/GPU controls, native/offscreen settings
-  and baseline reversion. Flags affect only TEMP test children; shipped app
-  security, dependencies and product source remain unchanged. First probe
-  took 155 seconds; the expanded per-job budget is explicitly bounded.
+- **User chose to fix Windows CI BEFORE merging.** Controlled run
+  **40144633615** completed: Windows 2022 passed all 15 targeted cases with
+  default sandboxing; the newer Windows image passed only its four
+  sandbox-disabled cases. Qt 6.7.3/Python 3.11.9 were identical. The fix pins
+  the test OS, not a sandbox bypass or dependency upgrade. The new workflow
+  guard was observed RED, then GREEN and negative-controlled against the exact
+  old config; all 10 workflow guards pass under Python 3.9 and 3.11.
+  Real full Windows CI **40145634640** is now running on the verified job
+  **Tests (windows-2022)** at exact9d4e75a. A fresh full Mac run is also underway,
+  log `lph-pr2-final/macos-9d4e75a-py311.log`; do not confuse older results with it.
   Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md`.
-  Apply only a correction supported by real positive/negative controls,
-  archive/remove both TEMP files, then run ordinary final verification.
-  Ordinary CI `40144633608` on the TEMP head is deliberately unapproved.
+  Read/count both actual full results, then formal review and a tested-head
+  merge preserving the contributor's original commit. No known-red merge.
 - Two allowed independent-review passes completed; confirmed endpoint findings
   were minimally corrected with observed RED/GREEN regressions. No more
-  review loop. Native Cocoa Start/Restart/Stop was also exercised during review
-  with inspected screenshots plus HTTP/PID/listener checks.
+  review loop. Native Cocoa Start/Restart/Stop was rerun on exact9d4e75a:
+  passed/exit0, inspected rendered screenshots plus HTTP/PID/listener checks,
+  no fixture listener left. A misleading error log during a successful code15
+  Restart was observed; do not claim it fixed or assign causality yet.
 - Original `174e90c`, Tahir Masood's authorship and existing co-author trailer
   remain intact. README acknowledgement is in the PR, and explicit credit and
   honest progress were [posted/read back](https://github.com/different2/local-project-hub/pull/2#issuecomment-6390548019).
