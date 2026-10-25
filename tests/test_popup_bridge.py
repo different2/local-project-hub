@@ -185,6 +185,13 @@ def test_window_open_becomes_a_tab(tmp: Path) -> None:
             )
             assert new_view.isVisible(), "tab content is not visible"
             assert new_view.isWindow() is False, "popup became a separate window"
+            # The tab must pick up the page's <title>. This is the regression
+            # for PySide6 6.7.3, where runJavaScript(script, callable) is not a
+            # valid overload: the callback never ran and the label stayed "New
+            # tab" (the TypeError was swallowed inside a Qt slot).
+            assert _wait_for(
+                lambda: win.tabs.tabText(2) == "popup host", timeout_s=20
+            ), f"popup tab label was not updated: {win.tabs.tabText(2)!r}"
             print("tab label:", win.tabs.tabText(2), "| url:", new_view.url().toString())
         finally:
             win.close()

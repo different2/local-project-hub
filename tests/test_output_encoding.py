@@ -121,7 +121,9 @@ def test_runner_reports_failures_under_an_ascii_only_console() -> None:
         saved, written = sys.stdout, []
         sys.stdout = _AsciiStdout(written.append)
         try:
-            final = run_all.report_suite("test_broken_on_purpose.py", code, 1, 1, out)
+            final, _blocked = run_all.report_suite(
+                "test_broken_on_purpose.py", code, 1, 1, 0, out
+            )
         finally:
             sys.stdout = saved
 

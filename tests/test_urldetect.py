@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from helpers import (  # noqa: E402
+    SkipTest,
     reserve_port,
     start_holder,
     stop_and_release,
@@ -60,6 +61,16 @@ def _wait_for(pred, timeout_s=20.0):
             return True
         _spin(100)
     return pred()
+
+
+def _own_tree(proc) -> set[int]:
+    """PIDs the ProjectProcess launched, including launcher descendants.
+
+    A Windows venv's python.exe is a launcher: QProcess reports the launcher,
+    the listener is its child. Assertions must accept either.
+    """
+    pid = proc.proc.processId() if getattr(proc, "proc", None) is not None else 0
+    return urldetect.process_tree_pids({pid})
 
 
 # ---------- the detector itself ----------
@@ -276,7 +287,7 @@ def test_port_conflict_is_reported_with_command(tmp: Path) -> None:
         assert conflict["holders"], conflict
         # The holder's PID must be the one named.
         holder_pid = holder.proc.processId() if holder.proc else None
-        assert holder_pid in {h["pid"] for h in conflict["holders"]}, conflict
+        assert _own_tree(holder) & {h["pid"] for h in conflict["holders"]}, conflict
         assert any(
             "holder.py" in (h["command"] or "") for h in conflict["holders"]
         ), conflict
@@ -310,6 +321,58 @@ def test_own_process_is_not_a_conflict(tmp: Path) -> None:
         assert proc.port_conflict() is None, "our own server was flagged as foreign"
     finally:
         stop_and_release(proc, srv_py)
+
+
+def test_wrapped_server_descendant_is_not_a_foreign_holder(tmp: Path) -> None:
+    """A launcher's child that binds the port is still OUR process.
+
+    On Windows a venv's `Scripts\\python.exe` is a launcher: QProcess reports
+    the launcher PID, while the base interpreter it spawns is the actual
+    listener. Without descendant tracking the hub sees its own server as a
+    foreign holder and offers to kill it (or refuses to start). This test
+    creates the same shape with a wrapper script.
+    """
+    port = reserve_port()
+    child_py = tmp / "child_server.py"
+    child_py.write_text(
+        _SILENT_SERVER.replace("int(sys.argv[1])", str(port))
+    )
+    wrapper_py = tmp / "wrapper.py"
+    wrapper_py.write_text(
+        "import subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, {str(child_py)!r}])\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    rec = sm.validate(
+        {
+            "name": "Wrapped",
+            "command": f"{sys.executable} {wrapper_py}",
+            "url": f"http://127.0.0.1:{port}/",
+            "working_dir": str(tmp),
+        }
+    )
+    proc = ProjectProcess(rec)
+    proc.start()
+    owners: set[int] = set()
+    try:
+        assert _wait_for(lambda: proc.state == "running", timeout_s=25)
+        assert _wait_for(lambda: urldetect.port_in_use(port), timeout_s=20), (
+            "the wrapped child never bound the port"
+        )
+        owners = urldetect.port_owners(port)
+        assert owners, "the port has no identifiable owner"
+        assert _own_tree(proc) & owners, (
+            f"QProcess pid {proc.proc.processId()} and owners {owners} share no "
+            "process tree"
+        )
+        assert proc.port_conflict() is None, (
+            "our own server's child was reported as a foreign holder"
+        )
+    finally:
+        stop_and_release(proc, wrapper_py)
+        for pid in owners:
+            urldetect.kill_process(pid)
 
 
 def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
@@ -363,7 +426,7 @@ def test_bind_failure_names_the_port_from_the_command(tmp: Path) -> None:
         assert got[0] == port, f"expected port {port}, got {got[0]}"
         # and the holder must be identifiable for the dialog
         assert holder.proc is not None
-        assert holder.proc.processId() in urldetect.port_owners(port)
+        assert _own_tree(holder) & urldetect.port_owners(port)
     finally:
         stop_and_release(holder, srv_py)
 
@@ -872,7 +935,7 @@ def test_bare_command_conflict_is_offered(tmp: Path) -> None:
                 f"{_conflict_debug(w, rec['id'], holder_pid, port)}"
             )
             assert offered[0]["holders"], offered[0]
-            assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
+            assert _own_tree(holder) & {h["pid"] for h in offered[0]["holders"]}, offered[0]
         finally:
             w.close()
     finally:
@@ -938,7 +1001,7 @@ def test_no_url_project_gets_conflict_after_it_fails(tmp: Path) -> None:
                 f"{_conflict_debug(w, no_url['id'], holder_pid, port)}"
             )
             assert offered[0]["holders"], offered[0]
-            assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
+            assert _own_tree(holder) & {h["pid"] for h in offered[0]["holders"]}, offered[0]
         finally:
             w.close()
     finally:
@@ -1022,11 +1085,9 @@ def test_about_box_hides_extra_window_buttons() -> None:
     from hub import macos_buttons as mb
 
     if os.environ.get("QT_QPA_PLATFORM") in ("offscreen", "minimal", "vnc"):
-        print("SKIP test_about_box_hides_extra_window_buttons: offscreen has no decorations")
-        return
+        raise SkipTest("offscreen has no decorations")
     if not mb.available():
-        print("SKIP test_about_box_hides_extra_window_buttons: no pyobjc")
-        return
+        raise SkipTest("no pyobjc")
 
     dlg = QDialog()
     dlg.setWindowTitle("About Local Project Hub")
@@ -1124,7 +1185,7 @@ def test_hardcoded_port_conflict_is_detected_without_a_url(tmp: Path) -> None:
         assert conflict, "hardcoded port holder was not detected"
         assert conflict["port"] == port, conflict
         assert holder.proc is not None
-        assert conflict["holders"][0]["pid"] == holder.proc.processId(), conflict
+        assert conflict["holders"][0]["pid"] in _own_tree(holder), conflict
     finally:
         stop_and_release(holder, srv_py)
 
@@ -1369,7 +1430,7 @@ def test_finish_time_output_is_drained_before_deciding_conflict(tmp: Path) -> No
                 f"signal={emitted[0]}"
             )
             holder_pid = holder.proc.processId() if holder.proc else None
-            assert holder_pid in {h["pid"] for h in offered[0]["holders"]}, offered[0]
+            assert _own_tree(holder) & {h["pid"] for h in offered[0]["holders"]}, offered[0]
         finally:
             w.close()
     finally:
@@ -1773,6 +1834,260 @@ def test_process_command_reads_on_every_platform() -> None:
         subprocess.run = real_run
 
 
+# ---------- INFO-002: process liveness ----------
+
+
+def test_posix_liveness_reflects_a_real_process(tmp: Path) -> None:
+    import os
+
+    if urldetect.IS_WINDOWS:
+        raise SkipTest("Windows uses Win32")
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert urldetect._posix_process_alive(child.pid) is True
+        child.terminate()
+        child.wait(timeout=10)
+        assert urldetect._posix_process_alive(child.pid) is False
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+        try:
+            os.kill(child.pid, 0)
+        except OSError:
+            pass
+
+
+def test_posix_liveness_treats_permission_error_as_alive(tmp: Path) -> None:
+    """An inaccessible process exists; only ProcessLookupError proves it gone."""
+    import os
+
+    if urldetect.IS_WINDOWS:
+        raise SkipTest("Windows uses Win32")
+    real = os.kill
+
+    def forbidden(pid, sig):
+        raise PermissionError(1, "not ours")
+
+    os.kill = forbidden
+    try:
+        assert urldetect._posix_process_alive(1234) is True
+    finally:
+        os.kill = real
+
+
+class _FakeKernel32:
+    """Win32 process API double: no real process is opened or queried."""
+
+    def __init__(self, handle=1, exit_code=None, open_ok=True):
+        self.handle = handle
+        self.exit_code = exit_code
+        self.open_ok = open_ok
+        self.closed = False
+
+    def OpenProcess(self, access, inherit, pid):
+        return self.handle if self.open_ok else 0
+
+    def GetExitCodeProcess(self, handle, pointer):
+        pointer.contents.value = self.exit_code
+        return 1
+
+    def CloseHandle(self, handle):
+        self.closed = True
+        return 1
+
+
+def test_windows_liveness_uses_the_win32_exit_code(tmp: Path) -> None:
+    live = _FakeKernel32(exit_code=urldetect._WIN_STILL_ACTIVE)
+    assert urldetect._windows_process_alive(4242, live, lambda: 0) is True
+    assert live.closed, "the process handle was not closed"
+
+    exited = _FakeKernel32(exit_code=0)
+    assert urldetect._windows_process_alive(4242, exited, lambda: 0) is False
+
+    unknown = _FakeKernel32(exit_code=0)
+    unknown.GetExitCodeProcess = lambda handle, pointer: 0
+    assert urldetect._windows_process_alive(4242, unknown, lambda: 0) is True
+
+
+def test_windows_liveness_distinguishes_denied_and_absent(tmp: Path) -> None:
+    denied = _FakeKernel32(open_ok=False)
+    assert urldetect._windows_process_alive(4, denied, lambda: 5) is True
+
+    absent = _FakeKernel32(open_ok=False)
+    assert urldetect._windows_process_alive(4, absent, lambda: 87) is False
+
+    undetermined = _FakeKernel32(open_ok=False)
+    assert urldetect._windows_process_alive(4, undetermined, lambda: 1234) is True
+
+
+def test_windows_liveness_reads_a_real_process(tmp: Path) -> None:
+    if not urldetect.IS_WINDOWS:
+        raise SkipTest("not Windows")
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert urldetect._windows_process_alive(child.pid) is True
+        child.terminate()
+        child.wait(timeout=10)
+        assert urldetect._windows_process_alive(child.pid) is False
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
+def test_kill_process_does_not_claim_success_when_signal_is_denied(tmp: Path) -> None:
+    """An inaccessible process was NOT killed; do not report that it was."""
+    import os
+
+    real = os.kill
+
+    def denied(pid, sig):
+        raise PermissionError(1, "not ours")
+
+    os.kill = denied
+    try:
+        assert urldetect.kill_process(1234, timeout_s=0.2) is False
+    finally:
+        os.kill = real
+
+
+def test_port_in_use_reports_busy_when_the_table_cannot_be_read(tmp: Path) -> None:
+    """Unavailable netstat is uncertainty, not proof that the port is free."""
+    real_run = subprocess.run
+    real_flag = urldetect.IS_WINDOWS
+
+    def broken(*a, **k):
+        raise OSError("netstat unavailable")
+
+    subprocess.run = broken  # type: ignore[assignment]
+    urldetect.IS_WINDOWS = True
+    try:
+        assert urldetect._netstat_listening_rows() is None
+        assert urldetect.port_in_use(23456) is True
+    finally:
+        subprocess.run = real_run  # type: ignore[assignment]
+        urldetect.IS_WINDOWS = real_flag
+
+
+def test_kill_process_actually_ends_its_target(tmp: Path) -> None:
+    import os
+    import threading
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    reap_errors = []
+
+    def reap() -> None:
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired as exc:
+            reap_errors.append(exc)
+
+    # This test owns the Popen child and therefore must reap it while
+    # kill_process polls. On POSIX, delaying wait() until after kill_process
+    # returns leaves an exited zombie: kill(pid, 0) correctly still sees its
+    # PID, so the old fixture could never observe successful termination.
+    reaper = threading.Thread(target=reap, daemon=True)
+    reaper.start()
+    try:
+        killed = urldetect.kill_process(child.pid, timeout_s=3)
+        reaper.join(timeout=10)
+        assert killed is True, f"kill_process returned {killed}; exit={child.returncode}"
+        assert not reaper.is_alive(), "child was not reaped within the deadline"
+        assert not reap_errors, reap_errors
+        assert child.returncode is not None, "child did not actually terminate"
+        assert not urldetect.process_alive(child.pid), "terminated child still exists"
+    finally:
+        if child.poll() is None:
+            child.kill()
+        reaper.join(timeout=16)
+        child.wait(timeout=10)
+        assert not reaper.is_alive(), "reaper thread survived fixture cleanup"
+    # Never reports success for our own PID, which it must not signal.
+    assert urldetect.kill_process(os.getpid()) is False
+
+
+# ---------- INFO-004: IPv4 and IPv6 port occupancy ----------
+
+
+def _ipv6_socket():
+    """A bound IPv6 loopback listener, or None when IPv6 is unavailable."""
+    try:
+        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    except OSError:
+        return None
+    try:
+        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        s.bind(("::1", 0))
+        s.listen(1)
+        return s
+    except OSError:
+        s.close()
+        return None
+
+
+def test_port_in_use_detects_ipv4_and_ipv6_listeners(tmp: Path) -> None:
+    assert urldetect.port_in_use(reserve_port()) is False, "a free port was busy"
+
+    v4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        v4.bind(("127.0.0.1", 0))
+        v4.listen(1)
+        assert urldetect.port_in_use(v4.getsockname()[1]) is True
+    finally:
+        v4.close()
+
+    v6 = _ipv6_socket()
+    if v6 is None:
+        raise SkipTest("no IPv6")
+    try:
+        assert urldetect.port_in_use(v6.getsockname()[1]) is True, (
+            "an IPv6-only listener was reported free"
+        )
+    finally:
+        v6.close()
+
+
+def test_dual_stack_listener_is_one_busy_port(tmp: Path) -> None:
+    try:
+        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    except OSError:
+        raise SkipTest("no IPv6")
+    try:
+        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        s.bind(("::", 0))
+        s.listen(1)
+    except OSError:
+        s.close()
+        raise SkipTest("no dual stack")
+    port = s.getsockname()[1]
+    try:
+        # The check is a single boolean, so the two views of one dual-stack
+        # socket cannot be mistaken for two conflicting services.
+        assert urldetect.port_in_use(port) is True
+        assert type(urldetect.port_in_use(port)) is bool
+    finally:
+        s.close()
+
+
+def test_unsupported_ipv6_does_not_make_a_free_port_look_busy(tmp: Path) -> None:
+    import errno
+
+    port = reserve_port()
+    real_socket = socket.socket
+
+    def no_ipv6(family, *args, **kwargs):
+        if family == socket.AF_INET6:
+            raise OSError(errno.EAFNOSUPPORT, "IPv6 unavailable")
+        return real_socket(family, *args, **kwargs)
+
+    socket.socket = no_ipv6
+    try:
+        assert urldetect.port_in_use(port) is False
+    finally:
+        socket.socket = real_socket
+
+
 if __name__ == "__main__":
     import inspect
 
@@ -1788,6 +2103,7 @@ if __name__ == "__main__":
 
     app = QApplication.instance() or QApplication([])
     fails = 0
+    skipped = 0
     ran = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
@@ -1807,6 +2123,9 @@ if __name__ == "__main__":
                 else:
                     fn()
                 print(f"PASS {name}")
+            except SkipTest as e:
+                skipped += 1
+                print(f"SKIP {name}: {e}")
             except AssertionError as e:
                 fails += 1
                 print(f"FAIL {name}: {e}")
@@ -1822,5 +2141,7 @@ if __name__ == "__main__":
         # a test name that does not exist. Say so instead.
         print(f"ERROR no such test: {only}")
         sys.exit(2)
-    print("---", "FAILURES" if fails else "all passed")
+    print("---", "FAILURES" if fails else (
+        "all passed" + (f" ({skipped} skipped)" if skipped else "")
+    ))
     sys.exit(1 if fails else 0)
