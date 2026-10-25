@@ -108,6 +108,7 @@ SUITES = [
     ("test_isolation_contract.py", False),
     ("test_workflow_yaml.py", False),
     ("test_release_artifacts.py", False),
+    ("test_linux_smoke.py", False),
 ]
 
 # Suites whose GUI tests must each run in their own process. QtWebEngine

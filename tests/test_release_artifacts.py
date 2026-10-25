@@ -125,6 +125,22 @@ def test_publication_rejects_partial_unverifiable_or_wrong_release():
     tool.validate_release(payload, "0.7.1", "different2/local-project-hub")
 
 
+def test_strict_regression_observer_rejects_crashes_after_pass():
+    path = ROOT / "tools" / "run_regression_strict.py"
+    assert path.is_file(), "raw-child regression exit audit is not implemented"
+    spec = importlib.util.spec_from_file_location("strict_regression", path)
+    assert spec is not None and spec.loader is not None
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    assert tool.child_is_clean(0, "PASS test_real\n")
+    assert tool.child_is_clean(0, "SKIP test_platform\n")
+    assert not tool.child_is_clean(-11, "PASS test_real\n"), "PASS must not conceal a shutdown segfault"
+    assert not tool.child_is_clean(23, "PASS test_real\n")
+    assert not tool.child_is_clean(0, "FAIL test_real: nope\n")
+    assert not tool.child_is_clean(0, "ERROR test_real: nope\n")
+    assert not tool.child_is_clean(0, ""), "zero verdicts must not pass"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(list(globals().items())):

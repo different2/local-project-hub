@@ -414,7 +414,8 @@ def test_linux_release_has_real_test_build_and_publish_gates() -> None:
         "publication must wait for tests and every supported platform build"
     )
     uploads = [s for s in build["steps"]
-               if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
+               if str(s.get("uses", "")).startswith("actions/upload-artifact@")
+               and s.get("with", {}).get("name") == "LocalProjectHub-Linux"]
     assert len(uploads) == 1 and uploads[0]["with"]["if-no-files-found"] == "error", (
         "a missing Linux installer must fail, not produce a green empty upload"
     )
