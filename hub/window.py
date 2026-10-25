@@ -876,6 +876,11 @@ class HubWindow(QMainWindow):
         self.list = QListWidget()
         self.list.setMaximumWidth(280)
         self.list.setStyleSheet("font-size: 13px;")
+        self.list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.list.setDefaultDropAction(Qt.MoveAction)
+        # Save after the model finishes moving rows. In particular, a failed
+        # write must not rebuild the list from inside its own move notification.
+        self.list.model().rowsMoved.connect(self._on_list_reordered, Qt.QueuedConnection)
         self.list.itemSelectionChanged.connect(self._on_select)
         # Double-click (or Return) renames a project in place, the way a
         # session is renamed in the sidebar. The icon is part of the row's
@@ -891,7 +896,7 @@ class HubWindow(QMainWindow):
 
         left = QVBoxLayout()
         left.addWidget(QLabel("Projects"))
-        rename_hint = QLabel("Double-click a name to rename it")
+        rename_hint = QLabel("Drag to reorder · Double-click to rename")
         rename_hint.setStyleSheet("color: gray; font-size: 10px;")
         left.addWidget(rename_hint)
         left.addWidget(self.list, 1)
@@ -984,7 +989,9 @@ class HubWindow(QMainWindow):
                 # renaming (double-click and the context menu's "Rename…",
                 # which calls editItem) silently do nothing. Reported
                 # 2026-10-19: "I click it and nothing happens".
-                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                # This is a flat list: drop BETWEEN rows, never onto a row as
+                # though it were a parent. Inline rename remains available.
+                item.setFlags((item.flags() | Qt.ItemIsEditable) & ~Qt.ItemIsDropEnabled)
                 item.setToolTip(rec.get("description") or rec["command"])
                 self.list.addItem(item)
         finally:
@@ -1003,6 +1010,23 @@ class HubWindow(QMainWindow):
                 self.list.setCurrentRow(0)
         # Keep the crash-report path in sync with the live project list.
         self._refresh_diagnostic_context()
+
+    def _on_list_reordered(self) -> None:
+        """Persist the visible ID order without touching project tabs/processes."""
+        if self._loading_list:
+            return
+        project_ids = [
+            self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
+        ]
+        try:
+            self.store.reorder(project_ids)
+        except store_mod.RegistryError as e:
+            self._reload_list()
+            message = f"Couldn't save project order: {e}"
+            self.status.showMessage(message, 8000)
+            self._append_log(f"[hub] {message}")
+            return
+        self.status.showMessage("Project order saved", 3000)
 
     def _item_label(self, rec: dict) -> str:
         return f"{rec.get('icon') or ''}  {rec.get('name') or ''}"
@@ -1166,7 +1190,7 @@ class HubWindow(QMainWindow):
             "• Each project has its own terminal in the drawer at the bottom; "
             "switching projects switches the terminal. Drag its edge to "
             "resize, or collapse it with the arrow.<br>"
-            "• Double-click a project in the list to rename it.<br>"
+            "• Drag projects in the list to reorder them; double-click a name to rename it.<br>"
             "• If a port is already taken, the hub offers to end the process "
             "holding it instead of failing to start.<br>"
             "• Browser-opening flags such as <code>--no-open</code> are read "

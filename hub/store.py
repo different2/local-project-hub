@@ -176,8 +176,16 @@ class Store:
     # ---------- queries ----------
 
     def ordered(self) -> list[dict]:
-        """Records sorted by name, for stable sidebar order."""
-        return [self.projects[k] for k in sorted(self.projects, key=lambda i: self.projects[i]["name"].lower())]
+        """Records in sidebar order, preserved by the saved projects array."""
+        return list(self.projects.values())
+
+    def reorder(self, project_ids: list[str]) -> None:
+        """Save a complete permutation of project IDs, without editing records."""
+        if len(project_ids) != len(self.projects) or set(project_ids) != set(self.projects):
+            raise RegistryError("project order must include every project exactly once")
+        previous = dict(self.projects)
+        self.projects = {pid: previous[pid] for pid in project_ids}
+        self._commit(previous)
 
     def get(self, project_id: str) -> dict | None:
         return self.projects.get(project_id)

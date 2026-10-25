@@ -82,6 +82,9 @@ Older versions: [Releases](https://github.com/different2/local-project-hub/relea
 
 Worth knowing:
 
+- Drag projects up or down in the sidebar to arrange them. The order is saved
+  across restarts; new projects are added at the bottom. Double-click a name
+  to rename it without changing its position.
 - Adding a project never starts it, and opening the Hub never starts anything
   by itself. A project runs when you click it, press Start, or tick **Start
   automatically when the hub opens** on it.

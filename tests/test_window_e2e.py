@@ -1536,6 +1536,177 @@ def test_a_detected_url_is_saved_to_the_project_that_printed_it(tmp: Path) -> No
         w.close()
 
 
+def test_sidebar_internal_move_saves_order_and_keeps_project_identity(tmp: Path) -> None:
+    from PySide6.QtCore import QModelIndex
+
+    st = sm.Store(tmp / "registry.json")
+    records = [
+        st.add({"name": name, "command": "echo unused", "icon": "🌐"})
+        for name in ("discordbot", "obs", "sphere")
+    ]
+    original = [r["id"] for r in records]
+    wanted = original[1:] + original[:1]
+    w = HubWindow(st)
+    w.show()
+    try:
+        _spin(100)
+        assert w.list.dragDropMode() == QAbstractItemView.InternalMove, (
+            "the Projects list does not allow internal drag-and-drop reordering"
+        )
+        assert w.list.dragEnabled() and w.list.acceptDrops()
+        assert w.list.showDropIndicator(), "there is no visible insertion indicator"
+        assert not (w.list.item(0).flags() & Qt.ItemIsDropEnabled), (
+            "flat project rows must accept insertion between rows, not child drops"
+        )
+        selected = w.list.currentItem().data(Qt.UserRole)
+        tabs = [w.tabs.widget(i) for i in range(w.tabs.count())]
+        processes = dict(w.procs)
+
+        assert w.list.model().moveRow(QModelIndex(), 0, QModelIndex(), 3), (
+            "the actual QListWidget model refused to move the top row to the bottom"
+        )
+        _spin(100)
+        visible = [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())]
+        assert visible == wanted, f"wrong visible project order: {visible}"
+        assert [r["id"] for r in sm.Store(st.path).ordered()] == wanted, (
+            "the widget moved, but its new order was not saved"
+        )
+        assert w.list.currentItem().data(Qt.UserRole) == selected
+        assert w.active_id == selected, "moving a row switched the active project"
+        assert [w.tabs.widget(i) for i in range(w.tabs.count())] == tabs
+        assert w.procs == processes, "moving a row replaced a project's process object"
+        assert all(p.state == "stopped" for p in w.procs.values()), (
+            "rearranging the sidebar started a project"
+        )
+        w._reload_list()
+        assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == wanted
+    finally:
+        w.close()
+
+
+def test_sidebar_restores_custom_order_on_startup(tmp: Path) -> None:
+    st = sm.Store(tmp / "registry.json")
+    ids = [
+        st.add({"name": name, "command": "echo unused"})["id"]
+        for name in ("discordbot", "obs", "sphere")
+    ]
+    wanted = ids[1:] + ids[:1]
+    st.reorder(wanted)
+    w = HubWindow(sm.Store(st.path))
+    w.show()
+    try:
+        _spin(100)
+        assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == wanted
+        assert w.list.currentItem().data(Qt.UserRole) == wanted[0]
+        assert all(p.state == "stopped" for p in w.procs.values())
+    finally:
+        w.close()
+
+
+def test_sidebar_failed_order_save_restores_rows_and_reports_error(tmp: Path) -> None:
+    from PySide6.QtCore import QModelIndex
+
+    st = sm.Store(tmp / "registry.json")
+    ids = [
+        st.add({"name": name, "command": "echo unused"})["id"]
+        for name in ("discordbot", "obs", "sphere")
+    ]
+    ids = ids[1:] + ids[:1]
+    st.reorder(ids)
+    before = st.path.read_bytes()
+    w = HubWindow(st)
+    w.show()
+    save = st.save
+
+    def fail_save():
+        raise OSError("test disk is full")
+
+    try:
+        _spin(100)
+        selected = w.active_id
+        st.save = fail_save
+        assert w.list.model().moveRow(QModelIndex(), 0, QModelIndex(), 3)
+        _spin(100)
+        assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == ids, (
+            "the list still shows an order that failed to save"
+        )
+        assert list(st.projects) == ids
+        assert st.path.read_bytes() == before
+        assert w.active_id == selected and w.list.currentItem().data(Qt.UserRole) == selected
+        assert "Couldn't save project order" in w.status.currentMessage()
+        assert "test disk is full" in w.log_view.hub_text()
+        assert all(p.state == "stopped" for p in w.procs.values())
+    finally:
+        st.save = save
+        w.close()
+
+
+def test_sidebar_reorder_keeps_a_running_project_running(tmp: Path) -> None:
+    from PySide6.QtCore import QModelIndex, QProcess
+    from urllib.request import urlopen
+
+    w, port = make_window(tmp)
+    proc = None
+    try:
+        rec = w.store.ordered()[0]
+        proc = w.procs[rec["id"]]
+        assert _wait_for(lambda: proc.state == "running" and proc.proc is not None)
+        assert _wait_for(lambda: w.web.url().toString() == rec["url"])
+        child = proc.proc
+        assert child is not None
+        pid = int(child.processId())
+        assert pid > 0
+        other = w.store.add({"name": "AAA idle project", "command": "echo unused"})
+        w._reload_list()
+        tabs = [w.tabs.widget(i) for i in range(w.tabs.count())]
+
+        assert w.list.model().moveRow(QModelIndex(), 0, QModelIndex(), 2)
+        _spin(100)
+
+        assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == [other["id"], rec["id"]]
+        assert w.active_id == rec["id"]
+        assert [w.tabs.widget(i) for i in range(w.tabs.count())] == tabs
+        assert w.procs[rec["id"]] is proc and proc.proc is child
+        assert proc.state == "running" and int(child.processId()) == pid, (
+            "rearranging the sidebar stopped or restarted the running project"
+        )
+        with urlopen(f"http://127.0.0.1:{port}/", timeout=2) as response:
+            assert response.read() == b"HUB-WINDOW-TEST"
+    finally:
+        w.close()
+        if proc is not None:
+            assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning), (
+                "the isolated test server was not cleaned up"
+            )
+
+
+def test_sidebar_rename_keeps_the_saved_custom_position(tmp: Path) -> None:
+    st = sm.Store(tmp / "registry.json")
+    ids = [st.add({"name": name, "command": "echo unused"})["id"]
+           for name in ("discordbot", "obs", "sphere")]
+    wanted = ids[1:] + ids[:1]
+    st.reorder(wanted)
+    w = HubWindow(st)
+    w.show()
+    try:
+        item = w.list.item(2)
+        w.list.setCurrentItem(item)
+        w.list.editItem(item)
+        assert _wait_for(lambda: w.list.state() == QAbstractItemView.EditingState, 3)
+        editor = w.list.findChild(QLineEdit)
+        assert editor is not None and editor.isVisible()
+        assert editor.text() == "discordbot"
+        editor.setText("AAA renamed bot")
+        index = w.list.model().index(2, 0)
+        w.list.itemDelegate().setModelData(editor, w.list.model(), index)
+        saved = st.get(ids[0])
+        assert saved is not None and saved["name"] == "AAA renamed bot"
+        assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == wanted
+        assert [r["id"] for r in sm.Store(st.path).ordered()] == wanted
+    finally:
+        w.close()
+
+
 if __name__ == "__main__":
     import tempfile
 
