@@ -91,16 +91,22 @@ that baseline, so use archived sibling filenames for the candidate screenshots.
 read back as **0.7.0, build 1** after the merge; source integration does not update
 that installed application.
 
-### Still in progress: post-merge main CI
+### Post-merge main CI — PASSED; integration closed out
 
 [Run 40147888074](https://github.com/different2/local-project-hub/actions/runs/40147888074)
-is running on exact merge `143bd36`, job `Tests (windows-2022)`. Notified watcher
-`proc_86d13701d771` writes `lph-pr2-final/windows-main-143bd36-ci.log`.
-**Next action:** inspect its actual conclusion and downloaded full test artifact,
-validate the suite identities/totals, then update this section with a docs-only
-`[skip ci]` checkpoint and report closeout. Do not mistake the earlier passing
-PR run for this main-branch result, rerun local GUI suites needlessly, or release
-anything automatically.
+completed successfully on exact merge `143bd36`, job `Tests (windows-2022)`.
+Its own downloaded artifact reports **19/19 suites, 307 passed, 6 skipped,
+zero failures/blocked/not-run**. All 19 unique registered suite identities and
+row totals were independently validated; the result matches the passing PR
+run. Full log: `lph-pr2-final/windows-main-143bd36/test-output.log`.
+The notified watcher exited 0; no verification remains in flight for this merge.
+
+Subsequent main commits update **HANDOFF.md only**, marked `[skip ci]`; the
+runtime/test/dependency/workflow tree remains identical to the tested head.
+Build/publish jobs were skipped, as expected for a branch push, not verified.
+No source-integration action remains pending. A new release, installer testing,
+additional platform validation or the documented follow-up bugs are separate
+work; do not release or install anything automatically.
 
 ### Earlier integration checkpoint (historical)
 
