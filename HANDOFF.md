@@ -81,10 +81,15 @@ it, and both subsequent full released-source runs were clean. Its cause was NOT
 declared fixed; the strict audit still rejects every nonzero child. No physical
 Linux desktop/compositor or arbitrary-distro compatibility is claimed.
 
-Routine post-integration main CI40225868881 for6cbf16f was still pending at this
-closeout writing. Its result must be read back before calling that latest run
-green; it is not the already-verified tagged installer run. The docs-only closeout
-that follows uses `[skip ci]` to avoid duplicating those GUI jobs.
+Post-integration main CI40225868881 at6cbf16f completed **SUCCESS**. Its actual
+artifacts were independently checked against334 current-source case identities
+in21 suites per image: Ubuntu331 passed/3 skipped, Windows2022 and2025 each327
+passed/7 skipped, zero failures/missing/duplicates, all106 actual children per
+image exited0. This includes the publisher recovery's additional pure test.
+Build/publication jobs correctly skipped on an ordinary main push; all released
+installers had already passed their tagged builds and runtime/metadata gates.
+Only HANDOFF.md differs after the tested6cbf16f code tree. The final docs-only
+closeout uses `[skip ci]`; no verification, release or link work remains open.
 
 Evidence is in `~/.hermes/cache/scratch/lph-linux-release/`: acceptance-b8d6e1b.json,
 tag-0.7.1-acceptance.json, publication-recovery/{before,release,published,latest}.json,
