@@ -47,6 +47,16 @@ and TEMP diagnostics are archived outside the repository and removed.
 - Independent packet-only Review Checkpoint (`deleg_98befe9b`, gpt-6.1-sol /
   openai-codex): clear, no actionable findings; schema validated. Configuration
   guards pass on Python 3.11/3.9 with eight proven negative controls.
+- Candidate `a93f61f` passed the full Mac suite (319 passed / 3 skipped), with
+  a separate raw-exit audit confirming 104 actual child exits all zero and
+  322 unique test verdicts. Its Windows 2022 suite passed 316 / 6 skipped.
+  While checking its artifacts, a new two-image CI naming collision was found:
+  `runner.os` made both names `test-log-Windows`. The upload name now uses
+  `matrix.os`; a new guard reproduces the old collision and passes after the
+  one-line fix (14 guards on both local Python versions). Bounded re-review
+  `deleg_517e1bbb` is clear. App source/dependency files are unchanged by this
+  correction. Corrected-head full verification still needs to finish; any
+  deliberately superseded old CI run is not an application-test regression.
 - Cocoa lifecycle/DOM/PID/HTTP/listener/terminal checks pass with no false error,
   but the strict native smoke exits 1 because top-level `isExposed` is false.
   One explicit activation control did not resolve exposure. Do not claim a full
