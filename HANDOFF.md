@@ -16,60 +16,91 @@ fresh session should start from this file alone: read it, run
 this project have died mid-task on provider errors, so state belongs here
 and in commits — not only in chat. Developer docs (run, test, package,
 release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
-the forensic-audit triage (test-quality findings fixed, product bugs open and
-recorded with file:line)._
+PR #2 is merged with the original contributor's history preserved. Read the
+current integration status below; the older audit triage is historical._
 
-## PR #2 integration in progress (2026-10-24 — supersedes the resume checkpoint)
+## PR #2 merged (2026-10-24 — supersedes every earlier integration checkpoint)
 
-**Final candidate, full checks pending:** PR #2 is at
-`9d4e75ad5fc82470d3436ff25a45a75317f36825`. Application code is unchanged
-from `edfc1f0`; CI now pins the validated Windows 2022 test image with normal
-sandboxing. A regression guard and developer documentation accompany the pin.
-Both TEMP diagnostic files were archived and removed from the final Git tree.
+[PR #2](https://github.com/different2/local-project-hub/pull/2) was merged at
+`2026-10-25T00:44:45Z` with merge commit
+`143bd36862c53ebf460b1adfa24f8a3d34127a14`, after both final platform gates passed.
+The primary project folder was fast-forwarded to the merged source. Issue #1
+was automatically closed by the merge; its closed state was read back.
 
-- Final Mac run on exact9d4e75a passed **19/19, 310 passed, 3 skipped,
-  zero failures/blocked/not-run**, exit 0, log
-  `~/.hermes/cache/scratch/lph-pr2-final/macos-9d4e75a-py311.log`.
-- Before the image pin, **both Windows 2025 attempts failed identically:** 17/19 suites, 299 passed,
-  6 skipped, 7 failed (four window and three popup page-load cases). The
-  process-safety suite passed, 16 passed/1 skip. The Windows mock setup bugs
-  and reviewed process/endpoint corrections are not the remaining failures.
-  Full artifacts are in `lph-pr2-final/windows-edfc1f0-attempt{1,2}/`.
-- First diagnostic **40142997866 completed**: all nine observed cases failed.
-  A bare Qt 6.7.3 browser renderer crashes with `0xc0000005` before loading,
-  even with the native Windows platform; unchanged pre-PR main fails the same
-  Hub page test. Runtime/tests/ordinary CI on current main are identical to
-  that baseline. Thus this blocker exists below the contribution; its exact
-  GPU/sandbox/OS cause remains **unknown**, and a QPA-only fix is disproved.
-  Real results: `lph-pr2-final/renderer-probe-result/renderer-probe.json`.
-  **Diagnostic completion is not a passing product check.**
-- **User chose to fix Windows CI BEFORE merging.** Controlled run
-  **40144633615** completed: Windows 2022 passed all 15 targeted cases with
-  default sandboxing; the newer Windows image passed only its four
-  sandbox-disabled cases. Qt 6.7.3/Python 3.11.9 were identical. The fix pins
-  the test OS, not a sandbox bypass or dependency upgrade. The new workflow
-  guard was observed RED, then GREEN and negative-controlled against the exact
-  old config; all 10 workflow guards pass under Python 3.9 and 3.11.
-  Real full Windows CI **40145634640** is now running on the verified job
-  **Tests (windows-2022)** at exact9d4e75a. Mac completed as above; Windows
-  remains the outstanding gate. Do not confuse diagnostic greens with it.
-  Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md`.
-  Read/count both actual full results, then formal review and a tested-head
-  merge preserving the contributor's original commit. No known-red merge.
-- Two allowed independent-review passes completed; confirmed endpoint findings
-  were minimally corrected with observed RED/GREEN regressions. No more
-  review loop. Native Cocoa Start/Restart/Stop was rerun on exact9d4e75a:
-  passed/exit0, inspected rendered screenshots plus HTTP/PID/listener checks,
-  no fixture listener left. Its JSON/screenshots are archived in
-  `lph-pr2-final/native-9d4e75a/`. The misleading code15 Restart error log was
-  independently reproduced with unchanged main after the suite finished:
-  it is **pre-existing**, not introduced by this PR, and remains a nonblocking
-  follow-up. Baseline evidence is separately archived in `native-baseline-main/`;
-  the shared `lph-pr2-review/native-*` paths now contain that baseline, not9d.
-- Original `174e90c`, Tahir Masood's authorship and existing co-author trailer
-  remain intact. README acknowledgement is in the PR, and explicit credit and
-  honest progress were [posted/read back](https://github.com/different2/local-project-hub/pull/2#issuecomment-6390548019).
-  **PR still open/unmerged. No release/install has happened.**
+### Attribution and review
+
+- Tahir Masood / [@tahirmasood2](https://github.com/tahirmasood2)'s original
+  `174e90c55b696f592d58ed83f5f5e8552a51242a` remains unchanged, including
+  `Co-authored-by: CommandCodeBot <noreply@commandcode.ai>`. It and the tested
+  head are ancestors of remote main. No squash, force push, reauthoring or
+  contributor-branch deletion was used. The README acknowledgement is on main.
+- Separate maintainer commits correct TIME_WAIT restart refusal, explicit and
+  unknown endpoint scope throughout delayed conflict retries, coherent process
+  ancestry/identity capture, and cross-platform test fixtures. Load-bearing
+  RED/GREEN and remove-fix controls were observed. Independent review checkpoints
+  ran and their confirmed findings were addressed; do not start another review loop.
+- [Formal approval and final evidence](https://github.com/different2/local-project-hub/pull/2#pullrequestreview-5640804357)
+  and [merged/credit summary](https://github.com/different2/local-project-hub/pull/2#issuecomment-6391578599)
+  were posted and read back.
+
+### Final pre-merge verification
+
+Tested head: `9d4e75ad5fc82470d3436ff25a45a75317f36825`. The merge differs from
+that tree **only in HANDOFF.md**; runtime, tests, dependencies and workflows match.
+Both full logs were parsed against all 19 registered suite identities, with
+unique rows and independently summed totals matching each runner summary.
+
+| Platform | Suites | Passed | Skipped | Failed / blocked / not-run |
+|---|---:|---:|---:|---:|
+| macOS, Python 3.11 / PySide6 6.7.3 | 19/19 | 310 | 3 | 0 / 0 / 0 |
+| Windows 2022 CI, Python 3.11 / PySide6 6.7.3 | 19/19 | 307 | 6 | 0 / 0 / 0 |
+
+- [Ordinary Windows CI 40145634640](https://github.com/different2/local-project-hub/actions/runs/40145634640)
+  passed, including all 28 window and 3 popup tests. This is a real full product
+  check, not a diagnostic completion badge.
+- Native Cocoa Start → HTTP 200/rendered dashboard → Restart/new PID/rendered
+  dashboard → Stop/tab closure/no listener also passed on the tested head;
+  screenshots were inspected and fixture listeners cleaned up.
+- Evidence under `~/.hermes/cache/scratch/lph-pr2-final/`:
+  `macos-9d4e75a-py311.log`, `windows-9d4e75a/test-output.log`,
+  `verification-9d4e75a.json`, and `native-9d4e75a/` (JSON plus four screenshots).
+
+### Windows CI correction and limits
+
+The user required fixing CI before merge. Bare Qt and unchanged main reproduced
+renderer crashes on the moving Windows 2025 image. Identical-version controlled
+run [40144633615](https://github.com/different2/local-project-hub/actions/runs/40144633615)
+observed 15/15 healthy cases on Windows 2022 with normal sandboxing; the newer
+image passed only its four sandbox-disabled cases. CI therefore pins
+`windows-2022` and guards that image with a regression test. The guard went RED,
+GREEN and RED under the exact old-config mutation, then GREEN on restoration;
+all 10 workflow guards passed actual Python 3.9 and 3.11. Production sandboxing
+and dependency pins were not weakened or changed. Both TEMP diagnostic files
+were archived and removed; their source remains in Git history (`19da3e6`).
+
+**Not verified here:** native Linux, rebuilt DMG/MSI packages, real OS login-item
+integration, or a solution for Qt sandbox compatibility on the newer Windows
+image. Do not claim the image pin fixes shipped Windows 2025 compatibility.
+A misleading error log during an otherwise successful intentional code15 Restart
+was separately reproduced on unchanged main with the same native harness. It is
+a **pre-existing, nonblocking follow-up**, not fixed in this PR. Baseline evidence
+is in `native-baseline-main/`; the shared `lph-pr2-review/native-*` paths now contain
+that baseline, so use archived sibling filenames for the candidate screenshots.
+
+**No release, tag or installation was performed.** Installed app metadata was
+read back as **0.7.0, build 1** after the merge; source integration does not update
+that installed application.
+
+### Still in progress: post-merge main CI
+
+[Run 40147888074](https://github.com/different2/local-project-hub/actions/runs/40147888074)
+is running on exact merge `143bd36`, job `Tests (windows-2022)`. Notified watcher
+`proc_86d13701d771` writes `lph-pr2-final/windows-main-143bd36-ci.log`.
+**Next action:** inspect its actual conclusion and downloaded full test artifact,
+validate the suite identities/totals, then update this section with a docs-only
+`[skip ci]` checkpoint and report closeout. Do not mistake the earlier passing
+PR run for this main-branch result, rerun local GUI suites needlessly, or release
+anything automatically.
 
 ### Earlier integration checkpoint (historical)
 
@@ -106,7 +137,7 @@ Both TEMP diagnostic files were archived and removed from the final Git tree.
   section with the final result. **Do not release or install a new app** as part
   of this request; installed/latest released version remains 0.7.0.
 
-## Resume checkpoint (2026-10-24 — read this before the historical sections)
+## Historical resume checkpoint (2026-10-24 — superseded by PR integration above)
 
 - The prior session is `20261018_231911_c86025`. Its last user question was
   whether the test fixes would interfere with the product fixes being worked
@@ -255,7 +286,11 @@ button actually starting the project; the running card).
   text, then clicks. The real app was fine all along — only the test clicked
   too early.
 
-## Forensic audit triage (2026-10-20): tests fixed, product bugs open — DONE
+## Historical forensic audit triage (2026-10-20, before PR #2)
+
+The statuses and file:line references below describe the pre-contribution tree,
+not the merged source. PR #2 subsequently implemented the remediation; use the
+current integration/verification section above rather than repeating these fixes.
 
 A third-party read-only audit of `6206e22` (v0.5.0, run on Windows) arrived
 with CONFIRMED 6 / HIGH-CONFIDENCE 1 / TEST-QUALITY 1 / INFORMATIONAL 6 /
@@ -591,7 +626,11 @@ Released 2026-10-19: `fd69d81` (fix + version bump) → tag `v0.6.1` → tag run
   the leak is still open (thread 4). Sweep rule: only `ppid=1` under
   `/var/folders` — never the user's live dashboards or the Hub.
 
-## Open threads, in priority order
+## Previously tracked follow-ups (not revalidated by PR #2)
+
+These are retained context, not claims that every old symptom still reproduces
+after the source integration. The current status above takes precedence;
+revalidate a historical concern before changing code for it.
 
 1. **The self-installing update — PROVEN on 2026-10-19 22:29.** The user's
    0.6.0 → 0.6.1 update ran the whole flow unaided: `update.log` shows
