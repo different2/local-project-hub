@@ -15,9 +15,28 @@ running HTTP project without changing its PID, tab or HTTP response. A native
 Cocoa test window was exposed; real mouse/drag/drop events, changed visible
 order and saved registry order were observed. Earlier automation no-ops were
 not counted as successful drags; its tracker supplied no native exit status.
-Final full-suite/review evidence is kept under
-`~/.hermes/cache/scratch/lph-project-order/` and will be recorded here at
-closeout. Tests use isolated fixture registries and processes.
+Final verification on source commit
+`b6dec8c372aebfd85d2884e82d860a200b87e3bc`:
+
+- Full strict macOS source run: **21 suites, 340 passed, 4 skipped, 0 failed**.
+  All **344 unique source test IDs** were accounted for exactly once; no
+  missing, extra or duplicate verdicts. All **111 actual test-process exits**
+  were zero, with strict exit 0 and unchanged tested source.
+- The pure Store suite also passes under the existing Python 3.9.6 development
+  interpreter. GUI/full-suite execution used Python 3.11.10 and Qt 6.7.3.
+- Three deliberate controls were caught: alphabetical re-sorting, disconnected
+  move-save wiring, and missing UI rollback. Production code was restored and
+  the positive paths rerun before the complete suite.
+- Review Checkpoint `deleg_33f4c049` returned **clear**, with no findings.
+  It reviewed the complete changed diff, complete Store and supplied Window
+  consumers through a frozen packet, not the whole repository or an
+  independent test run. Transcript audit confirmed only that packet read and
+  mandatory read-only skill loads. No new Windows/Linux binary or installer
+  acceptance is claimed for this source-only UI change.
+- Evidence: `~/.hermes/cache/scratch/lph-project-order/strict-macos/`,
+  `full-identity-audit.json`, `mutation-results.json`, `review-result.json`,
+  `review-transcript-audit.json`, and native observations/screenshots.
+  Tests use isolated fixture registries and processes.
 
 **This is a source update, not a published release or installed-app update.**
 The installed app, user registry, published v0.7.1 assets, tag, download links,
