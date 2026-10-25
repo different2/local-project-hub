@@ -17,10 +17,15 @@ VERSIONS = ("6.7.3", "6.12.0")
 MARKER = "LPH_QT_COMPAT_READY"
 
 
+def only_expected_shutdown(events) -> bool:
+    return all(event["shutdown"] and event["normal"] for event in events)
+
+
 def bare_page() -> int:
     import PySide6
     from PySide6.QtCore import QTimer, qInstallMessageHandler, qVersion
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtWebEngineCore import QWebEnginePage
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
     messages = []
@@ -29,17 +34,22 @@ def bare_page() -> int:
     view = QWebEngineView()
     view.resize(640, 480)
     expected = os.environ.get("LPH_EXPECTED_TITLE", MARKER)
-    state = {"loaded": None, "title": "", "terminated": [], "ok": False}
+    state = {"loaded": None, "title": "", "terminated": [], "ok": False,
+             "shutdown": False}
     scheduled = False
 
     def finish():
+        if state["shutdown"]:
+            return
         state["ok"] = (state["loaded"] is True and state["title"] == expected
                        and not state["terminated"])
+        state["visible_before_quit"] = view.isVisible()
         screenshot = os.environ.get("LPH_PROBE_SCREENSHOT")
         if screenshot:
             path = Path(screenshot)
             path.parent.mkdir(parents=True, exist_ok=True)
             state["screenshot_saved"] = bool(view.grab().save(str(path)))
+        state["shutdown"] = True
         app.quit()
 
     def ready():
@@ -58,9 +68,14 @@ def bare_page() -> int:
 
     view.loadFinished.connect(loaded)
     view.titleChanged.connect(titled)
-    view.page().renderProcessTerminated.connect(
-        lambda status, code: state["terminated"].append([str(status), int(code)])
-    )
+    def terminated(status, code):
+        state["terminated"].append({
+            "status": str(status), "code": int(code), "shutdown": state["shutdown"],
+            "normal": status == QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus
+                      and code == 0,
+        })
+
+    view.page().renderProcessTerminated.connect(terminated)
     view.show()
     view.setHtml("<html><head><title>" + MARKER + "</title></head>"
                  "<body style='background:#eef5ff;color:#132840;padding:30px'>"
@@ -68,9 +83,13 @@ def bare_page() -> int:
                  "<p>Default sandbox. Local HTML. No project or network.</p></body></html>")
     QTimer.singleShot(15000, finish)
     app.exec()
+    # Qt 6.12 emits a normal renderer-exit signal while app.quit() closes
+    # the window. That expected shutdown is not a rendering failure. Every
+    # pre-quit exit or abnormal shutdown remains a failure.
+    state["ok"] = state["ok"] and only_expected_shutdown(state["terminated"])
     state.update({"qpa": app.platformName(), "qt": qVersion(),
                   "pyside": PySide6.__version__, "messages": messages,
-                  "visible": view.isVisible(), "expected_title": expected,
+                  "visible_after_quit": view.isVisible(), "expected_title": expected,
                   "disable_sandbox_env": os.environ.get("QTWEBENGINE_DISABLE_SANDBOX"),
                   "chromium_flags": os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS")})
     print("PROBE_JSON " + json.dumps(state), flush=True)
@@ -143,7 +162,7 @@ def observe() -> int:
                     state = json.loads(line[len("PROBE_JSON "):])
             healthy = code == 0
             if script == Path(__file__):
-                healthy = bool(healthy and state and state["ok"] and not state["terminated"]
+                healthy = bool(healthy and state and state["ok"] and state["visible_before_quit"]
                                and state["disable_sandbox_env"] is None and state["chromium_flags"] is None
                                and state["pyside"] == version)
             else:
