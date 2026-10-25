@@ -209,9 +209,19 @@ def test_platform_gui_versions_preserve_mac_and_fix_new_windows() -> None:
     )
     text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     mac = re.search(r"(?ms)^\[tool\.briefcase\.app\.hub\.macOS\]\n(.*?)(?=^\[|\Z)", text)
-    assert mac and re.search(r'(?m)^minimum_system_version\s*=\s*"12\.0"\s*$', mac.group(1)), (
-        "the Windows compatibility fix must not change the existing macOS 12.0 floor"
+    assert mac and re.search(r'(?m)^min_os_version\s*=\s*"12\.0"\s*$', mac.group(1)), (
+        "Briefcase requires min_os_version=12.0; minimum_system_version is ignored"
     )
+    import yaml
+
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["build-macos"]["steps"]
+    names = [step.get("name") for step in steps]
+    gate_name = "Verify the actual macOS deployment floor"
+    assert gate_name in names, "the real built Info.plist needs a deployment-floor gate"
+    gate = steps[names.index(gate_name)]
+    assert "if" not in gate, "the actual bundle floor check must not be skipped"
+    assert names.index("Build the .app") < names.index(gate_name) < names.index("Package the .dmg")
+    assert 'info["LSMinimumSystemVersion"] == "12.0"' in gate["run"]
 
 
 def test_gui_dependency_pins_are_coordinated() -> None:
