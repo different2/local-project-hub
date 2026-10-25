@@ -488,9 +488,11 @@ class ProjectProcess(QObject):
     def restart(self) -> None:
         running = self.proc is not None and self.proc.state() != QProcess.NotRunning
         if running:
-            # A restart must not read as the user's intent to stop: the exit is
-            # expected, and a fresh start follows in _on_finished.
-            self._user_stopped = False
+            # Both Stop and Restart deliberately terminate the current child.
+            # Keep that exit expected through the port-free wait; start() resets
+            # the flag for the replacement so its own failures still report.
+            # _pending_restart separately records the intent to launch again.
+            self._user_stopped = True
             self._pending_restart = True
             self._restart_waiting = None
             self.output.emit("[hub] restarting...\n")

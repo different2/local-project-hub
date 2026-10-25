@@ -611,18 +611,134 @@ def test_load_finishes_ok(tmp: Path) -> None:
 
 
 def test_restart_reloads_dashboard(tmp: Path) -> None:
-    """Restart must bring the dashboard back, not leave the placeholder up."""
+    """A real Restart restores the dashboard without blaming the old child."""
+    from PySide6.QtCore import QProcess
+
     w, port = make_window(tmp)
+    pid = w.active_id
+    assert pid is not None
+    proc = w.procs[pid]
+    states = []
+    exits = []
+    proc.state_changed.connect(states.append)
     try:
         url = f"http://127.0.0.1:{port}/"
-        assert _wait_for(lambda: w.tabs.count() == 2), f"tabs={w.tabs.count()}"
-        _wait_for(lambda: w.web.url().toString() == url)
-        # force the webview off the dashboard, then restart
-        w.web.setUrl(QUrl("about:blank"))
-        w._restart_active()
-        ok = _wait_for(lambda: w.web.url().toString() == url)
-        assert ok, f"dashboard did not come back after restart: {w.web.url().toString()!r}"
+        view = w._view_for(pid)
+        assert _wait_for_page_text(view, "HUB-WINDOW-TEST"), "initial dashboard never rendered"
+        old = proc.proc
+        old_pid = int(old.processId())
+        assert old_pid > 0
+        old.finished.connect(lambda code, status: exits.append(code))
+        # Drive the actual action, not a synthetic state signal. Moving away
+        # from the dashboard also proves Restart reloads it rather than merely
+        # leaving the previous page visible while the child changes.
+        view.setUrl(QUrl("about:blank"))
+        assert w.act_restart.isEnabled(), "Restart is disabled for a running project"
+        w.act_restart.trigger()
+        assert _wait_for(
+            lambda: proc.proc is not old and proc.state == "running", 30.0
+        ), f"no replacement: states={states}, exits={exits}"
+        assert int(proc.proc.processId()) not in (0, old_pid), "Restart reused the old child"
+        assert exits and old.state() == QProcess.NotRunning, f"old child never exited: {exits}"
+        assert _wait_for_page_text(view, "HUB-WINDOW-TEST"), "replacement dashboard never rendered"
+        assert view.url().toString() == url
+        assert w.tabs.currentWidget() is view and view.isVisible()
+        assert view.width() > 0 and view.height() > 0
+        terminal = w.log_view._edit_for(pid).toPlainText()
+        assert "[hub] process exited (code=" in terminal, terminal
+        assert "exited with an error" not in terminal, (
+            f"Restart mislabeled its intentional exit: states={states}, exits={exits}\n{terminal}"
+        )
+        assert "error" not in states, states
     finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc.state() == QProcess.NotRunning), "fixture child leaked"
+        w.close()
+
+
+def test_restart_replacement_startup_failure_still_reports_error(tmp: Path) -> None:
+    """Restart's expected old exit must not hide a broken replacement."""
+    from PySide6.QtCore import QProcess
+    from hub.readiness import tcp_open
+
+    w, port = make_window(tmp)
+    pid = w.active_id
+    assert pid is not None
+    proc = w.procs[pid]
+    states = []
+    running_pids = []
+    old_exit_errors = []
+    proc.state_changed.connect(states.append)
+    proc.state_changed.connect(
+        lambda state: running_pids.append(int(proc.proc.processId())) if state == "running" else None
+    )
+    try:
+        view = w._view_for(pid)
+        assert view is not None
+        assert _wait_for_page_text(view, "HUB-WINDOW-TEST"), "initial dashboard never rendered"
+        old = proc.proc
+        assert old is not None
+        old_pid = int(old.processId())
+        old.finished.connect(lambda code, status: old_exit_errors.append(states.count("error")))
+        # The executable really starts, then the replacement fails during its
+        # own startup. No synthetic error state or mocked start/finish handler.
+        (tmp / "srv.py").write_text(
+            "print('REPLACEMENT_STARTUP_FAILED', flush=True)\nraise SystemExit(23)\n"
+        )
+        assert w.act_restart.isEnabled()
+        w.act_restart.trigger()
+        assert _wait_for(
+            lambda: proc.proc is not old and proc.proc.state() == QProcess.NotRunning, 30.0
+        ), f"replacement did not finish: states={states}, pids={running_pids}"
+        assert running_pids and running_pids[-1] not in (0, old_pid), running_pids
+        assert proc.proc.exitCode() == 23, proc.proc.exitCode()
+        terminal = w.log_view._edit_for(pid).toPlainText()
+        assert "REPLACEMENT_STARTUP_FAILED" in terminal, terminal
+        assert proc.state == "error", f"replacement failure hidden: states={states}\n{terminal}"
+        assert old_exit_errors == [0], f"the deliberate old exit was blamed: {old_exit_errors}\n{terminal}"
+        assert states.count("error") == 1, f"expected one replacement error: {states}\n{terminal}"
+        assert terminal.count("exited with an error") == 1, terminal
+        assert w._view_for(pid) is view, "failure discarded the project's terminal tab"
+        assert _wait_for(lambda: not tcp_open("127.0.0.1", port, timeout=0.1)), "fixture listener leaked"
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc.state() == QProcess.NotRunning), "fixture child leaked"
+        w.close()
+
+
+def test_unrequested_termination_still_logs_error(tmp: Path) -> None:
+    """The same SIGTERM without Stop/Restart intent is a genuine error."""
+    from PySide6.QtCore import QProcess
+    from hub.readiness import tcp_open
+
+    w, port = make_window(tmp)
+    pid = w.active_id
+    assert pid is not None
+    proc = w.procs[pid]
+    states = []
+    proc.state_changed.connect(states.append)
+    try:
+        view = w._view_for(pid)
+        assert view is not None
+        assert _wait_for_page_text(view, "HUB-WINDOW-TEST"), "initial dashboard never rendered"
+        # Terminate only our real child directly; bypassing ProjectProcess.stop
+        # is intentional, because no user lifecycle request precedes this exit.
+        child = proc.proc
+        assert child is not None
+        if sys.platform.startswith("win"):
+            child.kill()  # console children do not receive terminate's WM_CLOSE
+        else:
+            child.terminate()  # the same SIGTERM sent by Stop/Restart
+        assert _wait_for(lambda: child.state() == QProcess.NotRunning), "owned child did not exit"
+        assert child.exitCode() != 0, child.exitCode()
+        terminal = w.log_view._edit_for(pid).toPlainText()
+        assert proc.state == "error" and states.count("error") == 1, (proc.state, states, terminal)
+        assert terminal.count("exited with an error") == 1, terminal
+        assert w._view_for(pid) is view, "an unexpected exit closed the terminal tab"
+        assert _wait_for(lambda: not tcp_open("127.0.0.1", port, timeout=0.1)), "fixture listener leaked"
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc.state() == QProcess.NotRunning), "fixture child leaked"
         w.close()
 
 

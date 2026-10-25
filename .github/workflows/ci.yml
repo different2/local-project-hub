@@ -1,49 +1,314 @@
-# TEMPORARY workbench on the fix branch only. Restore the ordinary CI workflow
-# before final full verification. No release, build or publishing job is present.
-name: TEMP Windows Qt compatibility observations
+name: CI
+
+# NB: this key must stay spelled "on" -- quoted, and never re-dumped through
+# PyYAML, which follows YAML 1.1 where `on` is a boolean and rewrote it as
+# `true:`. GitHub rejected the whole workflow with "Unexpected value 'true'",
+# and the resulting 0-second runs were indistinguishable from runner refusal.
 'on':
+  push:
+    branches:
+      - main
+    tags:
+      - v*
   pull_request:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch: null
+
 permissions:
   contents: read
+
 jobs:
-  probe:
-    name: TEMP observations (${{ matrix.os }})
+  test:
+    name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The cap has to cover the real work, and that is dominated by one suite:
+    # test_urldetect takes ~6 minutes because 9 of its tests create a real
+    # QtWebEngine window and each is isolated into its own process (running the
+    # file in a single process segfaults at Qt shutdown with zero tests
+    # reported -- that is what the isolation is for, so it cannot simply be
+    # dropped). 15 suites together land near 30 minutes on this Mac and more on
+    # a CI runner, so a 35-minute cap killed the job before any output was
+    # written, twice.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
+      # max-parallel: 1 -- the suites bind fixed ports on 127.0.0.1, so two
+      # platforms could not collide even if they shared a machine (they do not:
+      # each matrix job gets its own runner). Serialising is about runner
+      # ALLOCATION, not isolation: parallel GUI jobs contend for the account's
+      # capacity, and a platform that needs a slot can sit queued behind one
+      # that is only slow. One at a time gets the scarce runner to the platform
+      # that needs it.
       max-parallel: 1
       matrix:
-        os: [windows-2022, windows-2025]
+        # Pinned to 24.04: the ubuntu-latest label moves to Ubuntu 26, which
+        # this project has not been tested against.
+        #
+        # Windows needs a runner because the developer's machine is macOS,
+        # where the full suite is verified locally. Native Linux has not been
+        # rerun for PR #2. Add another platform deliberately when it needs
+        # validation: each entry costs runner capacity.
+        os:
+          # Cover both Windows hosts with the validated Qt 6.12.0 stack and
+          # normal sandboxing. macOS keeps 6.7.3 and its existing OS floor.
+          - windows-2022
+          - windows-2025
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Prepare isolated baseline and current-stable Qt environments
-        shell: pwsh
+
+      - name: Install dependencies
         run: |
-          foreach ($version in @('6.7.3', '6.12.0')) {
-            $target = Join-Path $env:RUNNER_TEMP ('lph-qt-' + $version)
-            python -m venv $target
-            if ($LASTEXITCODE -ne 0) { throw 'venv creation failed' }
-            $python = Join-Path $target 'Scripts/python.exe'
-            & $python -m pip install --disable-pip-version-check "PySide6==$version" "PySide6-Essentials==$version" "PySide6-Addons==$version" 'Pillow==11.3.0' 'certifi==2026.10.18' pytest PyYAML
-            if ($LASTEXITCODE -ne 0) { throw "dependency install failed for Qt $version" }
-          }
-      - name: TEMP collect default-sandbox renderer and exact Hub observations
-        env:
-          PROBE_IMAGE: ${{ matrix.os }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python tools/windows_qt_compat_probe.py
-      - name: Preserve actual observations and rendered images even on failure
+          python -m pip install --upgrade pip
+          # QtWebEngineWidgets lives in the base PySide6 wheel, NOT in
+          # PySide6-Addons/Essentials. Naming only the Addons/Essentials
+          # packages installs a PySide6 that imports fine and then fails with
+          # "No module named PySide6.QtWebEngineWidgets", which makes every GUI
+          # suite exit non-zero with zero tests run.
+          #
+          # PyYAML is needed by tests/test_workflow_yaml.py, which guards this
+          # very file. Without it that guard dies with ModuleNotFoundError on
+          # every platform -- and this file is what broke silently once already,
+          # so its guard has to be able to run everywhere.
+          #
+          # The GUI and trust-store set is pinned; it must match the app
+          # bundle and the local venvs (see DEVELOPMENT.md "Dependency
+          # versions"), and a test fails if the pins drift or go unpinned.
+          # certifi is what the app's own HTTPS verifies against (the bundle
+          # has no default CA store); pyobjc (macOS only — the marker keeps
+          # the Linux and Windows runners from installing it) is the AppKit
+          # piece of the About-box fix, pinned to what the shipped bundles
+          # contain.
+          python -m pip install "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0" "PySide6==6.12.0" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
+          python -m pip install pytest PyYAML
+
+      # Must come BEFORE the import check below: the check needs libEGL and
+      # friends, so running it first reports a missing-OS-library problem as a
+      # missing-wheel problem and sends you chasing the wrong cause.
+      - name: Install Qt runtime libraries (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # Install each package individually and tolerate a name that does not
+          # exist in this image: one wrong name must not abort the whole job and
+          # hide the real Qt error. The import guard below is the actual check.
+          for p in \
+            libegl1 libgl1 libglib2.0-0 libdbus-1-3 \
+            libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 libxcb-cursor0 libxcb-glx0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xkb1 libxext6 \
+            libxfixes3 libxi6 libxrender1 libfontconfig1 libfreetype6 libgbm1 libasound2 libnss3 \
+            libnspr4 libexpat1 ; do
+            sudo apt-get install -y --no-install-recommends "$p" \
+              || echo "::warning::$p unavailable in this image (continuing)"
+          done
+          sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: Verify QtWebEngine is importable
+        shell: bash
+        run: |
+          # QtWebEngineWidgets ships in the base PySide6 wheel. Assert it imports
+          # so a resolution problem names itself here instead of surfacing later
+          # as a bare "Run the test suite" failure with no output to read.
+          python -c "import PySide6, os; d=os.path.dirname(PySide6.__file__); print('PySide6', PySide6.__version__, 'at', d)"
+          python -m pip list | grep -i pyside || true
+          python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('QtWebEngine OK', __import__('PySide6').__version__)"
+
+      - name: Run the test suite
+        shell: bash
+        run: |
+          # Tee to a .log so the upload step below has something to publish even
+          # when the suite fails. Without the tee a failing run uploaded an
+          # empty artifact and the failure could not be read offline.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python tests/run_all.py 2>&1 | tee test-output.log
+          else
+            python tests/run_all.py 2>&1 | tee test-output.log
+          fi
+          # Preserve the suite's exit code through the pipe; tee would mask it
+          # and report a red suite as green.
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload test log
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: qt-compat-${{ matrix.os }}
-          path: |
-            qt-compat-report.json
-            qt-compat-images/*.png
-          if-no-files-found: error
+          name: test-log-${{ runner.os }}
+          path: '**/*.log'
+          if-no-files-found: ignore
           retention-days: 7
+
+  # The two build jobs run on a version tag OR on a manual dispatch. Dispatch
+  # exists because these jobs are otherwise unreachable until a release is cut,
+  # so a broken packaging change could only be discovered by spending a tag on
+  # it — which is exactly how the `--msi` and `--dmg` typos survived unnoticed.
+  # A dispatch run builds and uploads artifacts and NEVER publishes: `publish`
+  # below stays tag-gated, so a manual click cannot cut a release.
+  build-macos:
+    name: Build macOS installer
+    runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Check the tag matches the app version
+        # Runs before the build so a forgotten version bump fails in seconds
+        # instead of after ten minutes of packaging. Only on tags: a manual
+        # dispatch has a branch name here, not a version.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/check_tag_version.py "${{ github.ref_name }}"
+      - name: Install Briefcase and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Pinned deliberately: briefcase produces the release artifacts, so a
+          # new version arriving silently is a change to the release path we did
+          # not ask for. 0.4.6 is the version v0.3.7 and v0.3.8 were built with.
+          # Bump this pin as a reviewed, standalone change —
+          # tests/test_workflow_yaml.py fails if it goes unpinned again.
+          python -m pip install "briefcase==0.4.6"
+          # The GUI set, pinned to what the suite runs and the bundle ships
+          # (see DEVELOPMENT.md "Dependency versions" — 6.7.3 is the newest
+          # PySide6 the app bundle can take while it targets older macOS).
+          python -m pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "PySide6-Essentials==6.7.3" "Pillow==11.3.0"
+      - name: Build the .app
+        run: briefcase build macOS
+      - name: Package the .dmg
+        # `-p dmg`, not `--dmg`: briefcase has no `--dmg` flag (it takes
+        # -p/--packaging-format with zip|dmg|pkg).
+        #
+        # `--adhoc-sign` is required for CI, not cosmetic. With no identity
+        # configured, briefcase PROMPTS ("Select application signing identity
+        # to use:") and there is no terminal to answer, so it aborts with exit
+        # 214 — the first run of this job died exactly that way. Passing the
+        # flag skips the prompt and ad-hoc signs, which is what a local build
+        # produces anyway when the prompt is answered with its default. The
+        # result is unsigned-in-practice: Gatekeeper needs right-click → Open
+        # on first launch, the same as the local .dmg.
+        run: briefcase package macOS -p dmg --adhoc-sign
+      - name: Collect the installer
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -name "*.dmg" -exec cp {} dist/ \;
+          ls -la dist/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LocalProjectHub-macOS
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-2025
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/check_tag_version.py "${{ github.ref_name }}"
+      - name: Install Briefcase and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Pinned deliberately: briefcase produces the release artifacts, so a
+          # new version arriving silently is a change to the release path we did
+          # not ask for. 0.4.6 is the version v0.3.7 and v0.3.8 were built with.
+          # Bump this pin as a reviewed, standalone change —
+          # tests/test_workflow_yaml.py fails if it goes unpinned again.
+          python -m pip install "briefcase==0.4.6"
+          # Match Windows tests and the platform-marked package dependencies.
+          # macOS deliberately retains 6.7.3 and its existing support floor.
+          python -m pip install "PySide6==6.12.0" "PySide6-Addons==6.12.0" "PySide6-Essentials==6.12.0" "Pillow==11.3.0"
+      - name: Build the MSI installer
+        # `--msi` was never a valid flag — this job is tag-gated and the repo had
+        # no tags until v0.3.7, so the command had never once been executed and
+        # the typo went unnoticed. The flag is -p/--packaging-format, which is
+        # what both the runner's Briefcase and the local .buildenv (0.4.5) accept.
+        run: briefcase package windows -p msi
+      - name: Collect the installer
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -name "*.msi" -exec cp {} dist/ \;
+          ls -la dist/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LocalProjectHub-Windows
+          path: dist/*.msi
+          if-no-files-found: error
+
+  publish:
+    name: Publish to the GitHub release
+    runs-on: ubuntu-24.04
+    needs:
+      # Both platforms, deliberately. `needs` is a hard gate: if either build
+      # fails, nothing is published and the run is red, rather than quietly
+      # shipping a release one platform cannot update from.
+      - build-macos
+      - build-windows
+    # TAGS ONLY — never add `|| github.event_name == 'workflow_dispatch'` here.
+    # The build jobs above accept a manual dispatch so packaging can be tested
+    # without cutting a release; this job is what actually creates the release
+    # and attaches installers, so a manual run must not be able to do that.
+    # tests/test_workflow_yaml.py asserts this stays true.
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: release
+    # The workflow sets `contents: read` for everything, which is right for the
+    # test and build jobs. Creating a release and attaching an asset needs write,
+    # so it is granted here — to this job only, never workflow-wide. Without it
+    # the token is read-only and GitHub answers
+    # "HTTP 403: Resource not accessible by integration".
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create the release if it does not exist
+        # `gh release upload` only attaches to a release that already exists —
+        # nothing in this workflow ever created one, so the first tag that
+        # reached this job died with "release not found" after successfully
+        # downloading a 104 MB installer. The release is the thing users land
+        # on, so it has to be created before anything is attached to it.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" \
+              --title "$tag" --generate-notes
+      - name: Upload installers to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la artifacts/
+          gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* \
+            --clobber --repo "${GITHUB_REPOSITORY}"
+      - name: Verify every published asset has a SHA-256 digest
+        # The in-app updater is fail-closed: it refuses to install an asset
+        # whose release metadata carries no usable `sha256:` digest. GitHub
+        # computes that digest when an asset is uploaded through the API, and
+        # this step makes a release FAIL rather than publish installers the
+        # app will then refuse to update from.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          missing="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" \
+              --jq '[.assets[] | select(((.digest // "") | startswith("sha256:")) | not) | .name] | join(", ")'
+          )"
+          if [ -n "$missing" ]; then
+            echo "::error::release $tag has assets without a SHA-256 digest: $missing"
+            exit 1
+          fi
+          echo "All release assets carry a sha256 digest."

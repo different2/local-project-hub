@@ -10,7 +10,7 @@ state and open threads live in [HANDOFF.md](HANDOFF.md).
 ./run.sh          # uses ./.hubenv if present, else $PATH python3
 ```
 
-Or set up the venv once (recommended — avoids PATH surprises):
+Or set up the venv once on macOS (recommended — avoids PATH surprises):
 
 ```bash
 python3 -m venv .hubenv
@@ -19,30 +19,41 @@ python3 -m venv .hubenv
 .hubenv/bin/python main.py
 ```
 
-(Those are the project's pinned versions — see "Dependency versions" below.)
+Windows uses Python 3.11 and the separately validated Windows Qt version:
+
+```powershell
+py -3.11 -m venv .hubenv
+.\.hubenv\Scripts\python.exe -m pip install "PySide6==6.12.0" "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0" "Pillow==11.3.0" "certifi==2026.10.18"
+$env:LOCAL_PROJECT_HUB_HOME = Join-Path $PWD '.hubstate'
+.\.hubenv\Scripts\python.exe main.py
+```
+
+See "Dependency versions" below before changing either platform's pins.
 
 Notes:
 
 - `run.sh` points the app's state at `./.hubstate` (via
   `LOCAL_PROJECT_HUB_HOME`), so a source run does not disturb the registry of
   an installed copy.
-- The packaged app runs Python 3.11+ (wheels for arm64 macOS); this checkout
-  also runs on the dev interpreter (3.9.6 on the author's machine), and the
-  suite is kept green on both 3.9 and 3.11.
+- The packaged app and Windows development use Python 3.11+. The macOS source
+  checkout also supports the existing 3.9.6 dev interpreter with Qt 6.7.3;
+  the newer Windows Qt is not compatible with Python 3.9.
 
 ## Dependency versions (updated deliberately)
 
-The GUI stack and the app's HTTPS trust store are pinned to **one coordinated
-set** — CI, the packaged app, and both local venvs must all use exactly these:
+The GUI stack is pinned to **one coordinated set per OS**. Within each OS,
+CI, packaging and the local venv must agree; do not mix versions of the three
+PySide6 distributions.
 
-```
-PySide6==6.7.3
-PySide6-Essentials==6.7.3   # the trio ships in lockstep; always the same version
-PySide6-Addons==6.7.3
-Pillow==11.3.0
-certifi==2026.10.18         # CA trust store for the app's own HTTPS (see below)
-pyobjc-framework-Cocoa==12.2.2   # macOS only; needs Python >= 3.10 (see below)
-```
+| Dependency | macOS | Windows |
+|---|---|---|
+| PySide6, PySide6-Essentials, PySide6-Addons | 6.7.3 | 6.12.0 |
+| Pillow | 11.3.0 | 11.3.0 |
+| certifi | 2026.10.18 | 2026.10.18 |
+| pyobjc-framework-Cocoa | 12.2.2 (Python 3.10+; see dev exception below) | not installed |
+
+The `sys_platform` markers in `pyproject.toml` select the platform's pair.
+CI tests and the Windows build use 6.12.0; the macOS build retains 6.7.3.
 
 Where the pins live (they move together):
 
@@ -52,14 +63,24 @@ Where the pins live (they move together):
 | `pyproject.toml` → `requires` | the PySide6 pair, certifi and pyobjc — what briefcase bundles into the app |
 | local venvs (`.hubenv`, `.buildenv`) | the whole set, installed by hand |
 
-**Why 6.7.3 and not the latest:** briefcase installs the bundle's dependencies
+**Why retain 6.7.3 on macOS:** briefcase installs the bundle's dependencies
 with `pip --platform macosx_11_0_{arch}` (its macOS target comes from the
 support settings), and PySide6 moved its macOS wheels to macOS-12+ tags in
 6.8, macOS-13+ in 6.10 and macOS-14+ in 6.12. So 6.7.3 is the newest PySide6
-the app bundle can actually install — and it is what the shipped builds
+the current macOS bundle can actually install — and it is what the shipped builds
 contain. Choosing newer Qt means changing what macOS the app targets, which
 is a product decision, not a dependency bump. (6.12 also requires Python
 ≥3.10, which the 3.9 dev venv cannot take.)
+
+**Why 6.12.0 on Windows:** the old 6.7.3 renderer crashes on the Windows 2025
+host, even for a bare WebEngine page. In the
+[controlled old/new comparison](https://github.com/different2/local-project-hub/actions/runs/40168797374),
+6.12.0 passed bare native/offscreen rendering and the real Hub start-page,
+Start and popup cases on both Windows hosts with the sandbox enabled. The old
+version failed those same cases on the newer host. Deliberately wrong-title
+controls remained red, so successful observation collection was not confused
+with successful rendering. This is a platform-specific dependency correction,
+not a sandbox bypass or an increase in the macOS 12.0 support floor.
 
 **Why certifi:** the packaged app's Python has no default CA store — its
 compiled-in paths point at the python.org framework location, which is not
@@ -79,17 +100,16 @@ and the AppKit path is exercised against 12.2.2 in the packaged app.
 
 **To update the set, deliberately, as one change:**
 
-1. Pick the version; check it against every consumer: the 3.9 dev venv, CI's
-   3.11, Windows wheels, and the bundle (`pip --platform macosx_11_0_*`).
-2. Bump every pin together: the install lines in `ci.yml`, `requires` in
-   `pyproject.toml`, and both venvs —
-   `.hubenv/bin/pip install "PySide6==X" …`, same for `.buildenv`. certifi
-   and pyobjc live in the same places (pyobjc needs Python >= 3.10, so the
-   3.9 dev venv cannot take 12.x).
+1. Pick the OS and version; check its Python/wheel/deployment requirements.
+   A Windows update must not silently raise the macOS or dev-Python floor.
+2. Bump that OS's CI install lines, matching `sys_platform` requirements in
+   `pyproject.toml`, and its local venvs together. Keep the PySide6 trio in
+   lockstep. certifi and pyobjc remain coordinated in the same places.
 3. Run the suite (`python3 tests/run_all.py`); `test_workflow_yaml.py` also
    fails if the pins drift apart or go unpinned.
 4. Exercise packaging without releasing: `gh workflow run CI --ref main`.
-5. Release as usual.
+5. Release only when separately intended; a dependency fix or merge is not
+   itself authorization to publish or replace an installed copy.
 
 `pytest` and `PyYAML` are test-only tools and deliberately not part of the
 set — they never ship.
@@ -106,17 +126,17 @@ python3 tests/run_all.py
   runners.
 - A single suite runs directly: `.hubenv/bin/python tests/test_store.py`.
 - On a headless machine, prepend `QT_QPA_PLATFORM=offscreen`.
-- CI runs the suite on **Windows 2022 only**; macOS is verified locally.
-  Native Linux has not been rerun for PR #2. Each extra matrix entry costs
-  runner capacity, so add one deliberately when that platform needs validation.
-- The Windows test image is pinned rather than `windows-latest`: a
-  [controlled comparison](https://github.com/different2/local-project-hub/actions/runs/40144633615)
-  using identical Python 3.11.9 and Qt 6.7.3 reproduced the renderer crash on
-  the Windows 2025 hosted image even with bare Qt and unchanged main.
-  Windows 2022 passed all 15 targeted cases with default sandboxing. Disabling
-  the sandbox also avoided the newer-image crash, but is **not** the fix used
-  here: application security and dependency pins stay unchanged. Revalidate
-  before moving the test image; `test_workflow_yaml.py` guards the pin.
+- CI runs the full suite on **Windows 2022 and Windows 2025**, serially across
+  the matrix; macOS is verified locally. Linux is outside this follow-up's scope.
+- Windows images are pinned rather than `windows-latest`; the Windows builder
+  uses 2025 too. The older-image pin originally avoided a Qt 6.7.3 CI blocker,
+  but did not fix newer-Windows compatibility. The platform-specific Qt update
+  now addresses that failure without disabling the renderer sandbox.
+- `test_workflow_yaml.py` checks per-OS package/CI/build coherence, the actual
+  loaded Qt version, both Windows images, absence of CI sandbox bypasses and
+  preservation of the macOS dependency/support floor. Handoff records name
+  the exact heads and full-suite results; targeted controls alone are not a
+  full product regression pass.
 
 ## Repo layout
 
