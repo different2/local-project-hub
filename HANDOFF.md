@@ -17,7 +17,32 @@ this project have died mid-task on provider errors, so state belongs here
 and in commits — not only in chat. Developer docs (run, test, package,
 release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
 PR #2 is merged with the original contributor's history preserved. Read the
-current integration status below; the older audit triage is historical._
+current task and integration status below; the older audit triage is historical._
+
+## Current task: Restart false error and Windows compatibility (in progress)
+
+The user requested fixing both follow-ups and explicitly excluding Linux.
+Work is isolated from main in
+`~/.hermes/cache/scratch/lph-followup-two-bugs/`: parent `tree/` on
+`fix/windows-qt-compatibility`, Restart implementation `restart/` on
+`fix/restart-intent-logging`. Installed app/release remain untouched.
+
+Draft [PR #3](https://github.com/different2/local-project-hub/pull/3) is an
+explicitly TEMP diagnostic head, **not mergeable product verification**.
+Run [40168323295](https://github.com/different2/local-project-hub/actions/runs/40168323295)
+compares Qt 6.7.3 with 6.12.0 on Windows 2022/2025, without sandbox bypasses.
+The candidate's real Hub start-page, Start and popup checks pass on Windows
+2025 while the old version fails; bare rendering loads too, but the first
+observer wrongly classified a normal renderer exit during its own shutdown.
+A phase-aware observer correction is being validated before drawing final
+conclusions. Preserve macOS's existing Qt/support floor; do not upgrade it
+blindly to Windows's candidate version.
+
+Read `lph-followup-two-bugs/STATUS.md` for current run/head/watch IDs and exact
+next actions. Restart TDD implementation and independent compatibility research
+are delegated; do not run concurrent local Qt GUI suites or poll child progress
+files. The ordinary CI workflow must be restored and TEMP diagnostics removed
+before full regression verification. No release/install is requested.
 
 ## PR #2 merged (2026-10-24 — supersedes every earlier integration checkpoint)
 
