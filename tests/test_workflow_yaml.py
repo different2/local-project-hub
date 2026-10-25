@@ -126,7 +126,7 @@ def test_manual_dispatch_builds_but_never_publishes() -> None:
     def condition(name):
         return str(jobs[name].get("if") or "")
 
-    for name in ("build-macos", "build-windows"):
+    for name in ("build-macos", "build-windows", "build-linux"):
         assert "workflow_dispatch" in condition(name), (
             f"{name!r} cannot be run on demand, so a packaging change is still "
             "only testable by cutting a release"
@@ -217,28 +217,37 @@ def test_platform_gui_versions_preserve_mac_and_fix_new_windows() -> None:
 def test_gui_dependency_pins_are_coordinated() -> None:
     """Each OS tests and packages one matching, internally coherent Qt trio."""
     import re
+    import shlex
     import yaml
+    from packaging.requirements import Requirement
 
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    for job, platform in (("test", "win32"), ("build-windows", "win32"),
+    for job, platform in (("test", "win32"), ("test", "linux"),
+                          ("build-windows", "win32"), ("build-linux", "linux"),
                           ("build-macos", "darwin")):
         commands = "\n".join(
             line for step in workflow["jobs"][job]["steps"]
             for line in str(step.get("run", "")).splitlines()
             if "pip install" in line and not line.strip().startswith("#")
         )
-        found = re.findall(r"(PySide6(?:-(?:Essentials|Addons))?)==([0-9.]+)", commands)
         pins = {}
-        for name, version in found:
-            assert name not in pins or pins[name] == version, (job, found)
-            pins[name] = version
+        for line in commands.splitlines():
+            for token in shlex.split(line):
+                if not re.match(r"^PySide6(?:-(?:Essentials|Addons))?(?:[=<>!~;]|$)", token):
+                    continue
+                requirement = Requirement(token)
+                if requirement.marker and not requirement.marker.evaluate({"sys_platform": platform}):
+                    continue
+                version = str(requirement.specifier)
+                assert re.fullmatch(r"==[0-9]+(?:\.[0-9]+)+", version), (job, token)
+                assert requirement.name not in pins, (job, platform, "duplicate active Qt requirement")
+                pins[requirement.name] = version[2:]
         assert set(pins) == {"PySide6", "PySide6-Essentials", "PySide6-Addons"}, (job, pins)
         expected = next(iter(_packaged_gui_pins(platform).values()))
         assert set(pins.values()) == {expected}, (
             f"{job} tests/builds Qt {pins}, but {platform} packages Qt {expected}"
         )
-        names = re.findall(r"(?<![\w-])(PySide6(?:-(?:Essentials|Addons))?)", commands)
-        assert len(names) == len(found), f"unversioned Qt requirement in {job}"
+
         assert "Pillow==11.3.0" in commands, f"Pillow pin missing from {job}"
         assert not re.search(r"(?<![\w-])Pillow(?!==)", commands), f"unpinned Pillow in {job}"
 
@@ -371,8 +380,8 @@ def test_tag_check_gets_the_tag_on_every_shell() -> None:
         for ln in WORKFLOW.read_text(encoding="utf-8").splitlines()
         if "check_tag_version.py" in ln and not ln.strip().startswith("#")
     ]
-    assert len(lines) == 2, (
-        f"expected the tag check in both build jobs, found {len(lines)}"
+    assert len(lines) == 3, (
+        f"expected the tag check in all three build jobs, found {len(lines)}"
     )
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "${GITHUB_REF_NAME}" not in text, (
@@ -384,6 +393,58 @@ def test_tag_check_gets_the_tag_on_every_shell() -> None:
         assert '"${{ github.ref_name }}"' in ln, (
             f"tag check does not pass the runner-expanded tag: {ln!r}"
         )
+
+
+def test_linux_release_has_real_test_build_and_publish_gates() -> None:
+    """Linux support must execute, produce an artifact and gate publication."""
+    import yaml
+
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    images = jobs["test"]["strategy"]["matrix"]["os"]
+    assert "ubuntu-24.04" in images, "Linux has no full regression runner"
+    assert "build-linux" in jobs, "Linux has no packaging job"
+    build = jobs["build-linux"]
+    assert build["runs-on"] == "ubuntu-24.04", "Linux builder must be pinned"
+    condition = str(build.get("if", ""))
+    assert "workflow_dispatch" in condition and "refs/tags/v" in condition, (
+        "Linux packaging must be testable without publishing and run on tags"
+    )
+    required = {"test", "build-macos", "build-windows", "build-linux"}
+    assert required <= set(jobs["publish"]["needs"]), (
+        "publication must wait for tests and every supported platform build"
+    )
+    uploads = [s for s in build["steps"]
+               if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert len(uploads) == 1 and uploads[0]["with"]["if-no-files-found"] == "error", (
+        "a missing Linux installer must fail, not produce a green empty upload"
+    )
+
+
+def test_frontpage_downloads_are_platform_specific_latest_links() -> None:
+    """No version-pinned front-page downloads or missing Linux download."""
+    import re
+    from urllib.parse import unquote, urlparse
+
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    table = readme.split("## Download\n", 1)[1].split("## Requirements", 1)[0]
+    rows = [line for line in table.splitlines()
+            if line.startswith("|") and any(p in line for p in ("macOS", "Windows", "Linux"))]
+    assert len(rows) == 3, "front page must provide macOS, Windows and Linux downloads"
+    names = set()
+    for row in rows:
+        links = re.findall(r"\]\((https://github\.com/[^)]+)\)", row)
+        assert len(links) == 1, f"expected one platform download: {row}"
+        path = urlparse(links[0]).path
+        prefix = "/different2/local-project-hub/releases/latest/download/"
+        assert path.startswith(prefix), f"front-page download is not latest: {links[0]}"
+        name = unquote(path.removeprefix(prefix))
+        assert name and "/" not in name, f"invalid latest asset name: {name}"
+        assert not re.search(r"\d+\.\d+\.\d+", name), f"version-pinned filename: {name}"
+        names.add(name)
+    assert len(names) == 3, "platforms must not share a generic release-page link"
+    assert not re.search(r"Latest version:\s*\*\*v?\d", table), (
+        "a hardcoded latest-version label goes stale after the next release"
+    )
 
 
 if __name__ == "__main__":
