@@ -1,6 +1,6 @@
 # HANDOFF — Local Project Hub
 
-_Last written: 2026-10-24, resume checkpoint — **v0.7.0 IS LIVE: opening a project no
+_Resume checkpoint — **v0.7.0 IS LIVE: opening a project no
 longer starts it.** A click in the sidebar now only opens the project's tab,
 on a page in the app's own colours with the project's name, its command and
 one **Start** button in the middle; the project runs when Start is pressed.
@@ -27,22 +27,47 @@ Work is isolated from main in
 `fix/windows-qt-compatibility`, Restart implementation `restart/` on
 `fix/restart-intent-logging`. Installed app/release remain untouched.
 
-Draft [PR #3](https://github.com/different2/local-project-hub/pull/3) is an
-explicitly TEMP diagnostic head, **not mergeable product verification**.
-Run [40168323295](https://github.com/different2/local-project-hub/actions/runs/40168323295)
-compares Qt 6.7.3 with 6.12.0 on Windows 2022/2025, without sandbox bypasses.
-The candidate's real Hub start-page, Start and popup checks pass on Windows
-2025 while the old version fails; bare rendering loads too, but the first
-observer wrongly classified a normal renderer exit during its own shutdown.
-A phase-aware observer correction is being validated before drawing final
-conclusions. Preserve macOS's existing Qt/support floor; do not upgrade it
-blindly to Windows's candidate version.
+Draft [PR #3](https://github.com/different2/local-project-hub/pull/3) now contains
+the combined fixes, committed as `face90c` and integrated with main's docs at
+`2583e4c`; final full-suite acceptance is still pending. Ordinary CI is restored
+and TEMP diagnostics are archived outside the repository and removed.
 
-Read `lph-followup-two-bugs/STATUS.md` for current run/head/watch IDs and exact
-next actions. Restart TDD implementation and independent compatibility research
-are delegated; do not run concurrent local Qt GUI suites or poll child progress
-files. The ordinary CI workflow must be restored and TEMP diagnostics removed
-before full regression verification. No release/install is requested.
+- Restart marks the old child's termination as requested, retaining intent
+  through the port wait; fresh startup resets it so real failures stay errors.
+  Raw logs independently counted: 31 targeted passes plus 4 post-commit passes,
+  with clean child exits and load-bearing failure/mutation controls.
+- Windows requirements/test/build pins select Qt 6.12.0; macOS retains 6.7.3 and
+  its existing macOS 12.0 floor. Windows runs only on actual GitHub Windows
+  runners, not this Mac. Both 2022/2025 images are in ordinary full CI.
+- [Controlled comparison 40168797374](https://github.com/different2/local-project-hub/actions/runs/40168797374):
+  five positive cases passed on each host with new Qt; old Qt failed those same
+  cases on 2025. Wrong-title controls stayed red and sandbox bypasses were absent.
+  The phase-aware observer correction is verified; observation collection is
+  not being counted as full-product verification.
+- Independent packet-only Review Checkpoint (`deleg_98befe9b`, gpt-6.1-sol /
+  openai-codex): clear, no actionable findings; schema validated. Configuration
+  guards pass on Python 3.11/3.9 with eight proven negative controls.
+- Candidate `a93f61f` passed the full Mac suite (319 passed / 3 skipped), with
+  a separate raw-exit audit confirming 104 actual child exits all zero and
+  322 unique test verdicts. Its Windows 2022 suite passed 316 / 6 skipped.
+  While checking its artifacts, a new two-image CI naming collision was found:
+  `runner.os` made both names `test-log-Windows`. The upload name now uses
+  `matrix.os`; a new guard reproduces the old collision and passes after the
+  one-line fix (14 guards on both local Python versions). Bounded re-review
+  `deleg_517e1bbb` is clear. App source/dependency files are unchanged by this
+  correction. Corrected-head full verification still needs to finish; any
+  deliberately superseded old CI run is not an application-test regression.
+- Cocoa lifecycle/DOM/PID/HTTP/listener/terminal checks pass with no false error,
+  but the strict native smoke exits 1 because top-level `isExposed` is false.
+  One explicit activation control did not resolve exposure. Do not claim a full
+  on-screen native pass or turn this unknown into a product regression.
+
+Next: finish full macOS and ordinary Windows 2022/2025 regression at the exact
+combined candidate, inspect actual artifacts/counts, then integrate only after
+the acceptance results are understood. Read
+`~/.hermes/cache/scratch/lph-followup-two-bugs/STATUS.md` for run/head/watch IDs
+and exact actions. Keep local Qt GUI suites serial. No release/install is
+requested; installed 0.7.0/build 1 remains untouched.
 
 ## PR #2 merged (2026-10-24 — supersedes every earlier integration checkpoint)
 

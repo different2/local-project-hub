@@ -195,14 +195,18 @@ class _FakeProc:
     so a stale timer that fires at the WRONG process is visible as a count.
     """
 
-    def __init__(self, pid: int, running: bool = True):
+    def __init__(self, pid: int, running: bool = True, exit_code: int = 0):
         self.pid = pid
         self._state = QProcess.Running if running else QProcess.NotRunning
+        self._exit_code = exit_code
         self.terminated = 0
         self.killed = 0
 
     def state(self):
         return self._state
+
+    def exitCode(self):
+        return self._exit_code
 
     def processId(self):
         return self.pid
@@ -239,6 +243,104 @@ def _fake_tree_kill(monkey_target):
     original = pm._kill_process_tree
     pm._kill_process_tree = lambda pid: calls.append(pid)
     return pm, original, calls
+
+
+def test_restart_exit_is_expected_while_waiting_for_the_port(tmp: Path) -> None:
+    """Exit intent survives consuming the restart request, until a new run."""
+    from unittest.mock import patch
+    from hub import process_manager as pm
+
+    p = _restartable()
+    old = _FakeProc(1001, exit_code=15)
+    p.proc = old
+    p._generation = 1
+    p.rec["url"] = f"http://127.0.0.1:{reserve_port()}/"
+    states = []
+    conflicts = []
+    p.state_changed.connect(states.append)
+    p.port_conflict_from_output.connect(conflicts.append)
+    # Old output must not manufacture a bind-conflict offer during a deliberate
+    # shutdown, even if the history contains a previous startup traceback.
+    p.history.append("OSError: [Errno 48] Address already in use\n")
+    with patch.object(pm.os, "kill"), patch.object(pm.os, "killpg", create=True), \
+            patch.object(pm.urldetect, "port_in_use", return_value=True):
+        try:
+            p.restart()
+            old._state = QProcess.NotRunning
+            before_finished = p.state
+            p._on_finished(15, QProcess.CrashExit, old)
+            assert p._pending_restart is False, "finish never consumed the restart"
+            assert p._restart_waiting == p._generation, "replacement did not wait for its port"
+            assert (before_finished, p.state, states, conflicts) == (
+                "stopped", "stopped", ["stopped"], []
+            ), (before_finished, p.state, states, conflicts)
+        finally:
+            p.stop()  # cancel the owned timer/retry chain before mocks leave
+
+
+def test_explicit_stop_still_classifies_requested_nonzero_exit_as_stopped(tmp: Path) -> None:
+    from unittest.mock import patch
+    from hub import process_manager as pm
+
+    p = _restartable()
+    old = _FakeProc(1001, exit_code=15)
+    p.proc = old
+    states = []
+    p.state_changed.connect(states.append)
+    with patch.object(pm.os, "kill"), patch.object(pm.os, "killpg", create=True):
+        p.stop()
+        old._state = QProcess.NotRunning
+        p._on_finished(15, QProcess.CrashExit, old)
+        assert p.state == "stopped" and states == ["stopped"], (p.state, states)
+        assert not p._pending_restart
+        assert p._restart_waiting is None
+
+
+def test_unexpected_nonzero_exits_remain_errors_regardless_of_qt_status(tmp: Path) -> None:
+    """Neither exit code 15 nor CrashExit is a substitute for exit intent."""
+    for code in (1, 15, 23):
+        for status in (QProcess.NormalExit, QProcess.CrashExit):
+            p = _restartable()
+            child = _FakeProc(1001, running=False, exit_code=code)
+            p.proc = child
+            states = []
+            p.state_changed.connect(states.append)
+            p._on_finished(code, status, child)
+            assert p.state == "error" and states == ["error"], (code, status, p.state, states)
+
+
+def test_late_finished_cannot_consume_replacement_restart_intent(tmp: Path) -> None:
+    """A superseded child's finish cannot act on the current run's intent."""
+    from unittest.mock import patch
+    from hub import process_manager as pm
+
+    p = _restartable()
+    old = _FakeProc(1001, running=False, exit_code=15)
+    new = _FakeProc(2002, exit_code=23)
+    p.proc = new
+    p._generation = 2
+    states = []
+    p.state_changed.connect(states.append)
+    waits = []
+    p._restart_after_port_free = lambda **kwargs: waits.append(kwargs)
+    with patch.object(pm.os, "kill") as kill, patch.object(pm.os, "killpg", create=True) as killpg:
+        try:
+            p.restart()
+            target = p._kill_target
+            p._on_finished(15, QProcess.CrashExit, old)
+            assert states == [] and waits == [], (states, waits)
+            assert p.proc is new and p._generation == 2
+            assert p._pending_restart, "old finish consumed the replacement's pending restart"
+            assert p._kill_target is target, "old finish canceled the replacement's escalation"
+            # It must remain the CURRENT child's intentional exit, not the late
+            # old one, that causes the next replacement to be scheduled.
+            new._state = QProcess.NotRunning
+            p._on_finished(23, QProcess.CrashExit, new)
+            assert states == ["stopped"] and waits == [{"generation": 2}], (states, waits)
+            kill.assert_not_called()
+            killpg.assert_not_called()
+        finally:
+            p._stop_kill_timer()
 
 
 def test_default_grace_period_is_the_production_value(tmp: Path) -> None:
