@@ -45,8 +45,33 @@ It failed in the observer: Chromium rewrote /proc cmdline into one process-title
 field, while the verifier required an exact separate renderer-flag element.
 Parent preserved raw fields and added flag-only token classification (never
 execution), with RED/GREEN real-format and hidden-bypass controls plus saved
-process-snapshot replay. Fresh runtime acceptance remains required; full
-21-suite regression and release/anonymous live-link checks remain pending.
+process-snapshot replay. Fresh full CI40199127356 at464a95d then passed the
+actual installed positive AND deliberately wrong-DOM controls: native screenshot
+visually inspected, renderer3784 UID1001/NoNewPrivs1/Seccomp2, both clean
+WM_DELETE_WINDOW exit0/no owned survivors/source restored. All three installers
+built. Both Windows strict suites passed326/7 with106 actual child exits0 each.
+The Linux source suite failed: its updater fixture assumed non-Mac meant MSI,
+and one re-selection test segfaulted after printing PASS. The strict audit did
+not hide that crash. Publication remains blocked on a fresh clean full run.
+
+Tight actual-Ubuntu diagnosis40214120292 at24120fa compared62 child launches:
+the original updater expectation failed, the platform-aware expectation passed,
+and20 re-selection repetitions each under stock offscreen, XCB and explicit
+DeferredDelete all exited0. The shutdown crash was NOT reproduced or declared
+fixed; no speculative cleanup/backend change was shipped. TEMP diagnostic code
+is retired outside the repository and the complete release workflow restored.
+The first TEMP run40213908259 failed before tests because shallow checkout lacked
+the baseline object; full-history diagnostic checkout corrected that fixture.
+
+The actual downloaded Mac DMG advertised11.0, despite a configured12.0 floor:
+Briefcase0.4.6 reads `min_os_version`, not `minimum_system_version`. A red-first
+guard now checks the effective option, and the Mac build checks its real
+Info.plist before packaging. Actual rebuilt DMG verification is still required.
+The updater test now asserts Linux's visible dismissible/manual result rather
+than offering an MSI; Mac/Windows download assertions remain unchanged. No hub
+application code changed. Independent frozen464a95d packet review returned clear;
+JSON validated, transcript read-only (only mandatory review-skill load). Updated
+full acceptance and one bounded correction review remain pending.
 Do NOT equate a packaging-only manual green with runtime or release acceptance.
 
 The external installed-app smoke harness from local delegate2a83988 is integrated;

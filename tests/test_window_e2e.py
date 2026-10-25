@@ -178,9 +178,17 @@ def test_check_for_updates_always_reports(tmp: Path) -> None:
         assert _wait_for(lambda: "99.0.0" in dlg.headline.text()), (
             f"an available update produced no dialog: {dlg.headline.text()!r}"
         )
-        assert dlg.primary.isVisible() and "Download" in dlg.primary.text(), (
-            "the update offer did not offer a download"
-        )
+        if IS_MACOS or sys.platform.startswith("win"):
+            assert dlg.primary.isVisible() and "Download" in dlg.primary.text(), (
+                "the update offer did not offer a download"
+            )
+        else:
+            # Linux uses manual/APT updates. The MSI fixture must not become
+            # an install action merely because this is a non-Mac platform.
+            assert dlg.primary.isVisible() and dlg.primary.text() == "OK", (
+                "Linux must show a dismissible result, not offer the MSI fixture"
+            )
+            assert "No installer" in dlg.detail.text(), dlg.detail.text()
 
         # Up to date: the same dialog must report it.
         wm.fetch_latest_release = lambda: Release(version="v0.0.1")

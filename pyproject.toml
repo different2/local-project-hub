@@ -67,8 +67,10 @@ entry_point = "main.py"
 # The state directory is created at runtime in the per-user location; nothing
 # in the bundle is written to, so the app works when installed to /Applications.
 [tool.briefcase.app.hub.macOS]
-minimum_system_version = "12.0"
-# arm64 (Apple silicon) and x86_64 (Intel) — one universal build for both.
+# Briefcase 0.4.6 reads min_os_version; minimum_system_version is ignored
+# and produces an Info.plist advertising the support runtime's 11.0 default.
+min_os_version = "12.0"
+# Build for the current host architecture (the release runner is Apple silicon).
 universal_build = false
 
 [tool.briefcase.app.hub.windows]
