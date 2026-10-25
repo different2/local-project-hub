@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Drag projects up or down in the sidebar and retain their order across restarts, renames, and export/import. New projects appear at the bottom.
+
 ## 0.7.1
 
 - Add the first Linux installer, targeting Ubuntu 24.04 LTS on x86-64.

@@ -1,6 +1,30 @@
 # HANDOFF — Local Project Hub
 
-## Current closeout — v0.7.1 is public; Linux/latest-download deliverables verified
+## Current source update — saved project ordering (unreleased)
+
+The Projects sidebar can be rearranged by dragging rows. Order is stored in
+its existing registry array, survives restarting/renaming/export to a fresh
+registry, and new projects append at the bottom. No schema bump or project
+configuration rewrite is needed. The UI saves stable IDs after `rowsMoved`
+through a queued connection; a failed write restores saved order and reports
+an error in the status bar and hub log.
+
+Targeted tests have passed for persistence, legacy files, invalid orders,
+atomic save failure, visible widget order, inline rename, and moving a real
+running HTTP project without changing its PID, tab or HTTP response. A native
+Cocoa test window was exposed; real mouse/drag/drop events, changed visible
+order and saved registry order were observed. Earlier automation no-ops were
+not counted as successful drags; its tracker supplied no native exit status.
+Final full-suite/review evidence is kept under
+`~/.hermes/cache/scratch/lph-project-order/` and will be recorded here at
+closeout. Tests use isolated fixture registries and processes.
+
+**This is a source update, not a published release or installed-app update.**
+The installed app, user registry, published v0.7.1 assets, tag, download links,
+platform dependencies and contributor history are unchanged. The release
+closeout below describes v0.7.1; it does not claim this new UI is in that release.
+
+## Previous release closeout — v0.7.1 is public; Linux/latest-download deliverables verified
 
 **This section supersedes every older checkpoint below.** Release:
 https://github.com/different2/local-project-hub/releases/tag/v0.7.1

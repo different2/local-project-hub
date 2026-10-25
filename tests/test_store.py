@@ -52,7 +52,7 @@ def test_persistence_roundtrip():
         s.add(make_rec(name="B", icon="🧪", autostart=True, env={"X": "1"}))
         s2 = sm.Store(Path(d) / "registry.json")
         names = [r["name"] for r in s2.ordered()]
-        assert names == ["A", "B"]  # alphabetical order
+        assert names == ["A", "B"]  # saved sidebar order
         assert s2.get([r for r in s2.projects if s2.projects[r]["name"] == "B"][0])["env"] == {"X": "1"}
 
 
@@ -408,6 +408,102 @@ def test_import_rolls_memory_back_when_save_fails():
 
         assert list(s.projects) == [existing["id"]], "memory kept the unsaved batch"
         assert p.read_bytes() == before, "disk changed after a failed save"
+
+
+def test_reordering_projects_persists_id_order_without_changing_records():
+    with tempfile.TemporaryDirectory() as d:
+        s = _store(Path(d))
+        records = [
+            s.add(make_rec(name=name, icon="🌐", env={"OWNER": name}))
+            for name in ("discordbot", "obs", "sphere")
+        ]
+        before = dict(s.projects)
+        wanted = [records[1]["id"], records[2]["id"], records[0]["id"]]
+
+        s.reorder(wanted)
+
+        assert [r["id"] for r in s.ordered()] == wanted, "order reverted to alphabetical"
+        assert s.projects == before, "reordering changed a project's configuration"
+        loaded = sm.Store(s.path)
+        assert [r["id"] for r in loaded.ordered()] == wanted, "order vanished on reopen"
+        assert loaded.projects == before, "reloading changed a project's configuration"
+
+
+def test_reorder_rejects_incomplete_duplicate_or_unknown_ids_without_saving():
+    with tempfile.TemporaryDirectory() as d:
+        s = _store(Path(d))
+        a = s.add(make_rec(name="A"))["id"]
+        b = s.add(make_rec(name="B"))["id"]
+        before = s.path.read_bytes()
+        for invalid in ([a], [a, a], [a, b, b], [a, "unknown"]):
+            try:
+                s.reorder(invalid)
+            except sm.RegistryError:
+                pass
+            else:
+                raise AssertionError(f"invalid project order was accepted: {invalid}")
+            assert list(s.projects) == [a, b], "invalid order changed the live projects"
+            assert s.path.read_bytes() == before, "invalid order changed the registry file"
+
+
+def test_reordering_rolls_back_memory_and_disk_when_atomic_save_fails():
+    with tempfile.TemporaryDirectory() as d:
+        s = _store(Path(d))
+        ids = [s.add(make_rec(name=name))["id"] for name in ("A", "B")]
+        before = s.path.read_bytes()
+        real_replace = sm.os.replace
+
+        def fail_replace(src, dst):
+            raise OSError("registry is locked")
+
+        sm.os.replace = fail_replace
+        try:
+            try:
+                s.reorder(list(reversed(ids)))
+            except sm.RegistryError as e:
+                assert "locked" in str(e)
+            else:
+                raise AssertionError("failed order save was reported as successful")
+        finally:
+            sm.os.replace = real_replace
+        assert list(s.projects) == ids, "the failed reorder changed in-memory order"
+        assert s.path.read_bytes() == before, "the failed reorder changed the registry"
+        assert not list(s.path.parent.glob(s.path.name + ".*.tmp"))
+
+
+def test_manual_order_survives_rename_add_remove_and_export():
+    with tempfile.TemporaryDirectory() as d:
+        s = _store(Path(d))
+        a, b, c = [s.add(make_rec(name=name)) for name in ("A", "B", "C")]
+        s.reorder([c["id"], a["id"], b["id"]])
+        s.update(dict(a, name="Z renamed"))
+        added = s.add(make_rec(name="AAA newly added"))
+        s.remove(b["id"])
+        expected = [c["id"], a["id"], added["id"]]
+        assert [r["id"] for r in s.ordered()] == expected
+        restored = sm.Store(Path(d) / "imported.json")
+        restored.import_json(s.export_json())
+        assert [r["id"] for r in restored.ordered()] == expected
+        restored.load()
+        assert [r["id"] for r in restored.ordered()] == expected
+
+
+def test_loading_existing_registries_preserves_array_order_without_rewriting():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "registry.json"
+        records = [
+            dict(_rec(name=name), id=pid)
+            for pid, name in (("sphere01", "sphere"), ("discord1", "discordbot"), ("obs00001", "obs"))
+        ]
+        for version in (1, sm.SCHEMA_VERSION, None):
+            payload: dict = {"projects": records}
+            if version is not None:
+                payload["version"] = version
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            before = path.read_bytes()
+            loaded = sm.Store(path)
+            assert [r["id"] for r in loaded.ordered()] == [r["id"] for r in records]
+            assert path.read_bytes() == before, "loading rewrote the existing registry"
 
 
 if __name__ == "__main__":
