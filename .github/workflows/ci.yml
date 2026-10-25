@@ -45,14 +45,16 @@ jobs:
         # Pinned to 24.04: the ubuntu-latest label moves to Ubuntu 26, which
         # this project has not been tested against.
         #
-        # Windows only for now, while its WinError 32 failures are being closed
-        # out. The others are covered off-runner: the user develops on macOS and
-        # runs the suite locally (verified under both Python 3.9 and 3.11, the
-        # version CI uses), and Ubuntu has been green 14/14 with no changes
-        # pending. Add an entry back here when that platform needs re-checking --
-        # each one costs runner capacity the others are competing for.
+        # Windows needs a runner because the developer's machine is macOS,
+        # where the full suite is verified locally. Native Linux has not been
+        # rerun for PR #2. Add another platform deliberately when it needs
+        # validation: each entry costs runner capacity.
         os:
-          - windows-latest
+          # Qt 6.7.3's sandboxed renderer crashes on the Windows 2025 hosted
+          # image even for bare Qt and unchanged main. Windows 2022 passed
+          # the same controls with normal security settings; pin that image
+          # rather than bypassing the sandbox. See DEVELOPMENT.md.
+          - windows-2022
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -292,3 +294,23 @@ jobs:
           ls -la artifacts/
           gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* \
             --clobber --repo "${GITHUB_REPOSITORY}"
+      - name: Verify every published asset has a SHA-256 digest
+        # The in-app updater is fail-closed: it refuses to install an asset
+        # whose release metadata carries no usable `sha256:` digest. GitHub
+        # computes that digest when an asset is uploaded through the API, and
+        # this step makes a release FAIL rather than publish installers the
+        # app will then refuse to update from.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          missing="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" \
+              --jq '[.assets[] | select(((.digest // "") | startswith("sha256:")) | not) | .name] | join(", ")'
+          )"
+          if [ -n "$missing" ]; then
+            echo "::error::release $tag has assets without a SHA-256 digest: $missing"
+            exit 1
+          fi
+          echo "All release assets carry a sha256 digest."

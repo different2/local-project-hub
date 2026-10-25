@@ -100,17 +100,23 @@ set — they never ship.
 python3 tests/run_all.py
 ```
 
-- **15 suites, run serially**: the GUI suites bind fixed ports on 127.0.0.1
+- **19 suites, run serially**: the GUI suites bind fixed ports on 127.0.0.1
   and cannot run concurrently — `run_all.py` serialises them and is what CI
   calls. A full run takes about half an hour on the author's Mac, more on CI
   runners.
 - A single suite runs directly: `.hubenv/bin/python tests/test_store.py`.
 - On a headless machine, prepend `QT_QPA_PLATFORM=offscreen`.
-- CI currently runs the suite on **Windows only** — deliberately: that is
-  where the open failures still are, macOS/Linux are covered by running the
-  suite locally, and each extra platform costs runner capacity the others
-  compete for. See the comment in `.github/workflows/ci.yml` before changing
-  this.
+- CI runs the suite on **Windows 2022 only**; macOS is verified locally.
+  Native Linux has not been rerun for PR #2. Each extra matrix entry costs
+  runner capacity, so add one deliberately when that platform needs validation.
+- The Windows test image is pinned rather than `windows-latest`: a
+  [controlled comparison](https://github.com/different2/local-project-hub/actions/runs/40144633615)
+  using identical Python 3.11.9 and Qt 6.7.3 reproduced the renderer crash on
+  the Windows 2025 hosted image even with bare Qt and unchanged main.
+  Windows 2022 passed all 15 targeted cases with default sandboxing. Disabling
+  the sandbox also avoided the newer-image crash, but is **not** the fix used
+  here: application security and dependency pins stay unchanged. Revalidate
+  before moving the test image; `test_workflow_yaml.py` guards the pin.
 
 ## Repo layout
 

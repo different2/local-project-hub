@@ -21,13 +21,28 @@ LABEL = "local.local-project-hub"
 DISPLAY_NAME = "Local Project Hub"
 
 
-def _app_executable() -> str:
-    """The command to run at login: the packaged app if there is one."""
+def _main_script() -> Path:
+    """The source entry point, next to the `hub` package."""
+    return Path(__file__).resolve().parent.parent / "main.py"
+
+
+def _app_argv() -> list[str]:
+    """The command as SEPARATE argv entries.
+
+    Each platform's launcher expects a list (macOS ProgramArguments) or a
+    command line built from one (Windows registry value, XDG Exec=). Returning
+    a single pre-quoted string forced callers to embed quotes inside an
+    argument, which produced a malformed value in development mode:
+
+        "C:\\Python\\python.exe" "C:\\app\\main.py"     # one string
+
+    A packaged app runs its own executable with no arguments; a source checkout
+    runs main.py under the current interpreter.
+    """
     if getattr(sys, "frozen", False):
         # PyInstaller/Briefcase: sys.executable is the app itself.
-        return sys.executable
-    # Development: run main.py with the same interpreter.
-    return f'"{sys.executable}" "{Path(__file__).resolve().parent.parent / "main.py"}"'
+        return [sys.executable]
+    return [sys.executable, str(_main_script())]
 
 
 # ---------- macOS ----------
@@ -50,7 +65,10 @@ def _mac_set(on: bool) -> tuple[bool, str | None]:
         path.parent.mkdir(parents=True, exist_ok=True)
         plist = {
             "Label": LABEL,
-            "ProgramArguments": ["/usr/bin/open", "-a", _app_executable()],
+            # One entry per argument. The old ["/usr/bin/open", "-a",
+            # "\"python\" \"main.py\""] both misused `open -a` and embedded a
+            # second quoted command line inside a single argument.
+            "ProgramArguments": _app_argv(),
             "RunAtLoad": True,
         }
         with open(path, "wb") as fh:
@@ -71,6 +89,18 @@ def _win_key_name() -> str:
     return "LocalProjectHub"
 
 
+def _win_command_line() -> str:
+    """A correctly quoted Windows command line for the Run key.
+
+    `subprocess.list2cmdline` is the standard-library implementation of the
+    quoting rules the Windows loader uses, so an executable or script path with
+    spaces is quoted once (not wrapped in a second pair of quotes).
+    """
+    import subprocess
+
+    return subprocess.list2cmdline(_app_argv())
+
+
 def _win_set(on: bool) -> tuple[bool, str | None]:
     try:
         import winreg
@@ -80,8 +110,10 @@ def _win_set(on: bool) -> tuple[bool, str | None]:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE) as key:
             if on:
-                # Quote the path so spaces survive; per-user key needs no admin.
-                winreg.SetValueEx(key, _win_key_name(), 0, winreg.REG_SZ, f'"{_app_executable()}"')
+                # Per-user key needs no admin; list2cmdline quotes paths once.
+                winreg.SetValueEx(
+                    key, _win_key_name(), 0, winreg.REG_SZ, _win_command_line()
+                )
             else:
                 try:
                     winreg.DeleteValue(key, _win_key_name())
@@ -124,12 +156,15 @@ def _linux_set(on: bool) -> tuple[bool, str | None]:
         except OSError as e:
             return False, f"Could not remove the autostart entry: {e}"
     try:
+        import shlex
+
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "[Desktop Entry]\n"
             "Type=Application\n"
             f"Name={DISPLAY_NAME}\n"
-            f"Exec={_app_executable()}\n"
+            # Exec= takes a shell-like command line, so quote each argv entry.
+            f"Exec={shlex.join(_app_argv())}\n"
             "X-GNOME-Autostart-enabled=true\n",
             encoding="utf-8",
         )

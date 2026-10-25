@@ -85,12 +85,13 @@ Worth knowing:
 ## Updating
 
 **Help → Check for Updates…** shows the newest release; **Download and
-Install** fetches the installer, verifies the download against its published
-checksum, and gets it ready. On macOS the app then offers **Restart and
-Install**: it closes, puts the new version in place and reopens by itself —
-the copy it replaces goes to the Trash, and if anything goes wrong the old
-copy is put back before you see it. On Windows, the installer runs. Your
-projects and settings are untouched.
+Install** fetches the installer and continues only when the release publishes a
+SHA-256 digest and the downloaded file matches it. A release with no usable
+digest is reported as unverifiable and is **not** installed. On macOS the app
+then offers **Restart and Install**: it closes, puts the new version in place
+and reopens by itself — the copy it replaces goes to the Trash, and if anything
+goes wrong the old copy is put back before you see it. On Windows, the
+installer runs. Your projects and settings are untouched.
 
 ## Where your data lives
 
@@ -104,9 +105,16 @@ Updating or uninstalling the Hub never modifies a registered project.
 ## Problems or feedback
 
 **Help → Report a Problem…** builds a report with the app version, your OS,
-and the recent log — deliberately none of your project data — and can save it
-or open a pre-filled issue. Or open an
+and a sanitised summary of the hub's own messages — never your projects'
+names, folders, commands, raw output, dashboard contents, or URLs — and can
+save it or open a pre-filled issue. Or open an
 [issue](https://github.com/different2/local-project-hub/issues/new) directly.
+
+## Acknowledgements
+
+Thanks to [Tahir Masood (@tahirmasood2)](https://github.com/tahirmasood2) for
+investigating bugs and contributing the audit-remediation fixes and regression
+tests in [PR #2](https://github.com/different2/local-project-hub/pull/2).
 
 ## License
 
