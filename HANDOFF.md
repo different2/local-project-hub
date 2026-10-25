@@ -33,15 +33,27 @@ Briefcase 0.4.6, system Python 3.12 and Qt 6.7.3. AppImage is discouraged by the
 pinned builder for binary-wheel GUI stacks; no all-distro support is claimed.
 macOS remains Qt 6.7.3/minimum12.0 and Windows Qt 6.12.0; no sandbox bypass.
 
-Initial configuration guards reproduced both missing features RED; the new
-latest-link/Linux coverage guards now pass. Stable installer names and a
-complete-asset/digest draft-before-publication gate have pure positive/negative
-tests. Preliminary Linux build/install CI is next; actual packaged-app smoke,
-full Linux regression and release/anonymous live-link acceptance remain pending.
+Initial guards reproduced both missing features RED; current workflow guards
+and ten isolated negative controls pass. Stable installer names and the
+complete-asset/digest draft-before-publication gate have pure controls too.
+Preflight CI40195477042 at86b0865 built and APT-installed the real .deb. Its
+downloaded control/payload, actual version/Qt metadata, ELF architecture and
+browser resources were independently inspected (artifact12599174943).
+Runtime CI40197205064 at6f18bcd rendered the installed dashboard visibly with
+non-root NoNewPrivs1/Seccomp2 and clean WM_DELETE_WINDOW shutdown/source restore.
+It failed in the observer: Chromium rewrote /proc cmdline into one process-title
+field, while the verifier required an exact separate renderer-flag element.
+Parent preserved raw fields and added flag-only token classification (never
+execution), with RED/GREEN real-format and hidden-bypass controls plus saved
+process-snapshot replay. Fresh runtime acceptance remains required; full
+21-suite regression and release/anonymous live-link checks remain pending.
 Do NOT equate a packaging-only manual green with runtime or release acceptance.
 
-An external installed-app smoke harness is delegated in isolated `smoke/` on
-`feat/linux-installed-smoke`; no product hooks or Mac GUI execution are allowed.
+The external installed-app smoke harness from local delegate2a83988 is integrated;
+parent corrected its literal-version assumption using the real metadata-derived
+app source (RED then17pure tests GREEN). The unittest controls adapt to one
+Linux-only PASS case; other OSes skip this observer case. No product hooks or
+Mac GUI execution occurred. Strict CI auditing records every real child exit.
 README latest links are staged on this branch, not yet main: retain the old
 working front page until the new assets are actually published. No tag/release
 has been created. Linux updates are initially APT/manual, not one-click in-app.

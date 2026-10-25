@@ -41,6 +41,7 @@ class SafetyTests(unittest.TestCase):
             (1001, 1001, {}, ["hub", "--no-sandbox=true"]),
             (1001, 1001, {}, ["helper", "--disable-setuid-sandbox"]),
             (1001, 1001, {}, ["helper", "--single-process"]),
+            (1001, 1001, {}, ["helper --type=renderer --no-sandbox"]),
         ):
             with self.subTest(uid=uid, euid=euid, env=env, argv=argv):
                 with self.assertRaisesRegex(smoke.SmokeError, "root|sandbox|single-process"):
@@ -80,6 +81,10 @@ class ProcessTests(unittest.TestCase):
         helper = "/usr/lib/hub/app_packages/PySide6/Qt/libexec/QtWebEngineProcess"
         renderer = {"pid": 123, "exe": helper, "argv": [helper, "--type=renderer"], "status": status, "environment": {}, "namespaces": {"user": "user:[123]"}}
         self.assertEqual(smoke.validate_renderers([renderer], helper), [renderer])
+        # Actual Chromium /proc cmdline can be one rewritten process-title
+        # field, not separate NUL-delimited argument fields (CI40197205064).
+        titled = dict(renderer, argv=[helper + " --type=renderer --lang=en"])
+        self.assertEqual(smoke.validate_renderers([titled], helper), [titled])
         for rows in (
             [], [dict(renderer, exe="/source/QtWebEngineProcess")],
             [dict(renderer, argv=[helper, "--type=zygote"])],

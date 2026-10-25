@@ -269,6 +269,8 @@ jobs:
       - name: Verify the installed app renders with sandbox enabled
         run: |
           export TMPDIR="$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/linux-smoke"
+          python -c 'import json,os; from pathlib import Path; paths={"apparmor_enabled":"/sys/module/apparmor/parameters/enabled", "apparmor_restrict_userns":"/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "unprivileged_userns_clone":"/proc/sys/kernel/unprivileged_userns_clone"}; data={k:Path(p).read_text().strip() if Path(p).exists() else "not_available" for k,p in paths.items()}; data["uid"]=os.getuid(); (Path(os.environ["RUNNER_TEMP"])/"linux-smoke/runner-security.json").write_text(json.dumps(data,indent=2))'
           export LPH_EXPECTED_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["briefcase"]["version"])')"
           xvfb-run -a -s '-screen 0 1920x1080x24' dbus-run-session -- bash -euc '
             openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
@@ -336,9 +338,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || \
-            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" \
+          draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [ "$draft" = "false" ]; then
+            echo "::error::refusing to replace published assets for $tag; use a new version"
+            exit 1
+          fi
+          if [ "$draft" != "true" ]; then
+            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" --verify-tag \
               --title "$tag" --generate-notes --draft --prerelease=false --latest=false
+          fi
       - name: Upload installers to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

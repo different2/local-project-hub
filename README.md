@@ -46,8 +46,9 @@ These download links always follow the latest published release.
 
 Older versions: [Releases](https://github.com/different2/local-project-hub/releases).
 
-> **Read this before your first launch.** The installers are not code-signed
-> yet — that needs paid certificates — so your OS will warn the first time:
+> **Read this before your first launch.** The macOS/Windows installers do not
+> yet have trusted publishing signatures — those require paid developer
+> credentials — so these operating systems warn on the first launch:
 >
 > - **macOS:** if macOS says it cannot check the app for malicious software,
 >   Control-click (right-click) the app and choose **Open → Open**. This is
