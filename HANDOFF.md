@@ -83,6 +83,29 @@ README latest links are staged on this branch, not yet main: retain the old
 working front page until the new assets are actually published. No tag/release
 has been created. Linux updates are initially APT/manual, not one-click in-app.
 
+### Tagged release: publication-transport recovery
+
+Tag `v0.7.1` points to tested `b8d6e1b`; it is not rewritten. Tagged CI
+40219691409 passed all three builders and Linux/Windows2022/Windows2025 full
+strict regressions (333 unique cases and106 actual clean children per image).
+Its publisher created draft423602327 and uploaded all three matching installers,
+then failed before publication: GitHub draft metadata uses an `untagged-*`
+preview URL and cannot be fetched through the published-tag REST endpoint.
+The real draft is readable by release ID; its actual assets/digests were checked
+against all three downloaded tagged build outputs. No installer rebuild is needed.
+
+A red-first transport correction resolves `databaseId` via `gh release view`,
+reads the same release ID before/after promotion, and validates a draft's exact
+own preview reference without relaxing public version-tag URL checks. Five
+artifact/audit controls,19 workflow guards and draft/public negative mutations
+pass, including the unchanged real draft API payload. Tagged installer/app source
+remains b8d6e1b; the correction is release plumbing for recovery/future builds.
+The historical tag run remains red at publication, not misreported green.
+Equivalent private verification must run before manually promoting that existing
+draft; then public metadata, all file hashes and anonymous latest links must be
+verified before integrating main. Source application and installed Mac app remain
+unchanged. Detailed current state is in scratch STATUS.md.
+
 ## Historical: PR #3 merged — both requested source fixes complete
 
 This section supersedes the older deferred/known-issue statuses below.

@@ -514,6 +514,10 @@ def test_release_is_draft_until_all_assets_are_verified() -> None:
     )
     assert re.search(r"--latest(?:\s|$)", commands[publish:]), "new release must explicitly become latest"
     assert "--metadata published.json" in commands[publish:], "publication must be read back and revalidated"
+    assert "--json databaseId" in commands[:verify], "drafts must be resolved by release ID, not the unavailable published-tag endpoint"
+    assert 'releases/$release_id' in commands[:verify] and 'releases/$release_id' in commands[publish:], (
+        "draft and published readback must address the exact same release ID"
+    )
 
 
 if __name__ == "__main__":
