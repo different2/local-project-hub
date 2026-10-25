@@ -333,6 +333,28 @@ def test_windows_ci_does_not_bypass_the_renderer_sandbox() -> None:
             assert forbidden not in flags + run, f"sandbox bypass {forbidden} in CI"
 
 
+def test_matrix_jobs_upload_distinct_test_log_artifacts() -> None:
+    """Two Windows image versions must not collide in immutable artifact names."""
+    import yaml
+
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["test"]
+    uploads = [step for step in job["steps"]
+               if str(step.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert len(uploads) == 1, "expected one per-job test-log upload"
+    step = uploads[0]
+    assert step.get("if") == "always()", "failed suites must retain their logs"
+    template = step["with"]["name"]
+    names = []
+    for image in job["strategy"]["matrix"]["os"]:
+        host_os = "Windows" if image.startswith("windows-") else (
+            "macOS" if image.startswith("macos-") else "Linux"
+        )
+        name = template.replace("${{ runner.os }}", host_os).replace("${{ matrix.os }}", image)
+        assert "${{" not in name, f"unresolved artifact-name expression: {name}"
+        names.append(name)
+    assert len(names) == len(set(names)), f"matrix log artifact names collide: {names}"
+
+
 def test_tag_check_gets_the_tag_on_every_shell() -> None:
     """The version guard must receive the tag on EVERY runner OS.
 

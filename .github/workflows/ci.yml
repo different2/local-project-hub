@@ -136,7 +136,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: test-log-${{ runner.os }}
+          name: test-log-${{ matrix.os }}
           path: '**/*.log'
           if-no-files-found: ignore
           retention-days: 7
