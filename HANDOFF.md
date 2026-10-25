@@ -1,5 +1,98 @@
 # HANDOFF — Local Project Hub
 
+## Current closeout — v0.7.1 is public; Linux/latest-download deliverables verified
+
+**This section supersedes every older checkpoint below.** Release:
+https://github.com/different2/local-project-hub/releases/tag/v0.7.1
+
+- User's Linux release and always-latest front-page requests are delivered.
+  Release ID423602327 is public/non-prerelease and was read back as `latest`.
+- Immutable annotated tag `v0.7.1` (object
+  `ba3646d6e7d3c096d7231ad6da86ae7573837f07`) peels to tested installer source
+  `b8d6e1b7039a2a0a70d6302ba0d2e025aa4cb6ac`. No force push or retag occurred.
+- Main was fast-forwarded and pushed through release-plumbing correction
+  `6cbf16f329cd903e7d045b5f4c9c628a7d6c054b`. Its application code, version and
+  packaging configuration match the released tag. Only the publisher helper,
+  workflow, associated pure guards and handoff differ after that tag.
+- The remote main README was read back byte-for-byte and contains exactly the
+  three stable `/releases/latest/download/...` links. Each was anonymously
+  downloaded in full, returned200/non-HTML, resolved through v0.7.1, and matched
+  its published API size and SHA-256. Links were integrated only after those
+  assets were live and checked.
+- Installed `/Applications/Local Project Hub.app` remains **0.7.0/build1**;
+  installation was not requested or performed. Shared user projects/config/art
+  were not changed. Original Tahir Masood174e90c attribution/history is retained.
+
+### Delivered platforms and acceptance
+
+Linux is **Ubuntu24.04 LTS amd64 only**, native Briefcase0.4.6/systemPython3.12,
+Qt6.7.3. It is not a generic Linux/ARM/AppImage release. Updates initially use
+manual download/APT. macOS stays Apple silicon/Qt6.7.3 with an effective12.0
+bundle floor; Windows x64 uses Qt6.12.0. No sandbox bypass or global security
+policy weakening was introduced.
+
+| Environment at released b8d6e1b | Suites | Passed | Skipped | Failed | Actual child exits |
+|---|---:|---:|---:|---:|---|
+| Local macOS source/offscreen |21/21|329|4|0|106/106 zero|
+| Ubuntu24.04 GitHub |21/21|330|3|0|106/106 zero|
+| Windows2022 GitHub |21/21|326|7|0|106/106 zero|
+| Windows2025 GitHub |21/21|326|7|0|106/106 zero|
+
+Every environment's333 unique case identities were independently reconciled
+against its exact source registry; no duplicate/missing verdict or nonzero child
+was hidden. Full manual CI40214609068 passed. Tagged CI40219691409 separately
+passed all test/build jobs; its publication-only failure and recovery are below.
+The installed .deb was launched outside its checkout with isolated state and
+source hidden: exact nonce DOM plus actual native screenshot pixels, renderer
+NoNewPrivs1/Seccomp2, deliberately wrong-DOM rejection, clean owned shutdown and
+source restoration all verified. Actual tagged Mac DMG checksum/mount/version12.0
+floor/helper/codesign and Windows MSI container metadata were checked. Full
+anonymous published-file hashes match the same tagged build outputs.
+
+### Published installer identities
+
+| Asset | SHA-256 |
+|---|---|
+|Local.Project.Hub.dmg|9e2431de4c481fbcf95a01080c66628ecb37d08bb89933a6e69533c675f5c99a|
+|Local.Project.Hub.msi|f7359def96af16663370fec59f2b5c7ccdaa8f1c6697c3fef185f2fd4d3721b7|
+|Local.Project.Hub.Ubuntu-24.04-amd64.deb|a99c24fe074ef6cef220c799d65a403b1610832702f92d11a353780217ac114d|
+
+### Publication recovery, review and remaining limits
+
+GitHub draft423602327 used an `untagged-*` preview reference; the published-tag
+REST lookup returned404. Historical tagged CI therefore remains red at its
+publisher, not falsely relabelled green. The release-ID/strict-draft-preview
+correction6cbf16f was developed RED/GREEN against the real untouched draft API
+payload,19 workflow guards,5 artifact/audit controls and targeted negative
+mutations. The exact repaired publisher step was then executed: complete private
+metadata/digests verified BEFORE promotion, same release ID read back public with
+strict version-tag URLs AFTER promotion. Same files, no rebuilding/retagging or
+bypass. Release notes and latest status were read back after publication.
+
+Two bounded packet-only review checkpoints returned clear; JSON and read-only
+activity were audited. Their coverage is limited, not exhaustive. The later
+publisher transport correction additionally has live API recovery evidence and
+pure regression controls.
+
+Native macOS top-level on-screen exposure remains an older disclosed limit;
+offscreen source tests do not prove new physical-window exposure. One earlier
+Linux offscreen child segfaulted after PASS;60 targeted repeats did not reproduce
+it, and both subsequent full released-source runs were clean. Its cause was NOT
+declared fixed; the strict audit still rejects every nonzero child. No physical
+Linux desktop/compositor or arbitrary-distro compatibility is claimed.
+
+Routine post-integration main CI40225868881 for6cbf16f was still pending at this
+closeout writing. Its result must be read back before calling that latest run
+green; it is not the already-verified tagged installer run. The docs-only closeout
+that follows uses `[skip ci]` to avoid duplicating those GUI jobs.
+
+Evidence is in `~/.hermes/cache/scratch/lph-linux-release/`: acceptance-b8d6e1b.json,
+tag-0.7.1-acceptance.json, publication-recovery/{before,release,published,latest}.json,
+anonymous-latest-downloads-0.7.1.json, main-frontpage-0.7.1-readback.json and review
+results. Git/release/CI identifiers above remain durable if scratch expires.
+
+## Historical checkpoints — retained verbatim; not current pending work
+
 _Resume checkpoint — **v0.7.0 IS LIVE: opening a project no
 longer starts it.** A click in the sidebar now only opens the project's tab,
 on a page in the app's own colours with the project's name, its command and
