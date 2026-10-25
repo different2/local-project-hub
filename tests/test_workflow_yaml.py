@@ -267,6 +267,20 @@ def test_certifi_and_pyobjc_pins_are_coordinated() -> None:
     )
 
 
+def test_windows_test_image_is_pinned_to_validated_2022() -> None:
+    """Do not silently move the Qt 6.7.3 tests onto a broken sandbox image."""
+    import yaml
+
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    images = workflow["jobs"]["test"]["strategy"]["matrix"]["os"]
+    windows = [image for image in images if str(image).startswith("windows-")]
+    assert windows == ["windows-2022"], (
+        f"Windows test images {windows!r} are not the validated sandbox-enabled "
+        "windows-2022 image. Qt 6.7.3's renderer crashes on the moving Windows "
+        "2025 image even without the Hub; do not bypass its sandbox to hide it."
+    )
+
+
 def test_tag_check_gets_the_tag_on_every_shell() -> None:
     """The version guard must receive the tag on EVERY runner OS.
 
