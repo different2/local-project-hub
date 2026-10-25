@@ -69,13 +69,25 @@ BYPASS_FLAGS = {
 }
 
 
+def tokens_for_flags(raw_fields: list[str]) -> list[str]:
+    """Inspect flags even when Chromium rewrites argv into one process title.
+
+    Raw /proc fields remain untouched in the report. These tokens are only for
+    classification/security checks, never a reconstructed executable command.
+    """
+    try:
+        return shlex.split(" ".join(raw_fields))
+    except ValueError as exc:
+        raise SmokeError("malformed process/sandbox flags") from exc
+
+
 def validate_launch(env: dict, uid: int, euid: int, argv: list[str]) -> None:
     """Fail before Popen, including a sandbox-disable variable set to '0'."""
     if uid == 0 or euid == 0:
         raise SmokeError("refusing root: run the installed smoke as a normal user")
     if "QTWEBENGINE_DISABLE_SANDBOX" in env:
         raise SmokeError("sandbox bypass QTWEBENGINE_DISABLE_SANDBOX must be absent")
-    flags = list(argv)
+    flags = tokens_for_flags(argv)
     for key in ("QTWEBENGINE_CHROMIUM_FLAGS", "CHROMIUM_FLAGS", "CHROME_FLAGS"):
         try:
             flags.extend(shlex.split(env.get(key, "")))
@@ -111,7 +123,7 @@ def validate_renderers(processes: list[dict], helper: str) -> list[dict]:
     renderers = []
     for row in processes:
         validate_launch(row.get("environment", {}), 1, 1, row.get("argv", []))
-        if row.get("exe") != helper or "--type=renderer" not in row.get("argv", []):
+        if row.get("exe") != helper or "--type=renderer" not in tokens_for_flags(row.get("argv", [])):
             continue
         status = row["status"]
         if (len(status["uids"]) != 4 or 0 in status["uids"]

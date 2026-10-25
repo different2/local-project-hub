@@ -448,6 +448,64 @@ def test_frontpage_downloads_are_platform_specific_latest_links() -> None:
     )
 
 
+def test_stable_download_names_match_packaging_and_frontpage() -> None:
+    import re
+    import runpy
+    import yaml
+
+    names = runpy.run_path(str(PROJECT_ROOT / "tools/release_artifacts.py"))["ASSET_NAMES"]
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    readme = (PROJECT_ROOT / "README.md").read_text()
+    linked = set(re.findall(r"releases/latest/download/([^\s)]+)", readme))
+    assert linked == set(names.values()), "front-page asset names differ from packaging contract"
+    for platform, filename in names.items():
+        job = jobs["build-" + platform]
+        installers = [s for s in job["steps"]
+                      if s.get("with", {}).get("name", "").startswith("LocalProjectHub-")]
+        assert len(installers) == 1 and installers[0]["with"]["path"] == "release-assets/" + filename, (
+            "uploaded installer path differs from stable download contract", platform
+        )
+        assert any("release_artifacts.py collect " + platform in str(s.get("run", ""))
+                   for s in job["steps"]), ("stable collector missing", platform)
+
+
+def test_linux_installed_runtime_acceptance_precedes_installer_upload() -> None:
+    import yaml
+
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["build-linux"]["steps"]
+    runtime = [(i, s) for i, s in enumerate(steps)
+               if "smoke_linux_installer.py" in str(s.get("run", ""))]
+    assert len(runtime) == 1, "actual installed Linux runtime acceptance is missing"
+    index, step = runtime[0]
+    assert "if" not in step, "runtime acceptance must not be skipped on release tags"
+    assert "--expected-text deliberately-wrong" in step["run"], "missing wrong-DOM observer control"
+    upload = next(i for i, s in enumerate(steps)
+                  if s.get("with", {}).get("name") == "LocalProjectHub-Linux")
+    assert index < upload, "installer was uploaded before runtime acceptance"
+
+
+def test_release_is_draft_until_all_assets_are_verified() -> None:
+    import re
+    import yaml
+
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["publish"]["steps"]
+    download = next(s for s in steps if str(s.get("uses", "")).startswith("actions/download-artifact@"))
+    assert download["with"]["pattern"] == "LocalProjectHub-*", "test logs must not become release assets"
+    commands = "\n".join(str(s.get("run", "")) for s in steps)
+    create = next(line for line in commands.splitlines() if "--generate-notes" in line)
+    assert 'if [ "$draft" = "false" ]; then' in commands and "refusing to replace published assets" in commands, (
+        "rerunning a published tag must not replace live latest-download assets"
+    )
+    assert re.search(r"--draft(?:\s|$)", create), "new releases must start as private drafts"
+    verify = commands.index("release_artifacts.py verify")
+    publish = commands.index("--draft=false")
+    assert verify < publish and "--allow-draft" in commands[verify:publish], (
+        "a complete installer/digest check must precede publication"
+    )
+    assert re.search(r"--latest(?:\s|$)", commands[publish:]), "new release must explicitly become latest"
+    assert "--metadata published.json" in commands[publish:], "publication must be read back and revalidated"
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):
