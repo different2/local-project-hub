@@ -56,6 +56,20 @@ def validate_release(payload: dict, version: str, repository: str, *, allow_draf
         raise ValueError("release tag/version or prerelease status does not match")
     if payload.get("draft") is not False and not (allow_draft and payload.get("draft") is True):
         raise ValueError("release is not published")
+    # Unpublished GitHub drafts use an opaque untagged-* preview reference.
+    # Match that exact draft's own preview URL; published releases still MUST
+    # use their declared version tag, even when allow_draft was requested.
+    reference = tag
+    if payload.get("draft") is True:
+        preview = urlparse(str(payload.get("html_url", "")))
+        prefix = f"/{repository}/releases/tag/"
+        path = unquote(preview.path)
+        if (preview.scheme != "https" or preview.netloc != "github.com"
+                or preview.query or preview.fragment or not path.startswith(prefix)):
+            raise ValueError("draft preview URL does not match this repository")
+        reference = path[len(prefix):]
+        if reference != tag and not re.fullmatch(r"untagged-[A-Za-z0-9_-]+", reference):
+            raise ValueError("draft preview reference does not match this release")
     assets = payload.get("assets") or []
     names = [asset.get("name") for asset in assets]
     if len(names) != len(ASSET_NAMES) or set(names) != set(ASSET_NAMES.values()):
@@ -66,7 +80,7 @@ def validate_release(payload: dict, version: str, repository: str, *, allow_draf
         if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", str(asset.get("digest", ""))):
             raise ValueError(f"asset has no usable SHA-256 digest: {asset.get('name')}")
         url = urlparse(str(asset.get("browser_download_url", "")))
-        expected = f"/{repository}/releases/download/{tag}/{asset['name']}"
+        expected = f"/{repository}/releases/download/{reference}/{asset['name']}"
         if url.scheme != "https" or url.netloc != "github.com" or unquote(url.path) != expected or url.query or url.fragment:
             raise ValueError(f"asset download URL does not match this release: {asset.get('name')}")
 

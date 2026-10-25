@@ -375,8 +375,11 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" > release.json
+          release_id="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          # Drafts are readable by ID, not through the published-tag endpoint.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$release_id" > release.json
           python3 tools/release_artifacts.py verify --metadata release.json --version "${tag#v}" --repo "$GITHUB_REPOSITORY" --allow-draft
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" > published.json
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$release_id" > published.json
           python3 tools/release_artifacts.py verify --metadata published.json --version "${tag#v}" --repo "$GITHUB_REPOSITORY"

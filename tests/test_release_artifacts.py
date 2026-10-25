@@ -80,6 +80,7 @@ def _release_payload():
     tag = "v0.7.1"
     return {
         "tag_name": tag, "draft": True, "prerelease": False,
+        "html_url": "https://github.com/different2/local-project-hub/releases/tag/" + tag,
         "assets": [{
             "name": name, "state": "uploaded", "size": 100,
             "digest": "sha256:" + "a" * 64,
@@ -123,6 +124,38 @@ def test_publication_rejects_partial_unverifiable_or_wrong_release():
         raise AssertionError("published-release verification accepted a draft")
     payload["draft"] = False
     tool.validate_release(payload, "0.7.1", "different2/local-project-hub")
+
+
+def test_draft_preview_urls_do_not_relax_public_release_contract():
+    import copy
+
+    tool = _tool()
+    payload = _release_payload()
+    preview = "untagged-fixture"
+    payload["html_url"] = "https://github.com/different2/local-project-hub/releases/tag/" + preview
+    for asset in payload["assets"]:
+        asset["browser_download_url"] = asset["browser_download_url"].replace("/v0.7.1/", "/" + preview + "/")
+    # This is GitHub's actual draft shape, not a published download URL.
+    tool.validate_release(payload, "0.7.1", "different2/local-project-hub", allow_draft=True)
+    mutations = [
+        lambda p: p.update(draft=False),
+        lambda p: p.update(html_url="https://example.com/releases/tag/" + preview),
+        lambda p: p.update(html_url="https://github.com/another/repo/releases/tag/" + preview),
+        lambda p: p.update(html_url="https://github.com/different2/local-project-hub/releases/tag/v0.7.0"),
+        lambda p: p.update(html_url=p["html_url"] + "?not-allowed=1"),
+        lambda p: p.pop("html_url"),
+        lambda p: p["assets"][0].update(browser_download_url=p["assets"][0]["browser_download_url"].replace(preview, "untagged-other")),
+        lambda p: p["assets"][0].update(digest=""),
+    ]
+    for mutate in mutations:
+        bad = copy.deepcopy(payload)
+        mutate(bad)
+        try:
+            tool.validate_release(bad, "0.7.1", "different2/local-project-hub", allow_draft=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("draft preview exception accepted a wrong release/URL/digest")
 
 
 def test_strict_regression_observer_rejects_crashes_after_pass():
