@@ -16,60 +16,86 @@ fresh session should start from this file alone: read it, run
 this project have died mid-task on provider errors, so state belongs here
 and in commits — not only in chat. Developer docs (run, test, package,
 release) live in DEVELOPMENT.md; the README is user-facing. Latest addition:
-PR #2 is merged with the original contributor's history preserved. Read the
+PR #3's two source fixes are merged; the installed release is unchanged. Read the
 current task and integration status below; the older audit triage is historical._
 
-## Current task: Restart false error and Windows compatibility (in progress)
+## PR #3 merged — both requested source fixes complete
 
-The user requested fixing both follow-ups and explicitly excluding Linux.
-Work is isolated from main in
-`~/.hermes/cache/scratch/lph-followup-two-bugs/`: parent `tree/` on
-`fix/windows-qt-compatibility`, Restart implementation `restart/` on
-`fix/restart-intent-logging`. Installed app/release remain untouched.
+This section supersedes the older deferred/known-issue statuses below.
+Linux was explicitly excluded. No release, version tag, package installation,
+or replacement of the installed app was requested or performed.
 
-Draft [PR #3](https://github.com/different2/local-project-hub/pull/3) now contains
-the combined fixes, committed as `face90c` and integrated with main's docs at
-`2583e4c`; final full-suite acceptance is still pending. Ordinary CI is restored
-and TEMP diagnostics are archived outside the repository and removed.
+[PR #3](https://github.com/different2/local-project-hub/pull/3) merged at
+`2026-10-25T09:45:42Z`, merge commit
+`3ecbc1178581e7ce9e0ee95b514d620dc8c68f4a`, from exact tested head
+`4aa2d55f45bb704da8ea51ff770f82910a75b113`.
+The merge's parents and complete Git tree were read back: its tree is identical
+to the tested head. The primary project folder was fast-forwarded to that merge.
+Only documentation closeout follows it; source/tests/workflow remain the tested
+versions. Original contributor history and README acknowledgement are retained.
 
-- Restart marks the old child's termination as requested, retaining intent
-  through the port wait; fresh startup resets it so real failures stay errors.
-  Raw logs independently counted: 31 targeted passes plus 4 post-commit passes,
-  with clean child exits and load-bearing failure/mutation controls.
-- Windows requirements/test/build pins select Qt 6.12.0; macOS retains 6.7.3 and
-  its existing macOS 12.0 floor. Windows runs only on actual GitHub Windows
-  runners, not this Mac. Both 2022/2025 images are in ordinary full CI.
-- [Controlled comparison 40168797374](https://github.com/different2/local-project-hub/actions/runs/40168797374):
-  five positive cases passed on each host with new Qt; old Qt failed those same
-  cases on 2025. Wrong-title controls stayed red and sandbox bypasses were absent.
-  The phase-aware observer correction is verified; observation collection is
-  not being counted as full-product verification.
-- Independent packet-only Review Checkpoint (`deleg_98befe9b`, gpt-6.1-sol /
-  openai-codex): clear, no actionable findings; schema validated. Configuration
-  guards pass on Python 3.11/3.9 with eight proven negative controls.
-- Candidate `a93f61f` passed the full Mac suite (319 passed / 3 skipped), with
-  a separate raw-exit audit confirming 104 actual child exits all zero and
-  322 unique test verdicts. Its Windows 2022 suite passed 316 / 6 skipped.
-  While checking its artifacts, a new two-image CI naming collision was found:
-  `runner.os` made both names `test-log-Windows`. The upload name now uses
-  `matrix.os`; a new guard reproduces the old collision and passes after the
-  one-line fix (14 guards on both local Python versions). Bounded re-review
-  `deleg_517e1bbb` is clear. App source/dependency files are unchanged by this
-  correction. Corrected-head full verification still needs to finish; any
-  deliberately superseded old CI run is not an application-test regression.
-- Cocoa lifecycle/DOM/PID/HTTP/listener/terminal checks pass with no false error,
-  but the strict native smoke exits 1 because top-level `isExposed` is false.
-  One explicit activation control did not resolve exposure. Do not claim a full
-  on-screen native pass or turn this unknown into a product regression.
+### Fixes and evidence
 
-Next: finish full macOS and ordinary Windows 2022/2025 regression at the exact
-combined candidate, inspect actual artifacts/counts, then integrate only after
-the acceptance results are understood. Read
-`~/.hermes/cache/scratch/lph-followup-two-bugs/STATUS.md` for run/head/watch IDs
-and exact actions. Keep local Qt GUI suites serial. No release/install is
-requested; installed 0.7.0/build 1 remains untouched.
+- **Restart false error:** the old child's termination is requested for Restart
+  as well as Stop. Intent survives the port-free wait and resets before the
+  replacement starts; unexpected exits and a genuinely failing replacement
+  remain errors. Real QAction/QProcess/terminal regressions and remove-fix,
+  sticky-intent, blanket-code15 and stale-finish controls were exercised.
+- **Newer Windows renderer compatibility:** Windows selects the coordinated
+  Qt/PySide6 6.12.0 stack. macOS retains 6.7.3 and its macOS 12.0 support floor.
+  Windows tests ran on actual GitHub Windows runners, never locally on this Mac.
+  Default renderer sandboxing remains enabled.
+- **CI coverage/logging:** ordinary full tests cover pinned Windows 2022/2025.
+  Log names use `matrix.os`, so both immutable artifacts are retained. The old
+  shared-name defect was proven RED and the corrected real uploads both passed.
+  TEMP workflows/helpers were removed; diagnostic files remain archived outside
+  the repository. Superseded run40175476590 was deliberately canceled, not
+  labelled an application failure.
+- Independent packet-only review and its one bounded CI correction review were
+  clear (`deleg_98befe9b`, `deleg_517e1bbb`, gpt-6.1-sol/openai-codex); JSON was
+  validated and reviewer activity audited. Configuration guards pass on actual
+  Python 3.11/3.9 with load-bearing negative controls.
 
-## PR #2 merged (2026-10-24 — supersedes every earlier integration checkpoint)
+### Final verification at 4aa2d55
+
+| Platform | Suites | Passed | Skipped | Failed / blocked / not-run |
+|---|---:|---:|---:|---:|
+| macOS, local Python 3.11 / Qt 6.7.3 | 19/19 | 320 | 3 | 0 / 0 / 0 |
+| Windows 2022, GitHub / Qt 6.12.0 | 19/19 | 317 | 6 | 0 / 0 / 0 |
+| Windows 2025, GitHub / Qt 6.12.0 | 19/19 | 317 | 6 | 0 / 0 / 0 |
+
+Every suite identity and total was independently checked against the registered
+suite list and 323 source-defined test slots per platform. The Mac strict audit
+captured all 104 actual child exits and verified every one was zero; no printed
+PASS was allowed to conceal a shutdown crash.
+
+[Final ordinary CI40178221090](https://github.com/different2/local-project-hub/actions/runs/40178221090)
+passed both test jobs and uploads. Separate artifacts were downloaded/read:
+`test-log-windows-2022` ID12593971668 and `test-log-windows-2025` ID12594114520.
+The earlier [old/new controls40168797374](https://github.com/different2/local-project-hub/actions/runs/40168797374)
+remain supporting evidence, not substitutes for that full product run.
+
+Raw evidence/report: `~/.hermes/cache/scratch/lph-followup-two-bugs/`, especially
+`verification-4aa2d55.json`, `strict-macos-4aa2d55/`, and
+`windows-4aa2d55/{windows-2022,windows-2025}/test-output.log`.
+Automatic main CI40181982514 was queued at closeout on the merge's identical
+already-tested tree; it is a repeat, not being reported as another completed pass.
+
+### Explicit limits / installed version
+
+Cocoa lifecycle/DOM/PID/HTTP/listener/terminal assertions pass with no false error
+and fixture cleanup confirmed. The strict native smoke nevertheless exits 1
+because top-level `isExposed` is false: **full on-screen exposure is unverified**.
+This is a disclosed verification limitation, not a confirmed product regression;
+do not keep trying activation flags or claim a full visible-native pass.
+
+Latest release remains **v0.7.0**; installed app is **0.7.0, build 1** (read back). These
+source fixes are not installed in that older app. Rebuilt packages, installation,
+real OS login integration and Linux are not newly verified here; unknowns are
+not confirmed bugs. Releasing/updating the installed copy is a separate action.
+
+
+## Historical: PR #2 merged (2026-10-24 — follow-ups superseded by PR #3 above)
 
 [PR #2](https://github.com/different2/local-project-hub/pull/2) was merged at
 `2026-10-25T00:44:45Z` with merge commit
