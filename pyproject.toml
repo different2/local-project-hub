@@ -19,15 +19,15 @@ author = "Local Project Hub contributors"
 # Briefcase appends the extension itself, so the value must NOT include it.
 icon = "assets/icon"
 
-# Pinned, coordinated set — DO NOT float these. The trio ships in lockstep
-# (mixing versions is unsupported), and the packaged app must run exactly the
-# PySide6 version the suite is tested against. 6.7.3 is the newest PySide6
-# the app bundle can install while it targets older macOS; see DEVELOPMENT.md
-# "Dependency versions" before touching any of these — ci.yml, this file, and
-# the local venvs must move together.
+# Pin a coherent Qt pair per platform, coordinated with CI/build jobs.
+# macOS retains its existing Qt/support floor. Windows uses 6.12.0 because
+# default-sandbox controls on Windows 2025 fail with 6.7.3 and pass with 6.12.0.
+# Do not upgrade macOS as a side effect of a Windows compatibility correction.
 requires = [
-    "PySide6-Essentials==6.7.3",
-    "PySide6-Addons==6.7.3",
+    "PySide6-Essentials==6.7.3; sys_platform != 'win32'",
+    "PySide6-Addons==6.7.3; sys_platform != 'win32'",
+    "PySide6-Essentials==6.12.0; sys_platform == 'win32'",
+    "PySide6-Addons==6.12.0; sys_platform == 'win32'",
     # The app's own HTTPS (update check + download) verifies against a CA
     # bundle that always exists. The bundle's Python has NO default trust
     # store — its compiled-in paths point at the python.org framework

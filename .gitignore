@@ -15,3 +15,8 @@ dist/
 *.egg-info/
 .venv/
 .buildenv/
+
+# Secrets stay local; only a credential-free example may be committed.
+.env
+.env.*
+!.env.example

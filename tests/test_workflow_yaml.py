@@ -170,55 +170,90 @@ def test_briefcase_is_pinned() -> None:
         )
 
 
-def test_gui_dependency_pins_are_coordinated() -> None:
-    """The GUI stack must be pinned to ONE version, everywhere.
+def _packaged_gui_pins(platform: str) -> dict[str, str]:
+    """Evaluate the real PEP 508 markers, without changing sys.platform."""
+    import ast
+    import re
+    from packaging.requirements import Requirement
 
-    PySide6 ships as three distributions in lockstep (PySide6, -Essentials,
-    -Addons); mixing them is unsupported, and the packaged app must run exactly
-    the version the suite is tested against — otherwise CI quietly tests a
-    different Qt than users get. The pins live in the workflow (what CI
-    installs) and in pyproject's `requires` (what briefcase bundles); this
-    test fails when they drift apart or go unpinned. See DEVELOPMENT.md
-    "Dependency versions" for how to bump them deliberately.
-    """
+    text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    common = re.split(r"(?m)^\[tool\.briefcase\.app\.", text, maxsplit=1)[0]
+    match = re.search(r"(?ms)^requires\s*=\s*(\[.*?^\])", common)
+    assert match, "missing common Briefcase requirements array"
+    requirements = ast.literal_eval(match.group(1))
+    pins = {}
+    for raw in requirements:
+        req = Requirement(raw)
+        if req.name not in ("PySide6", "PySide6-Essentials", "PySide6-Addons"):
+            continue
+        if req.marker is not None and not req.marker.evaluate({"sys_platform": platform}):
+            continue
+        assert req.name not in pins, f"multiple active {req.name} requirements on {platform}"
+        version = str(req.specifier)
+        assert re.fullmatch(r"==[0-9]+(?:\.[0-9]+)+", version), f"unpinned GUI requirement: {raw}"
+        pins[req.name] = version[2:]
+    assert {"PySide6-Essentials", "PySide6-Addons"} <= set(pins), (platform, pins)
+    assert len(set(pins.values())) == 1, f"mixed Qt distributions on {platform}: {pins}"
+    return pins
+
+
+def test_platform_gui_versions_preserve_mac_and_fix_new_windows() -> None:
+    """The validated Windows upgrade must not raise the macOS Qt floor."""
     import re
 
-    text = WORKFLOW.read_text(encoding="utf-8")
-    cmd = "\n".join(
-        ln for ln in text.splitlines()
-        if "pip install" in ln and not ln.strip().startswith("#")
+    assert set(_packaged_gui_pins("win32").values()) == {"6.12.0"}, (
+        "Windows still packages the incompatible Qt version instead of validated 6.12.0"
+    )
+    assert set(_packaged_gui_pins("darwin").values()) == {"6.7.3"}, (
+        "the Windows compatibility fix must preserve the existing macOS Qt/support floor"
+    )
+    text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    mac = re.search(r"(?ms)^\[tool\.briefcase\.app\.hub\.macOS\]\n(.*?)(?=^\[|\Z)", text)
+    assert mac and re.search(r'(?m)^minimum_system_version\s*=\s*"12\.0"\s*$', mac.group(1)), (
+        "the Windows compatibility fix must not change the existing macOS 12.0 floor"
     )
 
-    versions = sorted(set(
-        re.findall(r"PySide6(?:-(?:Essentials|Addons))?==([0-9][0-9.]*)", cmd)
-    ))
-    assert versions, "no pinned PySide6 packages found in the workflow"
-    assert len(versions) == 1, (
-        f"the PySide6 trio is pinned to different versions: {versions} — it "
-        "ships in lockstep and mixing versions is unsupported"
-    )
-    version = versions[0]
 
-    for name in ("PySide6", "PySide6-Essentials", "PySide6-Addons", "Pillow"):
-        assert f"{name}==" in cmd, f"{name} must be pinned in the workflow"
+def test_gui_dependency_pins_are_coordinated() -> None:
+    """Each OS tests and packages one matching, internally coherent Qt trio."""
+    import re
+    import yaml
 
-    for name in ("PySide6-Essentials", "PySide6-Addons", "Pillow"):
-        assert not re.search(re.escape(name) + r"(?!==)", cmd), (
-            f"{name} appears unpinned somewhere in the workflow — pin it "
-            "like the rest of the set"
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    for job, platform in (("test", "win32"), ("build-windows", "win32"),
+                          ("build-macos", "darwin")):
+        commands = "\n".join(
+            line for step in workflow["jobs"][job]["steps"]
+            for line in str(step.get("run", "")).splitlines()
+            if "pip install" in line and not line.strip().startswith("#")
         )
-    assert not re.search(r"(?<![\w\-])PySide6(?![\w=\-])", cmd), (
-        "a bare PySide6 appears unpinned in the workflow"
+        found = re.findall(r"(PySide6(?:-(?:Essentials|Addons))?)==([0-9.]+)", commands)
+        pins = {}
+        for name, version in found:
+            assert name not in pins or pins[name] == version, (job, found)
+            pins[name] = version
+        assert set(pins) == {"PySide6", "PySide6-Essentials", "PySide6-Addons"}, (job, pins)
+        expected = next(iter(_packaged_gui_pins(platform).values()))
+        assert set(pins.values()) == {expected}, (
+            f"{job} tests/builds Qt {pins}, but {platform} packages Qt {expected}"
+        )
+        names = re.findall(r"(?<![\w-])(PySide6(?:-(?:Essentials|Addons))?)", commands)
+        assert len(names) == len(found), f"unversioned Qt requirement in {job}"
+        assert "Pillow==11.3.0" in commands, f"Pillow pin missing from {job}"
+        assert not re.search(r"(?<![\w-])Pillow(?!==)", commands), f"unpinned Pillow in {job}"
+
+
+def test_runtime_qt_matches_packaged_platform_pin() -> None:
+    """Verify the actual interpreter, not merely the workflow's pip strings."""
+    import PySide6
+    from PySide6.QtCore import qVersion
+
+    expected = next(iter(_packaged_gui_pins(sys.platform).values()))
+    versions = (PySide6.__version__, qVersion())
+    assert all(version == expected for version in versions), (
+        f"running bindings/Qt {versions}, but {sys.platform} packages Qt {expected}"
     )
 
-    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    req = sorted(set(
-        re.findall(r'"PySide6-(?:Essentials|Addons)==([0-9][0-9.]*)"', pyproject)
-    ))
-    assert req == [version], (
-        f"pyproject `requires` pins {req} but CI pins {version} — the packaged "
-        "app would not run the version the suite was tested against"
-    )
 
 
 def test_certifi_and_pyobjc_pins_are_coordinated() -> None:
@@ -267,18 +302,57 @@ def test_certifi_and_pyobjc_pins_are_coordinated() -> None:
     )
 
 
-def test_windows_test_image_is_pinned_to_validated_2022() -> None:
-    """Do not silently move the Qt 6.7.3 tests onto a broken sandbox image."""
+def test_windows_images_cover_current_and_newer_runtime() -> None:
+    """Do not hide the newer-Windows compatibility defect behind an old image."""
     import yaml
 
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     images = workflow["jobs"]["test"]["strategy"]["matrix"]["os"]
     windows = [image for image in images if str(image).startswith("windows-")]
-    assert windows == ["windows-2022"], (
-        f"Windows test images {windows!r} are not the validated sandbox-enabled "
-        "windows-2022 image. Qt 6.7.3's renderer crashes on the moving Windows "
-        "2025 image even without the Hub; do not bypass its sandbox to hide it."
+    assert windows == ["windows-2022", "windows-2025"], (
+        f"Windows test images {windows!r} must include the old and the newer "
+        "host, so the renderer compatibility fix cannot silently regress"
     )
+    assert workflow["jobs"]["build-windows"]["runs-on"] == "windows-2025", (
+        "Windows packaging must use the pinned newer image validated by the tests"
+    )
+
+
+def test_windows_ci_does_not_bypass_the_renderer_sandbox() -> None:
+    """The compatibility correction must retain normal browser security."""
+    import yaml
+
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    test_job = workflow["jobs"]["test"]
+    for node in (workflow, test_job, *test_job["steps"]):
+        env = node.get("env") or {}
+        assert "QTWEBENGINE_DISABLE_SANDBOX" not in env, "sandbox bypass in CI environment"
+        flags = str(env.get("QTWEBENGINE_CHROMIUM_FLAGS", ""))
+        run = str(node.get("run", ""))
+        for forbidden in ("--no-sandbox", "--disable-sandbox", "QTWEBENGINE_DISABLE_SANDBOX"):
+            assert forbidden not in flags + run, f"sandbox bypass {forbidden} in CI"
+
+
+def test_matrix_jobs_upload_distinct_test_log_artifacts() -> None:
+    """Two Windows image versions must not collide in immutable artifact names."""
+    import yaml
+
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["test"]
+    uploads = [step for step in job["steps"]
+               if str(step.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert len(uploads) == 1, "expected one per-job test-log upload"
+    step = uploads[0]
+    assert step.get("if") == "always()", "failed suites must retain their logs"
+    template = step["with"]["name"]
+    names = []
+    for image in job["strategy"]["matrix"]["os"]:
+        host_os = "Windows" if image.startswith("windows-") else (
+            "macOS" if image.startswith("macos-") else "Linux"
+        )
+        name = template.replace("${{ runner.os }}", host_os).replace("${{ matrix.os }}", image)
+        assert "${{" not in name, f"unresolved artifact-name expression: {name}"
+        names.append(name)
+    assert len(names) == len(set(names)), f"matrix log artifact names collide: {names}"
 
 
 def test_tag_check_gets_the_tag_on_every_shell() -> None:

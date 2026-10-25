@@ -50,11 +50,10 @@ jobs:
         # rerun for PR #2. Add another platform deliberately when it needs
         # validation: each entry costs runner capacity.
         os:
-          # Qt 6.7.3's sandboxed renderer crashes on the Windows 2025 hosted
-          # image even for bare Qt and unchanged main. Windows 2022 passed
-          # the same controls with normal security settings; pin that image
-          # rather than bypassing the sandbox. See DEVELOPMENT.md.
+          # Cover both Windows hosts with the validated Qt 6.12.0 stack and
+          # normal sandboxing. macOS keeps 6.7.3 and its existing OS floor.
           - windows-2022
+          - windows-2025
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -83,7 +82,7 @@ jobs:
           # the Linux and Windows runners from installing it) is the AppKit
           # piece of the About-box fix, pinned to what the shipped bundles
           # contain.
-          python -m pip install "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "PySide6==6.7.3" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
+          python -m pip install "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0" "PySide6==6.12.0" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
           python -m pip install pytest PyYAML
 
       # Must come BEFORE the import check below: the check needs libEGL and
@@ -137,7 +136,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: test-log-${{ runner.os }}
+          name: test-log-${{ matrix.os }}
           path: '**/*.log'
           if-no-files-found: ignore
           retention-days: 7
@@ -205,7 +204,7 @@ jobs:
 
   build-windows:
     name: Build Windows installer
-    runs-on: windows-latest
+    runs-on: windows-2025
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v5
@@ -224,10 +223,9 @@ jobs:
           # Bump this pin as a reviewed, standalone change —
           # tests/test_workflow_yaml.py fails if it goes unpinned again.
           python -m pip install "briefcase==0.4.6"
-          # The GUI set, pinned to what the suite runs and the bundle ships
-          # (see DEVELOPMENT.md "Dependency versions" — 6.7.3 is the newest
-          # PySide6 the app bundle can take while it targets older macOS).
-          python -m pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "PySide6-Essentials==6.7.3" "Pillow==11.3.0"
+          # Match Windows tests and the platform-marked package dependencies.
+          # macOS deliberately retains 6.7.3 and its existing support floor.
+          python -m pip install "PySide6==6.12.0" "PySide6-Addons==6.12.0" "PySide6-Essentials==6.12.0" "Pillow==11.3.0"
       - name: Build the MSI installer
         # `--msi` was never a valid flag — this job is tag-gated and the repo had
         # no tags until v0.3.7, so the command had never once been executed and
