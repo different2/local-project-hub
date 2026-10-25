@@ -27,9 +27,9 @@ from `edfc1f0`; CI now pins the validated Windows 2022 test image with normal
 sandboxing. A regression guard and developer documentation accompany the pin.
 Both TEMP diagnostic files were archived and removed from the final Git tree.
 
-- Prior application-code Mac run on edfc1f0 passed **19/19, 309 passed, 3 skipped,
+- Final Mac run on exact9d4e75a passed **19/19, 310 passed, 3 skipped,
   zero failures/blocked/not-run**, exit 0, log
-  `~/.hermes/cache/scratch/lph-pr2-final/macos-edfc1f0-py311.log`.
+  `~/.hermes/cache/scratch/lph-pr2-final/macos-9d4e75a-py311.log`.
 - Before the image pin, **both Windows 2025 attempts failed identically:** 17/19 suites, 299 passed,
   6 skipped, 7 failed (four window and three popup page-load cases). The
   process-safety suite passed, 16 passed/1 skip. The Windows mock setup bugs
@@ -51,8 +51,8 @@ Both TEMP diagnostic files were archived and removed from the final Git tree.
   guard was observed RED, then GREEN and negative-controlled against the exact
   old config; all 10 workflow guards pass under Python 3.9 and 3.11.
   Real full Windows CI **40145634640** is now running on the verified job
-  **Tests (windows-2022)** at exact9d4e75a. A fresh full Mac run is also underway,
-  log `lph-pr2-final/macos-9d4e75a-py311.log`; do not confuse older results with it.
+  **Tests (windows-2022)** at exact9d4e75a. Mac completed as above; Windows
+  remains the outstanding gate. Do not confuse diagnostic greens with it.
   Read CURRENT in `~/.hermes/cache/scratch/lph-pr2-review/STATUS.md`.
   Read/count both actual full results, then formal review and a tested-head
   merge preserving the contributor's original commit. No known-red merge.
@@ -60,8 +60,12 @@ Both TEMP diagnostic files were archived and removed from the final Git tree.
   were minimally corrected with observed RED/GREEN regressions. No more
   review loop. Native Cocoa Start/Restart/Stop was rerun on exact9d4e75a:
   passed/exit0, inspected rendered screenshots plus HTTP/PID/listener checks,
-  no fixture listener left. A misleading error log during a successful code15
-  Restart was observed; do not claim it fixed or assign causality yet.
+  no fixture listener left. Its JSON/screenshots are archived in
+  `lph-pr2-final/native-9d4e75a/`. The misleading code15 Restart error log was
+  independently reproduced with unchanged main after the suite finished:
+  it is **pre-existing**, not introduced by this PR, and remains a nonblocking
+  follow-up. Baseline evidence is separately archived in `native-baseline-main/`;
+  the shared `lph-pr2-review/native-*` paths now contain that baseline, not9d.
 - Original `174e90c`, Tahir Masood's authorship and existing co-author trailer
   remain intact. README acknowledgement is in the PR, and explicit credit and
   honest progress were [posted/read back](https://github.com/different2/local-project-hub/pull/2#issuecomment-6390548019).
