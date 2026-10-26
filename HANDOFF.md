@@ -1,5 +1,34 @@
 # HANDOFF — Local Project Hub
 
+## Latest native verification checkpoint — platform tab-button placement
+
+Qt6.9.3 runtime correction07a1c7f and native-backend correction60c1c76 both
+passed their separate bounded reviews and are pushed to origin/main at60c1c76.
+The full native Cocoa run at that SHA is retained as FAILED:355PASS/3SKIP/
+3FAIL,111actual children. Only three tab-close tests failed, each querying only
+`QTabBar.RightSide`; no raw child in this run crashed. This is not acceptance.
+
+A separate actual minimal Qt control shows the default macOS/Cocoa CloseButton
+object on LEFT, while Fusion/offscreen puts it on RIGHT. Both objects have
+nonzero geometry and close the tab when clicked, and both actual processes exit0.
+The saved native screenshot does not prove an always-visible x glyph; no such
+appearance claim is made. The follow-up changes ONLY the three test-side button
+existence queries to inspect both sides. All original close/backend/registry/
+starter-identity assertions and application behavior remain unchanged. The same
+three original cases now pass with actualexit0 on Python3.11.10 AND3.9.6,
+Qt6.9.3/Cocoa; an intentionally disabled real HubWindow close button is still
+rejected with the exact missing-button error (separate negative-control exit1).
+No app/pin/workflow/sandbox/source-runner changes are part of this correction.
+
+This small observation correction still needs its bounded review/commit and a
+fresh FULL strict native run. Prior failed runs remain on disk. Source CI
+40290038065 tests60c1c76 (Ubuntu step succeeded; Windows jobs not yet reconciled
+at writing), not this follow-up. Finish the final-SHA full native/remote evidence,
+then rebuild/inspect the exact-source DMG and complete actual packaged AX/native
+mouse drag/persistence/reopen/normal-OS-exit acceptance before staging any private
+v0.7.2 input or tag. No0.7.2 tag/draft/publication; installed user0.7.0 untouched.
+Newest scratch state: `~/.hermes/cache/scratch/lph-release-0.7.2/STATUS.md`.
+
 ## Current verification correction — native Mac test backend
 
 Runtime correction07a1c7f was independently reviewed clear and committed locally,
