@@ -20,6 +20,26 @@ sys.path.insert(0, str(HERE.parent))
 import run_all  # noqa: E402
 
 
+def test_gui_backend_matches_native_mac_and_keeps_explicit_overrides() -> None:
+    """The observer must use Cocoa on Mac, not Qt6.9's crashing offscreen path."""
+    import os
+
+    assert hasattr(run_all, "gui_environment"), "missing platform-aware GUI test environment"
+    assert run_all.gui_environment("darwin", {}) == {"QT_QPA_PLATFORM": "cocoa"}
+    for platform in ("linux", "win32"):
+        assert run_all.gui_environment(platform, {}) == {"QT_QPA_PLATFORM": "offscreen"}
+    for platform in ("darwin", "linux", "win32"):
+        assert run_all.gui_environment(platform, {"QT_QPA_PLATFORM": "minimal"}) == {
+            "QT_QPA_PLATFORM": "minimal"
+        }, "an explicit diagnostic backend was silently ignored"
+    assert run_all.gui_environment("darwin", {"QT_QPA_PLATFORM": ""}) == {
+        "QT_QPA_PLATFORM": "cocoa"
+    }
+    assert run_all.GUI_ENV == run_all.gui_environment(sys.platform, os.environ), (
+        "run_one's actual environment is not wired to the platform selector"
+    )
+
+
 def test_runner_waits_for_every_port_the_suites_bind() -> None:
     """Every port a test file hardcodes must be one the runner waits out.
 
@@ -225,9 +245,16 @@ def test_real_skipped_test_is_reported_as_skip_not_pass() -> None:
     # platform-specific code, and run_one supplies the GUI environment.
     suite = HERE / "test_urldetect.py"
     name = "test_about_box_hides_extra_window_buttons"
-    _code, out = run_all.run_one(
-        suite, needs_gui=True, extra_args=[f"--test={name}"]
-    )
+    # This test's subject is a genuine OFFSCREEN skip, even on a Mac whose
+    # ordinary GUI suite now exercises Cocoa and actually verifies the buttons.
+    real = run_all.GUI_ENV
+    try:
+        run_all.GUI_ENV = {**real, "QT_QPA_PLATFORM": "offscreen"}
+        _code, out = run_all.run_one(
+            suite, needs_gui=True, extra_args=[f"--test={name}"]
+        )
+    finally:
+        run_all.GUI_ENV = real
     assert f"SKIP {name}" in out, out
     assert f"PASS {name}" not in out, out
     assert run_all.count_results(out) == (0, 0, 1), out

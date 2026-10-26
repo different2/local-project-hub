@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Mapping
 
 HERE = Path(__file__).resolve().parent
 
@@ -83,8 +84,21 @@ except ImportError:  # pragma: no cover - Windows
     pty = None  # type: ignore[assignment]
     HAS_PTY = False
 
-# GUI suites need a Qt platform that works headless on macOS and Linux.
-GUI_ENV = {"QT_QPA_PLATFORM": "offscreen"}
+def gui_environment(platform: str, environ: Mapping[str, str]) -> dict[str, str]:
+    """Use the native Mac backend; preserve explicit diagnostic overrides.
+
+    Qt6.9's offscreen path can lose Skia surfaces and crash VizCompositorThread
+    on macOS while the exact same cases pass with Cocoa. Linux/Windows retain
+    their existing offscreen default. This changes no application settings,
+    assertions, raw-exit handling or renderer sandbox flags.
+    """
+    backend = environ.get("QT_QPA_PLATFORM") or (
+        "cocoa" if platform == "darwin" else "offscreen"
+    )
+    return {"QT_QPA_PLATFORM": backend}
+
+
+GUI_ENV = gui_environment(sys.platform, os.environ)
 
 # (file, needs_gui)
 SUITES = [
@@ -601,6 +615,7 @@ def run_suite(name: str, path: Path, needs_gui: bool) -> tuple[int, int, int, in
 
 def main() -> int:
     emit(f"Running {len(SUITES)} suites serially (GUI suites cannot overlap)\n")
+    emit(f"GUI backend: {GUI_ENV['QT_QPA_PLATFORM']}")
     results = []
     total_passed = total_skipped = total_failed = 0
     blocked_suites = 0
