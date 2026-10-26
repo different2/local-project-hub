@@ -63,7 +63,8 @@ def main() -> int:
     bad = [record for record in records if not record["clean"]]
     strict = 0 if result == 0 and records and not bad and unchanged else 1
     summary = {"source_head": head, "source_head_unchanged": unchanged,
-               "interpreter": sys.executable, "ordinary_runner_exit": result,
+               "interpreter": sys.executable, "qt_platform": runner.GUI_ENV["QT_QPA_PLATFORM"],
+               "ordinary_runner_exit": result,
                "raw_children": len(records), "raw_nonzero_or_failed": bad,
                "passed": sum(len(r["passed"]) for r in records),
                "skipped": sum(len(r["skipped"]) for r in records),

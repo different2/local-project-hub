@@ -1,4 +1,4 @@
-"""Window-level regression tests (offscreen, no visible window).
+"""Window-level regression tests (native Mac, offscreen on other platforms).
 
 These cover the failure mode where a project starts fine but the dashboard
 never appears — the window sits on "Starting…" forever because:
@@ -11,7 +11,7 @@ The proof of the regression is `test_selecting_project_loads_dashboard`: it
 asserts the webview actually receives the dashboard URL, which is the step
 that was missing.
 
-Run:  QT_QPA_PLATFORM=offscreen python3 tests/test_window_e2e.py
+Run through tests/run_all.py for the platform's validated GUI environment.
 """
 
 from __future__ import annotations

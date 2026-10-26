@@ -1,5 +1,30 @@
 # HANDOFF — Local Project Hub
 
+## Current verification correction — native Mac test backend
+
+Runtime correction07a1c7f was independently reviewed clear and committed locally,
+not yet pushed/tagged. The real rebuilt6.9.3 DMG passed mounted source/version,
+signature, actual dependency and Mach-O macOS12-floor inspection. Its actual
+packaged AX+drag/reopen acceptance is still pending; installed0.7.0 untouched.
+
+The first full strict6.9.3 run retained354PASS/4SKIP but7actual-11 children in
+3window cases (115invocations including retries); it is NOT acceptance. OS
+stacks identify VizCompositorThread/QtWebEngineCore, not the old Cocoa AX crash.
+Without any concurrent build, two cases still crash offscreen; all3 exact
+source cases pass with Cocoa/actualexit0. The test runner now defaults to native
+Cocoa ONLY on Mac and keeps Windows/Linux offscreen; explicit backend overrides
+remain possible. Assertions, isolation/PTY, retry policy, raw-exit strict gate,
+sandbox flags and application code are unchanged. Strict evidence now names its
+backend. The genuine skip-control test explicitly selects offscreen and restores
+the environment afterward, rather than assuming every Mac test is offscreen.
+
+New platform/backend guard first failed RED; the runner suite passes all11
+cases under actual Python3.11 and3.9. This correction still needs bounded review,
+commit/fresh full strict acceptance and exact-source installer/release gates.
+Retain the failed offscreen run and original native comparison evidence; do not
+claim that switching the test backend repaired a production rendering bug.
+Scratch STATUS.md names exact reports, paths and next actions.
+
 ## Current correction — Mac accessibility runtime (supersedes checkpoints below)
 
 The owner chose **"Test the Mac runtime fix, then finish the release"** after

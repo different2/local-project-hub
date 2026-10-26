@@ -137,7 +137,14 @@ python3 tests/run_all.py
   calls. A full run takes about half an hour on the author's Mac, more on CI
   runners.
 - A single suite runs directly: `.hubenv/bin/python tests/test_store.py`.
-- On a headless machine, prepend `QT_QPA_PLATFORM=offscreen`.
+- Mac GUI tests use native **Cocoa** by default and may show scratch windows;
+  Windows/Linux retain the offscreen default. Explicit `QT_QPA_PLATFORM`
+  overrides remain available for diagnostics. With Mac Qt6.9.3, the offscreen
+  compositor can lose Skia surfaces and crash on dashboard restart/row rollback;
+  the same exact cases pass with Cocoa. Do not confuse that backend comparison
+  with full installer acceptance, or suppress a nonzero child exit. The strict
+  summary records the actual selected backend. The skip-protocol control alone
+  deliberately uses offscreen to prove its genuine skip stays a skip.
 - CI runs the full suite on **Ubuntu 24.04, Windows 2022 and Windows 2025**,
   serially across the matrix; macOS is verified locally. Linux uses Python 3.12
   to match the native package; Windows uses 3.11.
