@@ -916,7 +916,9 @@ def test_project_tab_close_button_exists_and_starter_has_none(tmp: Path) -> None
         w._select_id(st.ordered()[0]["id"], start=False)
         idx = w._tab_index_for_project(st.ordered()[0]["id"])
         assert idx is not None, "project tab not found"
-        assert w.tabs.tabBar().tabButton(idx, QTabBar.RightSide) is not None, (
+        # Native macOS puts the close button on the left; Fusion uses the right.
+        assert any(w.tabs.tabBar().tabButton(idx, side) is not None
+                   for side in (QTabBar.LeftSide, QTabBar.RightSide)), (
             "project tab has no close button"
         )
     finally:
@@ -952,7 +954,8 @@ def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
         )
         idx = w._tab_index_for_project(pid)
         assert idx is not None, "no tab for the running project"
-        assert w.tabs.tabBar().tabButton(idx, QTabBar.RightSide) is not None, (
+        assert any(w.tabs.tabBar().tabButton(idx, side) is not None
+                   for side in (QTabBar.LeftSide, QTabBar.RightSide)), (
             "running project's tab has no close button"
         )
         assert w.tabs.count() == 2, w.tabs.count()
@@ -1003,7 +1006,8 @@ def test_closing_the_starter_tab_leaves_project_tabs_working(tmp: Path) -> None:
         assert w.starter_index() is None, "starter still present"
         # the project tab moved to index 0 -- it must NOT be read as the starter
         assert not w._is_starter_index(0), "project tab misread as the starter"
-        assert w.tabs.tabBar().tabButton(0, QTabBar.RightSide) is not None, (
+        assert any(w.tabs.tabBar().tabButton(0, side) is not None
+                   for side in (QTabBar.LeftSide, QTabBar.RightSide)), (
             "project tab lost its close button after the starter closed"
         )
         # and the starter can be brought back
