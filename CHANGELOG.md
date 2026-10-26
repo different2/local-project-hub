@@ -3,6 +3,7 @@
 ## 0.7.2
 
 - Drag projects up or down in the sidebar and retain their order across restarts, renames, and export/import. New projects appear at the bottom.
+- Update the Mac UI runtime to fix an accessibility-triggered crash when sidebar rows change, retaining macOS 12 support and the existing Windows/Linux runtimes.
 - Build and verify macOS installers locally; GitHub Actions only stages the verified prebuilt DMG and builds/tests Windows and Ubuntu installers.
 
 ## 0.7.1

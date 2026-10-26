@@ -14,7 +14,7 @@ Or set up the venv once on macOS (recommended — avoids PATH surprises):
 
 ```bash
 python3 -m venv .hubenv
-.hubenv/bin/pip install "PySide6==6.7.3" "PySide6-Essentials==6.7.3" "PySide6-Addons==6.7.3" "Pillow==11.3.0" "certifi==2026.10.18"
+.hubenv/bin/pip install "PySide6==6.9.3" "PySide6-Essentials==6.9.3" "PySide6-Addons==6.9.3" "Pillow==11.3.0" "certifi==2026.10.18"
 .hubenv/bin/pip install "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"   # Python >= 3.10; on 3.9 pip has no 12.x wheel (see "Dependency versions")
 .hubenv/bin/python main.py
 ```
@@ -36,7 +36,7 @@ Notes:
   `LOCAL_PROJECT_HUB_HOME`), so a source run does not disturb the registry of
   an installed copy.
 - The packaged app and Windows development use Python 3.11+. The macOS source
-  checkout also supports the existing 3.9.6 dev interpreter with Qt 6.7.3;
+  checkout also supports the existing 3.9.6 dev interpreter with Qt 6.9.3;
   the newer Windows Qt is not compatible with Python 3.9.
 
 ## Dependency versions (updated deliberately)
@@ -47,14 +47,15 @@ PySide6 distributions.
 
 | Dependency | macOS | Windows | Ubuntu 24.04 amd64 |
 |---|---|---|---|
-| PySide6, PySide6-Essentials, PySide6-Addons | 6.7.3 | 6.12.0 | 6.7.3 |
+| PySide6, PySide6-Essentials, PySide6-Addons | 6.9.3 | 6.12.0 | 6.7.3 |
 | Pillow (build/test tool) | 11.3.0 | 11.3.0 | 11.3.0 |
 | certifi | 2026.10.18 | 2026.10.18 | 2026.10.18 |
 | pyobjc-framework-Cocoa | 12.2.2 (Python 3.10+; see dev exception below) | not installed | not installed |
 
 The `sys_platform` markers in `pyproject.toml` select the platform's pair.
-Windows CI/build use 6.12.0; macOS and Linux retain 6.7.3. The test install
-evaluates the same platform markers rather than forcing the Windows pin on Linux.
+Windows CI/build use 6.12.0; macOS uses 6.9.3; Linux retains 6.7.3. The test
+install evaluates the same platform markers. Linux source development uses the
+same venv recipe above with all three PySide6 versions set to 6.7.3.
 
 Where the pins live (they move together):
 
@@ -64,14 +65,24 @@ Where the pins live (they move together):
 | `pyproject.toml` → `requires` | the PySide6 pair, certifi and pyobjc — what briefcase bundles into the app |
 | local venvs (`.hubenv`, `.buildenv`) | the whole set, installed by hand |
 
-**Why retain 6.7.3 on macOS:** briefcase installs the bundle's dependencies
-with `pip --platform macosx_11_0_{arch}` (its macOS target comes from the
-support settings), and PySide6 moved its macOS wheels to macOS-12+ tags in
-6.8, macOS-13+ in 6.10 and macOS-14+ in 6.12. So 6.7.3 is the newest PySide6
-the current macOS bundle can actually install — and it is what the shipped builds
-contain. Choosing newer Qt means changing what macOS the app targets, which
-is a product decision, not a dependency bump. (6.12 also requires Python
-≥3.10, which the 3.9 dev venv cannot take.)
+**Why 6.9.3 on macOS:** Qt6.7.3 can crash after an accessibility client has
+enumerated list cells and their values/order change. The native stack reaches
+`QMacAccessibilityElement dealloc`; the upstream
+[QTBUG-134784 fix](https://code.qt.io/cgit/qt/qtbase.git/commit/?id=b1ed5f656f064e553b33752f8e87d2f5b9553e38)
+corrects cached-element reference counting (first public fix in Qt6.9.1).
+The exact same minimized native AX/mutation/normal-quit control exits-11 with
+6.7.3 and0 with6.9.3. This is not a mouse-only workaround or disabled accessibility.
+The owner authorized a Mac-only runtime correction before finishing0.7.2.
+
+Qt6.9 supports [macOS12+](https://doc.qt.io/qt-6.9/supported-platforms.html);
+the6.9.3 Essentials/Addons wheels are `macosx_12_0_universal2`/`cp39-abi3`.
+The correctly configured `min_os_version = "12.0"` selects that deployment
+floor; an older claim that the builder was necessarily targeting11.0 is stale.
+Neither the macOS12.0 floor nor Python3.9 source support is raised. Keep the
+local dev/build environments on the matching trio (older6.7.3 environments
+are not updated automatically). Runtime verification must still exercise the
+actual rebuilt installer with AX observation, native drag, persistence and a
+clean real process exit; source tests alone cannot verify this defect.
 
 **Why 6.12.0 on Windows:** the old 6.7.3 renderer crashes on the Windows 2025
 host, even for a bare WebEngine page. In the
@@ -211,7 +222,7 @@ built, source-bound DMG into the complete release artifact set.
   a substitute for final full regression acceptance.
 - **The toolchain is pinned:** Briefcase 0.4.6 is checked locally and installed
   by the Windows/Linux builders. Qt platform pins stay coordinated with
-  `pyproject.toml`; macOS retains Qt 6.7.3 and the macOS 12 support floor.
+  `pyproject.toml`; macOS uses Qt 6.9.3 while retaining the macOS 12 support floor.
 - **Icons:** `python3 tools/make_icons.py path/to/artwork.png`.
 - **Do not change `bundle` in `pyproject.toml`** (or rename the app key): the
   Windows MSI's UpgradeCode is derived from it. Changing it silently stops

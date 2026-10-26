@@ -57,7 +57,7 @@ jobs:
         os:
           - ubuntu-24.04
           # Cover both Windows hosts with the validated Qt 6.12.0 stack and
-          # normal sandboxing. macOS keeps 6.7.3 and its existing OS floor.
+          # normal sandboxing. macOS tests/builds run locally with Qt6.9.3/OS12+.
           - windows-2022
           - windows-2025
     steps:
@@ -86,7 +86,7 @@ jobs:
           # the Linux and Windows runners from installing it) is the AppKit
           # piece of the About-box fix, pinned to what the shipped bundles
           # contain.
-          python -m pip install "PySide6-Essentials==6.7.3; sys_platform != 'win32'" "PySide6-Addons==6.7.3; sys_platform != 'win32'" "PySide6==6.7.3; sys_platform != 'win32'" "PySide6-Essentials==6.12.0; sys_platform == 'win32'" "PySide6-Addons==6.12.0; sys_platform == 'win32'" "PySide6==6.12.0; sys_platform == 'win32'" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
+          python -m pip install "PySide6-Essentials==6.9.3; sys_platform == 'darwin'" "PySide6-Addons==6.9.3; sys_platform == 'darwin'" "PySide6==6.9.3; sys_platform == 'darwin'" "PySide6-Essentials==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6-Addons==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6-Essentials==6.12.0; sys_platform == 'win32'" "PySide6-Addons==6.12.0; sys_platform == 'win32'" "PySide6==6.12.0; sys_platform == 'win32'" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
           python -m pip install pytest PyYAML
 
       # Must come BEFORE the import check below: the check needs libEGL and

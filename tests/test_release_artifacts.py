@@ -459,8 +459,8 @@ def _build_config_fixture():
 
 def _installed_versions_fixture():
     """Mock installed metadata, not a claim about the build environment."""
-    return {"briefcase": "0.4.6", "PySide6-Essentials": "6.7.3", "PySide6-Addons": "6.7.3",
-            "PySide6": "6.7.3", "shiboken6": "6.7.3", "certifi": "2026.10.18",
+    return {"briefcase": "0.4.6", "PySide6-Essentials": "6.9.3", "PySide6-Addons": "6.9.3",
+            "PySide6": "6.9.3", "shiboken6": "6.9.3", "certifi": "2026.10.18",
             "pyobjc-framework-Cocoa": "12.2.2"}
 
 
