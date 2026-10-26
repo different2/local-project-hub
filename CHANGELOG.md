@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.2
 
 - Drag projects up or down in the sidebar and retain their order across restarts, renames, and export/import. New projects appear at the bottom.
+- Build and verify macOS installers locally; GitHub Actions only stages the verified prebuilt DMG and builds/tests Windows and Ubuntu installers.
 
 ## 0.7.1
 

@@ -60,7 +60,7 @@ Where the pins live (they move together):
 
 | File | Pins |
 |---|---|
-| `.github/workflows/ci.yml` | the coordinated set in the test job and all three build jobs |
+| `.github/workflows/ci.yml` | the coordinated test set and Windows/Linux builders; the local Mac helper checks package pins |
 | `pyproject.toml` → `requires` | the PySide6 pair, certifi and pyobjc — what briefcase bundles into the app |
 | local venvs (`.hubenv`, `.buildenv`) | the whole set, installed by hand |
 
@@ -176,78 +176,106 @@ tests/                   run with python3 tests/run_all.py
 
 ## Packaging
 
-Briefcase builds each platform on its own OS. Windows and Ubuntu binaries are
-built/executed on GitHub runners, never on the developer's Mac:
+Shared release transport/bundle checks remain compatible with the Python 3.9
+development environment. Only the five local macOS packaging/toolchain checks
+explicitly report SKIP below Python 3.11; run the suite with the Python 3.11
+build environment for those checks. This does not change application support.
 
-- **Test packaging without cutting a release:**
-  `gh workflow run CI --ref main` — all three platforms build and upload their
-  installers as downloadable artifacts. Nothing is published; only a `v*` tag
-  creates a release (`tests/test_workflow_yaml.py` guards that property).
-- **Linux-only packaging diagnosis:**
-  `gh workflow run CI --ref <branch> -f linux_only=true` skips the regression
-  matrix and other builders, but still installs/runs the Linux package. It can
-  never publish and is not a substitute for final full regression acceptance.
-- **Build locally on macOS:**
+macOS is built and tested **locally on the developer's Mac**. No hosted
+macOS runner is used. Windows and Ubuntu binaries are built/executed on their
+actual GitHub runners, never on the Mac. An Ubuntu job only relays the already
+built, source-bound DMG into the complete release artifact set.
+
+- **Build macOS locally with the existing pinned build environment:**
 
   ```bash
-  pip install "briefcase==0.4.6"   # keep this matching the CI pin
-  briefcase create macOS && briefcase build macOS && briefcase package macOS -p dmg
+  .buildenv/bin/python tools/build_macos_release.py vX.Y.Z --output release-assets
   ```
 
-  `-p dmg` is the packaging format (`zip`/`dmg`/`pkg`). There is no `--dmg`
-  flag — briefcase rejects it.
-- **The toolchain is pinned:** CI installs `briefcase==0.4.6`, the version
-  v0.3.7/v0.3.8 were built with, so releases cannot silently depend on
-  whatever PyPI resolves that day. Bump the pin as its own reviewed change;
-  `tests/test_workflow_yaml.py` fails if the install goes unpinned.
-- **Icons:** `python3 tools/make_icons.py path/to/artwork.png`
+  The helper requires Darwin, Python 3.11, clean tracked source, Briefcase
+  0.4.6 and the platform dependency pins. It builds the actual app, checks its
+  main Info.plist version and macOS 12.0 floor, bundled hub metadata, renderer
+  helper and byte-identical application sources **before** packaging. It uses
+  `-p dmg --adhoc-sign --no-input`, collects `Local.Project.Hub.dmg` without
+  clobbering an existing output, and runs `hdiutil verify`. It never installs
+  into Applications or restarts the user's app. Also exercise the packaged
+  app locally with isolated state before publishing; header fixtures are not
+  installer/runtime acceptance.
+- **Test Windows/Linux packaging without publishing:**
+  `gh workflow run CI --ref <candidate>` runs their native builders and source
+  regression. A dispatch never stages a Mac release input or publishes,
+  including when the selected ref is already a version tag.
+- **Linux-only packaging diagnosis:**
+  `gh workflow run CI --ref <branch> -f linux_only=true` skips the regression
+  matrix and other jobs, but still installs/runs the Linux package. It is not
+  a substitute for final full regression acceptance.
+- **The toolchain is pinned:** Briefcase 0.4.6 is checked locally and installed
+  by the Windows/Linux builders. Qt platform pins stay coordinated with
+  `pyproject.toml`; macOS retains Qt 6.7.3 and the macOS 12 support floor.
+- **Icons:** `python3 tools/make_icons.py path/to/artwork.png`.
 - **Do not change `bundle` in `pyproject.toml`** (or rename the app key): the
-  Windows MSI's UpgradeCode is derived from it, and changing it silently stops
-  MSI upgrades from replacing older installs. The comment there has details.
+  Windows MSI's UpgradeCode is derived from it. Changing it silently stops
+  MSI upgrades from replacing older installs.
 
 ## Releasing
 
-1. Bump `version` in `pyproject.toml` — it must match the tag exactly. All three
-   build jobs run `tools/check_tag_version.py` first, which fails in seconds
-   if they disagree (a mismatch ships an app that offers the same update
-   forever).
-2. Commit, then tag the **release commit by explicit sha** and push:
+1. Bump `version` in `pyproject.toml` and update the changelog. Freeze/review
+   the candidate and run local source checks. Keep the release commit clean;
+   application source, version and package inputs must not change after the
+   local Mac build. The tag/version guard runs locally and in both native
+   builders plus the publisher's Mac-input step.
+2. Build and exercise the actual macOS installer locally, retaining its source
+   SHA and full digest. Do not change the installed user app to test it.
+3. Push the source candidate and require a successful CI source run for that
+   exact SHA (Windows 2022/2025 and Ubuntu). Do not push a commit and tag
+   together or overlap duplicate full runs.
+4. Create a **new immutable annotated tag**, targeting the explicit tested SHA:
 
    ```bash
-   git tag vX.Y.Z <sha> && git push origin vX.Y.Z
+   sha="$(git rev-parse HEAD)"
+   tag=vX.Y.Z
+   git tag -a "$tag" "$sha" -m "$tag"
+   git push origin "$tag"
    ```
 
-   Two traps make tag pushes silently do nothing (both hit for real on
-   2026-10-18 — see HANDOFF "release night"):
+   Never force/retag a release. A `[skip ci]` marker in the tagged commit
+   suppresses push/tag workflows; do not tag such a commit. Verify the tag
+   run actually appeared and that it uses the tested SHA.
+5. Immediately prepare the private draft and upload the already-verified Mac
+   DMG with its exact source receipt; it must be ready before staging starts:
 
-   - A `[skip ci]` marker in the tagged commit's message suppresses the whole
-     build. Docs-only commits here use that marker — never let one be the tag
-     target (hence the explicit sha; never tag bare HEAD without checking
-     `git log -1`).
-   - After pushing, **verify a run appeared** (`gh run list --limit 5`). No
-     run means it was skipped, not queued.
+   ```bash
+   gh release create "$tag" --verify-tag --target "$sha" --draft \
+     --prerelease=false --latest=false --title "$tag" --notes-file release-notes.md
+   gh release upload "$tag" "release-assets/Local.Project.Hub.dmg#source:$sha"
+   ```
 
-3. CI waits for full tests and every platform builder, then creates a private
-   draft and attaches macOS `.dmg`, Windows `.msi` and Ubuntu `.deb`. It filters
-   installer artifacts rather than publishing test logs. Only after all three
-   names, upload states, URLs, sizes and SHA-256 digests validate does it publish
-   and explicitly mark the release latest; published metadata is read back.
-   The release is the macOS/Windows in-app update channel; Linux initially uses
-   manual download plus APT. Do not silently imply Linux one-click updates.
+   For an existing draft, resume only after reading `isDraft=true`; never
+   replace assets of a public release. The `source:<40-hex-SHA>` asset label
+   binds the prebuilt DMG to the exact tag job's source. The publisher waits for
+   source tests/native builders, checks the private release by **release ID**, validates
+   tag/repository/preview URL/source label/upload state/size/digest, downloads
+   and collects the DMG, and checks its actual size/full hash/footer before
+   any release upload. It does not compile or execute macOS binaries. Draft
+   visibility needs push access; reuse only the publisher's existing write
+   token, leaving source/build jobs read-only (GitHub CLI issue3037).
+6. CI requires source tests, the Windows build and installed Ubuntu runtime
+   acceptance, then the unskippable local-Mac input gate. Publication preserves the Mac source
+   label and resumes only a private draft. All **three** stable installer names,
+   upload states, URLs, sizes and SHA-256 digests must validate before the
+   release is made public and explicitly marked latest; the same release ID
+   is read back and revalidated afterward. Only an actual tag **push** may
+   publish; manual dispatches, even of a tag ref, cannot.
+7. Read back the final title/notes/assets and verify every latest-download URL
+   anonymously. URLs use `/releases/latest/download/<stable-name>` and match
+   `tools/release_artifacts.py::ASSET_NAMES`; never add a hardcoded version
+   label to the front page. Confirm the installed version is offered the new
+   release through the updater, without installing it unless authorized.
 
-   Workflow steps run under bash on macOS but **PowerShell on Windows** —
-   reference the tag as `${{ github.ref_name }}` in `run:` lines, never
-   `"${GITHUB_REF_NAME}"` (that expands to nothing under PowerShell; it is
-   exactly how the tag/version guard died at its first step on the Windows
-   runner). `tests/test_workflow_yaml.py` pins the correct form.
-
-4. Once the release is published (tag run green), apply/read back release notes
-   (`gh release edit vX.Y.Z --notes-file <file>`) and verify every README link
-   anonymously. The front page uses `/releases/latest/download/<stable-name>`;
-   filenames must match `tools/release_artifacts.py::ASSET_NAMES`, not include
-   the app version. There is no hardcoded latest-version label to go stale.
-   For the first switch to these names, publish the verified branch/tag before
-   merging its README, so the live front page never advertises missing assets.
+The release is the macOS/Windows in-app update channel. Ubuntu currently uses
+manual download and APT, not one-click in-app installation. Workflow tag
+arguments use `${{ github.ref_name }}`, not bash-only `${GITHUB_REF_NAME}`,
+so the Windows PowerShell builder receives the literal correct tag.
 
 ### Ubuntu package and installed-runtime acceptance
 

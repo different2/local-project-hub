@@ -137,73 +137,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # All three build jobs run on a version tag OR on a manual dispatch. Dispatch
-  # exists because these jobs are otherwise unreachable until a release is cut,
-  # so a broken packaging change could only be discovered by spending a tag on
-  # it — which is exactly how the `--msi` and `--dmg` typos survived unnoticed.
-  # A dispatch run builds and uploads artifacts and NEVER publishes: `publish`
-  # below stays tag-gated, so a manual click cannot cut a release.
-  build-macos:
-    name: Build macOS installer
-    runs-on: macos-latest
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.linux_only)
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Check the tag matches the app version
-        # Runs before the build so a forgotten version bump fails in seconds
-        # instead of after ten minutes of packaging. Only on tags: a manual
-        # dispatch has a branch name here, not a version.
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: python tools/check_tag_version.py "${{ github.ref_name }}"
-      - name: Install Briefcase and dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # Pinned deliberately: briefcase produces the release artifacts, so a
-          # new version arriving silently is a change to the release path we did
-          # not ask for. 0.4.6 is the version v0.3.7 and v0.3.8 were built with.
-          # Bump this pin as a reviewed, standalone change —
-          # tests/test_workflow_yaml.py fails if it goes unpinned again.
-          python -m pip install "briefcase==0.4.6"
-          # The GUI set, pinned to what the suite runs and the bundle ships
-          # (see DEVELOPMENT.md "Dependency versions" — 6.7.3 is the newest
-          # PySide6 the app bundle can take while it targets older macOS).
-          python -m pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "PySide6-Essentials==6.7.3" "Pillow==11.3.0"
-      - name: Build the .app
-        run: briefcase build macOS
-      - name: Verify the actual macOS deployment floor
-        run: |
-          python - <<'PY'
-          import pathlib, plistlib
-          apps = list(pathlib.Path("build").rglob("Local Project Hub.app/Contents/Info.plist"))
-          assert len(apps) == 1, apps
-          info = plistlib.loads(apps[0].read_bytes())
-          assert info["LSMinimumSystemVersion"] == "12.0", info
-          print("Actual bundle deployment floor:", info["LSMinimumSystemVersion"])
-          PY
-      - name: Package the .dmg
-        # `-p dmg`, not `--dmg`: briefcase has no `--dmg` flag (it takes
-        # -p/--packaging-format with zip|dmg|pkg).
-        #
-        # `--adhoc-sign` is required for CI, not cosmetic. With no identity
-        # configured, briefcase PROMPTS ("Select application signing identity
-        # to use:") and there is no terminal to answer, so it aborts with exit
-        # 214 — the first run of this job died exactly that way. Passing the
-        # flag skips the prompt and ad-hoc signs, which is what a local build
-        # produces anyway when the prompt is answered with its default. The
-        # result is unsigned-in-practice: Gatekeeper needs right-click → Open
-        # on first launch, the same as the local .dmg.
-        run: briefcase package macOS -p dmg --adhoc-sign
-      - name: Collect the installer
-        run: python tools/release_artifacts.py collect macos
-      - uses: actions/upload-artifact@v5
-        with:
-          name: LocalProjectHub-macOS
-          path: release-assets/Local.Project.Hub.dmg
-          if-no-files-found: error
-
+  # Windows/Linux are built on their actual OSes. macOS is built/tested
+  # locally; only the existing privileged publisher reads its private draft.
+  # Dispatches exercise native packaging but never stage or publish a release.
   build-windows:
     name: Build Windows installer
     runs-on: windows-2025
@@ -312,9 +248,8 @@ jobs:
     name: Publish to the GitHub release
     runs-on: ubuntu-24.04
     needs:
-      # Tests AND every supported platform deliberately gate publication.
+      # Tests/native builders gate publication; the local DMG gate is below.
       - test
-      - build-macos
       - build-windows
       - build-linux
     # TAGS ONLY — never add `|| github.event_name == 'workflow_dispatch'` here.
@@ -322,7 +257,7 @@ jobs:
     # without cutting a release; this job is what actually creates the release
     # and attaches installers, so a manual run must not be able to do that.
     # tests/test_workflow_yaml.py asserts this stays true.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment: release
     # The workflow sets `contents: read` for everything, which is right for the
     # test and build jobs. Creating a release and attaching an asset needs write,
@@ -357,12 +292,32 @@ jobs:
             gh release create "$tag" --repo "${GITHUB_REPOSITORY}" --verify-tag \
               --title "$tag" --generate-notes --draft --prerelease=false --latest=false
           fi
+      - name: Verify and stage the prebuilt macOS installer
+        # Draft visibility requires push access, so reuse this publisher's
+        # existing token rather than granting a second job write privileges.
+        # This only transfers an already locally built/tested DMG on Linux.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          python3 tools/check_tag_version.py "${{ github.ref_name }}"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["briefcase"]["version"])')"
+          tag="v$version"
+          release_id="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$release_id" > local-macos.json
+          python3 tools/release_artifacts.py verify-macos-input --metadata local-macos.json --version "$version" --repo "$GITHUB_REPOSITORY" --source-commit "$GITHUB_SHA"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern Local.Project.Hub.dmg --dir incoming-macos
+          python3 tools/release_artifacts.py collect macos --source incoming-macos --output artifacts
+          python3 tools/release_artifacts.py verify-macos-input --metadata local-macos.json --version "$version" --repo "$GITHUB_REPOSITORY" --source-commit "$GITHUB_SHA" --file artifacts/Local.Project.Hub.dmg
       - name: Upload installers to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la artifacts/
-          gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* \
+          gh release upload "${GITHUB_REF#refs/tags/}" \
+            "artifacts/Local.Project.Hub.dmg#source:$GITHUB_SHA" \
+            artifacts/Local.Project.Hub.msi artifacts/Local.Project.Hub.Ubuntu-24.04-amd64.deb \
             --clobber --repo "${GITHUB_REPOSITORY}"
       - name: Verify the complete draft before making it public
         # The in-app updater is fail-closed: it refuses to install an asset
