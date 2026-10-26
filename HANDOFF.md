@@ -1,6 +1,112 @@
 # HANDOFF — Local Project Hub
 
-## Latest native verification checkpoint — platform tab-button placement
+## Current release closeout — v0.7.2 public and verified (2026-10-26)
+
+**This section supersedes the historical checkpoints below. No v0.7.2 release
+verification remains pending. Installation is left to the owner.**
+
+Release: https://github.com/different2/local-project-hub/releases/tag/v0.7.2
+
+- Public, non-prerelease release **424229358** is `latest`. Immutable annotated
+  tag `v0.7.2` (object `f4e323ccd264db7432ced2114c7ef3da03d5f8af`) peels to
+  exact tested/built source `5aae648c3457868399a154633387766279c2033e`.
+  No force push, retag, public-asset replacement or installed-app update occurred.
+- Delivers persisted Projects-sidebar drag-to-reorder. New projects append;
+  renaming retains position, and failed saves restore the saved ordering.
+- Mac uses Qt6.9.3 with the upstream QTBUG-134784 accessibility-cache ownership
+  fix. Windows stays6.12.0, Ubuntu6.7.3; macOS floor12.0 is preserved.
+  The Mac test runner defaults to native Cocoa, not the offscreen backend that
+  reproduced a separate renderer crash. Only three native-style-dependent
+  tab-button test observers were corrected to check both sides; application
+  behavior and actual close/backend/persistence assertions were not weakened.
+- Source CI **40315788326** and tag CI **40323612397** both passed all required
+  jobs at that SHA. The tag run's six individual jobs, including both native
+  builders and the Ubuntu publisher, were freshly read back as successful.
+  Mac was built/tested locally, not on a hosted Mac runner.
+
+### Exact-source regression acceptance
+
+| Environment | Suites | Unique test IDs | Passed | Skipped | Failed | Actual runner children |
+|---|---:|---:|---:|---:|---:|---|
+| Local macOS / Cocoa / Qt6.9.3 |21|361|358|3|0|111/111 exit0|
+| GitHub Ubuntu24.04 |21|361|358|3|0|111/111 exit0|
+| GitHub Windows2022 |21|361|354|7|0|111/111 exit0|
+| GitHub Windows2025 |21|361|354|7|0|111/111 exit0|
+
+Every identity ledger was reconciled with no missing, extra or duplicate verdicts;
+strict and ordinary runners exited0. Remote rows were separately reconciled for
+both the final source run and tag run. Python3.9.6 separately passed the three
+original native WebEngine cases with Qt6.9.3/actualexit0, runner11 cases, and
+portable release helpers15PASS/5explicit packaging-only SKIP. This is targeted
+Python3.9 coverage, not a full Python3.9 packaged-app or full-suite claim.
+
+### Actual installers and public-byte acceptance
+
+| Stable latest-download asset | Bytes | SHA-256 |
+|---|---:|---|
+|Local.Project.Hub.dmg|264207177|58f50d05dda10b1aa12e946fffde2ba8bb4fb99b2deb3341260e2e7e69d6bda7|
+|Local.Project.Hub.msi|108754933|7927b5a2c5309687e5aa6c239734398f3e955a3c1d254c6ae393277c05698338|
+|Local.Project.Hub.Ubuntu-24.04-amd64.deb|172599736|ae9447fd88cd7e457344e46dd90b6bac0b2ee578a7ab1120b0a26b75f97c315e|
+
+- **Mac:** actual final DMG inspected for byte-identical source, version0.7.2,
+  numeric build counter1, bundled Qt6.9.3, all physical renderer helpers/signatures
+  and Mach-O macOS12 floors. Actual scratch bundle was observed through AX;
+  the owner performed one native drag Z/A/M → A/M/Z. Fresh pixels, saved stable
+  IDs, unchanged live backend identity, real nonce DOM and sandboxed renderer
+  verified it landed. Reopen used the same saved registry without reseeding.
+  Both launches quit normally with actual app/wrapper exit0 and no owned survivors.
+- **Windows:** built on native Windows CI, genuine x64 MSI/version0.7.2 inspected
+  read-only on the Mac. UpgradeCode remains
+  `{25F599D7-F44F-5B9D-8CC0-FC312B836125}`. No Windows installer was executed on
+  the Mac, and no installed Windows GUI/hardware acceptance is claimed.
+- **Linux:** actual APT-installed `/usr/bin/hub`0.7.2/Qt6.7.3 on Ubuntu24.04
+  rendered real nonce DOM and matching native screenshot pixels with checkout
+  sources hidden/restored. Renderer NoNewPrivs1/Seccomp2 and unchanged runner
+  security policy verified. Wrong-text negative control was rejected; real
+  application exit0, empty owned cleanup and source restoration verified.
+- All three `/releases/latest/download/...` URLs were anonymously downloaded
+  **in full** after publication: HTTP200, sizes/hashes match both these accepted
+  installers and the public API digests. Anonymous latest API returned v0.7.2;
+  published release notes match the intended notes. README already uses these
+  three version-independent links; no version-pinned front-page link was added.
+
+### Updater, review and local state
+
+- Installed `/Applications/Local Project Hub.app` remains **0.7.0/build1**.
+  Its actual updater module, imported with bytecode writes disabled under an
+  isolated host Python3.11 and using its installed certifi CA bundle, fetched
+  live metadata over verified TLS, detected v0.7.2 as newer, selected the exact
+  Mac DMG/digest and accepted its downloaded bytes while rejecting a wrong
+  digest. All three release digests parsed correctly. Selected installed-file
+  hashes/mtimes were unchanged. This checks module/network/discovery/integrity,
+  not a fresh GUI click or an installation; the owner updates the app themselves.
+- Review Checkpoint ran for the feature and separate Python3.9, Mac runtime,
+  native runner and tab-observer corrections; all final scoped results were
+  clear. Frozen packets, source hashes and complete reviewer transcripts were
+  audited. A clear code review is not substituted for the actual acceptance above.
+- Canonical main was fast-forwarded to the released source before this docs-only
+  closeout. Existing canonical development/build venvs were **not** upgraded:
+  follow DEVELOPMENT.md's Mac6.9.3 pins for future source work. The isolated
+  verified6.9.3 environments remain in the release scratch area while retained.
+- Original Tahir Masood / @tahirmasood2 commit
+  `174e90c55b696f592d58ed83f5f5e8552a51242a`, CommandCodeBot trailer, ancestry
+  and README acknowledgement remain intact. User projects/settings/art were not
+  changed. Prior failed probes and superseded runs are retained, not relabelled.
+- Platform limits remain: Mac Apple silicon/macOS12+, Windows x64, Linux
+  Ubuntu24.04 amd64 only; Linux updates are manual/APT. Installers are not
+  notarized/Authenticode-signed; README first-launch warnings still apply.
+
+Evidence root (scratch, subject to cache retention):
+`~/.hermes/cache/scratch/lph-release-0.7.2/`. Key records:
+`macos-final-acceptance.json`, `native-full-macos-v2-identities.json`,
+`py39-native-cases/report.json`, `sourceci-5a-reconciled.json`,
+`release072-tag-completed.json`, `release072-tag-tests-reconciled.json`,
+`release072-package-acceptance.json`, `release072-published.json`,
+`release072-anonymous-latest.json`, `release072-public-downloads.json`,
+`release072-installed-updater.json`. GitHub run/release links and the identities
+above remain the durable public re-verification points after scratch expiry.
+
+## Historical native verification checkpoint — platform tab-button placement
 
 Qt6.9.3 runtime correction07a1c7f and native-backend correction60c1c76 both
 passed their separate bounded reviews and are pushed to origin/main at60c1c76.
