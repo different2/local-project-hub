@@ -202,14 +202,17 @@ def _packaged_gui_pins(platform: str) -> dict[str, str]:
 
 
 def test_platform_gui_versions_preserve_mac_and_fix_new_windows() -> None:
-    """The validated Windows upgrade must not raise the macOS Qt floor."""
+    """Fix the Mac AX cache crash without changing other runtimes or OS floor."""
     import re
 
     assert set(_packaged_gui_pins("win32").values()) == {"6.12.0"}, (
         "Windows still packages the incompatible Qt version instead of validated 6.12.0"
     )
-    assert set(_packaged_gui_pins("darwin").values()) == {"6.7.3"}, (
-        "the Windows compatibility fix must preserve the existing macOS Qt/support floor"
+    assert set(_packaged_gui_pins("darwin").values()) == {"6.9.3"}, (
+        "macOS must package Qt6.9.3 with the QTBUG-134784 accessibility cache fix"
+    )
+    assert set(_packaged_gui_pins("linux").values()) == {"6.7.3"}, (
+        "the Mac accessibility correction must not change the Linux runtime"
     )
     text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     mac = re.search(r"(?ms)^\[tool\.briefcase\.app\.hub\.macOS\]\n(.*?)(?=^\[|\Z)", text)

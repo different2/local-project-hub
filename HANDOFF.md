@@ -1,5 +1,35 @@
 # HANDOFF — Local Project Hub
 
+## Current correction — Mac accessibility runtime (supersedes checkpoints below)
+
+The owner chose **"Test the Mac runtime fix, then finish the release"** after
+the actual0.7.2 Mac installer crashed on native row changes following AX cell
+inspection. Bare native Qt reproduced it; mouse-only/model-move and stable-row
+workarounds did not fix it and were removed. Ordinary pixel-only packaged drag
+worked but did NOT clear accessibility. The native fault resolves to
+`QMacAccessibilityElement dealloc+44`, strongly matching QTBUG-134784.
+
+Mac-only pins are now6.9.3, including the upstream cached-element ownership fix;
+Windows stays6.12.0/Linux6.7.3/macOS minimum12.0/Python3.9 source support retained.
+In the SAME minimized native control with AX observation and stable C++ item
+identities, actual process exits are6.7.3=-11 versus6.9.3=0. A first scratch
+probe used ephemeral Python-wrapper ids, raised an invalid identity assertion,
+and was rejected/stopped; only the corrected comparison is acceptance evidence.
+The application code remains reviewed `b6dec8c`, without a sidebar shim or any
+sandbox/accessibility bypass. New pin guard failed RED against6.7.3; all20
+workflow guards and20 packaging/helper cases pass under the6.9.3 Python3.11
+environment; ordinary3.9 packaging suite still gives15PASS/5explicitSKIP/exit0.
+
+Previous release prep was reviewed/committed/pushed as `a1dcd80`. Its strict
+local source run and all3 remote source jobs reconciled21suites/360uniqueIDs and
+111clean actual runner children each. Its original DMG is retained as historical
+evidence, not the new runtime installer. The current runtime correction still
+needs bounded review/freeze/commit, real rebuilt Mac DMG with native AX+drag and
+clean shutdown, fresh strict source acceptance at the final source, then the
+immutable tag/private exact-SHA Mac input and Windows/Linux installer gates.
+No0.7.2 tag/publication yet; installed user app is untouched0.7.0/build1.
+Scratch evidence/status: `~/.hermes/cache/scratch/lph-release-0.7.2/STATUS.md`.
+
 ## Active release preparation — v0.7.2 (not published yet)
 
 The owner authorized publishing the saved sidebar-ordering update and asked

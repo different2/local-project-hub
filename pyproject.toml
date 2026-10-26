@@ -21,12 +21,14 @@ author_email = "9109630+different2@users.noreply.github.com"
 icon = "assets/icon"
 
 # Pin a coherent Qt pair per platform, coordinated with CI/build jobs.
-# macOS retains its existing Qt/support floor. Windows uses 6.12.0 because
-# default-sandbox controls on Windows 2025 fail with 6.7.3 and pass with 6.12.0.
-# Do not upgrade macOS as a side effect of a Windows compatibility correction.
+# macOS uses 6.9.3 for the QTBUG-134784 accessibility cache fix, retaining
+# macOS 12.0 (the wheels target 12+). Linux stays on 6.7.3. Windows uses 6.12.0
+# because its default-sandbox renderer fails on Windows 2025 with 6.7.3.
 requires = [
-    "PySide6-Essentials==6.7.3; sys_platform != 'win32'",
-    "PySide6-Addons==6.7.3; sys_platform != 'win32'",
+    "PySide6-Essentials==6.9.3; sys_platform == 'darwin'",
+    "PySide6-Addons==6.9.3; sys_platform == 'darwin'",
+    "PySide6-Essentials==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'",
+    "PySide6-Addons==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'",
     "PySide6-Essentials==6.12.0; sys_platform == 'win32'",
     "PySide6-Addons==6.12.0; sys_platform == 'win32'",
     # The app's own HTTPS (update check + download) verifies against a CA
