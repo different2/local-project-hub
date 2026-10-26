@@ -1,6 +1,55 @@
 # HANDOFF — Local Project Hub
 
-## Current source update — saved project ordering (unreleased)
+## Active release preparation — v0.7.2 (not published yet)
+
+The owner authorized publishing the saved sidebar-ordering update and asked
+for macOS builds/tests to run locally, not on a hosted Mac runner. Version is
+now 0.7.2. The application code below remains unchanged from reviewed/tested
+`b6dec8c`; this release preparation changes packaging transport and guards.
+
+- Hosted `build-macos` is removed. The existing Ubuntu24.04 publisher runs
+  only on a tag push, after source tests/native builders, and requires the local DMG
+  in a private draft with an exact `source:<candidate SHA>` asset label.
+  It validates draft/tag/repo/URL/upload state/digest and downloaded full bytes
+  before release upload. It never compiles or executes a Mac binary. Private
+  drafts need push access, so reuse the publisher's existing privileged token
+  rather than adding a second privileged transport job.
+- `publish.needs` requires tests/Windows/Ubuntu builders; the local Mac input
+  is an unskippable step before any release upload, not a dangling job name.
+  Three complete stable installers are still mandatory. Upload retries stay
+  private-only, preserve the Mac source label and resolve drafts by release ID.
+  Manual dispatches, including tag refs, cannot stage or publish a release.
+- Local `tools/build_macos_release.py v0.7.2 --output <directory>` requires the
+  existing pinned Python3.11 .buildenv and clean tracked source. It checks the
+  real built app's short version, independent numeric build counter, macOS12
+  floor, hub metadata, renderer helper and byte-identical source before packaging;
+  then collects without clobbering and invokes real `hdiutil verify`.
+- Tight checks: 20 release-artifact/helper cases, 20 workflow guards and all
+  three version cases pass. Six explicit unsafe workflow fixture controls are
+  rejected. These are pure/transport checks, NOT new installer/runtime signoff.
+- The first release-preparation review found a Python3.9 developer-test
+  regression. Owner authorized fixing it. Shared receipt hashing now uses a
+  portable streaming SHA-256; only genuine Python3.11 packaging checks skip on
+  older Python. The retained ordinary runner passes15 cases/skips5 on3.9;
+  Python3.11 runs all20. Application support/code and build pins are unchanged.
+- During preflight the new helper's counter-equals-release assumption was caught:
+  the actual previous DMG has short version0.7.1/build counter1. A missing-behavior
+  RED then passing numeric-counter guard fixes that assumption. Mocked test roots
+  were canonicalized for /var versus /private/var aliases. Use explicit
+  `TMPDIR=/Users/iff/.hermes/cache/scratch` for local verification commands.
+- Worktree/evidence: `~/.hermes/cache/scratch/lph-release-0.7.2/`, branch
+  `release/0.7.2`. No v0.7.2 tag, draft, source push, actual Mac build or installer
+  execution has happened at this checkpoint. Installed Mac app is still0.7.0/build1.
+
+**NEXT:** review/freeze this preparation, build/test the real DMG locally,
+then push the exact source candidate and require Windows2022/2025 + Ubuntu source
+CI. Only after that green run and actual Mac acceptance, push a NEW immutable
+v0.7.2 tag, immediately create its PRIVATE draft and upload the verified Mac DMG
+with its source label. The tag pipeline builds Windows/Ubuntu, stages the Mac
+input in the publisher, validates all three assets and promotes latest. Verify real downloads
+and the update offer without installing it. See DEVELOPMENT.md for exact steps.
+
+## Previous local-source checkpoint — saved project ordering (then unreleased)
 
 The Projects sidebar can be rearranged by dragging rows. Order is stored in
 its existing registry array, survives restarting/renaming/export to a fresh

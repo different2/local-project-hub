@@ -126,7 +126,7 @@ def test_manual_dispatch_builds_but_never_publishes() -> None:
     def condition(name):
         return str(jobs[name].get("if") or "")
 
-    for name in ("build-macos", "build-windows", "build-linux"):
+    for name in ("build-windows", "build-linux"):
         assert "workflow_dispatch" in condition(name), (
             f"{name!r} cannot be run on demand, so a packaging change is still "
             "only testable by cutting a release"
@@ -142,6 +142,10 @@ def test_manual_dispatch_builds_but_never_publishes() -> None:
     assert "refs/tags/v" in condition("publish"), (
         "publish must run on a version tag"
     )
+    assert condition("publish") == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')", (
+        "dispatching a tag ref must not publish; publication requires an actual push event"
+    )
+
 
 
 def test_briefcase_is_pinned() -> None:
@@ -212,16 +216,9 @@ def test_platform_gui_versions_preserve_mac_and_fix_new_windows() -> None:
     assert mac and re.search(r'(?m)^min_os_version\s*=\s*"12\.0"\s*$', mac.group(1)), (
         "Briefcase requires min_os_version=12.0; minimum_system_version is ignored"
     )
-    import yaml
-
-    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["build-macos"]["steps"]
-    names = [step.get("name") for step in steps]
-    gate_name = "Verify the actual macOS deployment floor"
-    assert gate_name in names, "the real built Info.plist needs a deployment-floor gate"
-    gate = steps[names.index(gate_name)]
-    assert "if" not in gate, "the actual bundle floor check must not be skipped"
-    assert names.index("Build the .app") < names.index(gate_name) < names.index("Package the .dmg")
-    assert 'info["LSMinimumSystemVersion"] == "12.0"' in gate["run"]
+    # Actual bundle-floor validation belongs to the local packaging helper,
+    # not a hosted Mac job. Its real-file/ordering controls live alongside
+    # release_artifacts tests; release acceptance still inspects the real DMG.
 
 
 def test_gui_dependency_pins_are_coordinated() -> None:
@@ -233,8 +230,7 @@ def test_gui_dependency_pins_are_coordinated() -> None:
 
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     for job, platform in (("test", "win32"), ("test", "linux"),
-                          ("build-windows", "win32"), ("build-linux", "linux"),
-                          ("build-macos", "darwin")):
+                          ("build-windows", "win32"), ("build-linux", "linux")):
         commands = "\n".join(
             line for step in workflow["jobs"][job]["steps"]
             for line in str(step.get("run", "")).splitlines()
@@ -391,7 +387,7 @@ def test_tag_check_gets_the_tag_on_every_shell() -> None:
         if "check_tag_version.py" in ln and not ln.strip().startswith("#")
     ]
     assert len(lines) == 3, (
-        f"expected the tag check in all three build jobs, found {len(lines)}"
+        f"expected tag checks in both native builders and the Mac input step, found {len(lines)}"
     )
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "${GITHUB_REF_NAME}" not in text, (
@@ -419,7 +415,7 @@ def test_linux_release_has_real_test_build_and_publish_gates() -> None:
     assert "workflow_dispatch" in condition and "refs/tags/v" in condition, (
         "Linux packaging must be testable without publishing and run on tags"
     )
-    required = {"test", "build-macos", "build-windows", "build-linux"}
+    required = {"test", "build-windows", "build-linux"}
     assert required <= set(jobs["publish"]["needs"]), (
         "publication must wait for tests and every supported platform build"
     )
@@ -469,6 +465,11 @@ def test_stable_download_names_match_packaging_and_frontpage() -> None:
     linked = set(re.findall(r"releases/latest/download/([^\s)]+)", readme))
     assert linked == set(names.values()), "front-page asset names differ from packaging contract"
     for platform, filename in names.items():
+        if platform == "macos":
+            commands = "\n".join(s.get("run", "") for s in jobs["publish"]["steps"])
+            assert "release_artifacts.py collect macos --source incoming-macos --output artifacts" in commands
+            assert "--file artifacts/" + filename in commands
+            continue
         job = jobs["build-" + platform]
         installers = [s for s in job["steps"]
                       if s.get("with", {}).get("name", "").startswith("LocalProjectHub-")]
@@ -517,6 +518,47 @@ def test_release_is_draft_until_all_assets_are_verified() -> None:
     assert "--json databaseId" in commands[:verify], "drafts must be resolved by release ID, not the unavailable published-tag endpoint"
     assert 'releases/$release_id' in commands[:verify] and 'releases/$release_id' in commands[publish:], (
         "draft and published readback must address the exact same release ID"
+    )
+
+
+def test_macos_is_built_locally_and_never_on_a_hosted_runner() -> None:
+    import re
+    import yaml
+
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    jobs = workflow["jobs"]
+    for name, job in jobs.items():
+        runners = [job.get("runs-on", "")]
+        runners.extend(job.get("strategy", {}).get("matrix", {}).get("os", []))
+        assert not any("macos" in str(runner).lower() for runner in runners), (
+            f"{name} still uses a hosted macOS runner instead of the developer's Mac"
+        )
+        assert set(job.get("needs", [])) <= set(jobs), "a deleted builder still blocks a dependent job"
+    publish = jobs["publish"]
+    assert set(publish["needs"]) == {"test", "build-windows", "build-linux"}
+    assert publish["permissions"] == {"contents": "write"}, "private draft inputs require push access"
+    assert workflow["permissions"] == {"contents": "read"}
+    steps = publish["steps"]
+    gates = [(i, step) for i, step in enumerate(steps)
+             if "verify-macos-input" in step.get("run", "")]
+    assert len(gates) == 1, "the publisher needs an explicit, unskippable local Mac input gate"
+    gate_index, gate = gates[0]
+    assert "if" not in gate, "the prebuilt input gate must not be skipped"
+    commands = gate["run"]
+    assert not re.search(r"\bbriefcase\s+(?:build|create|package)\b", commands), (
+        "the publisher must not rebuild the Mac binary"
+    )
+    assert '--source-commit "$GITHUB_SHA"' in commands, (
+        "the Mac input gate must bind the installer to the actual job source SHA"
+    )
+    assert '--file artifacts/Local.Project.Hub.dmg' in commands
+    assert commands.count("verify-macos-input") == 2
+    assert commands.index("verify-macos-input") < commands.index("gh release download") < commands.index("release_artifacts.py collect macos") < commands.rindex("verify-macos-input")
+    upload_index = next(i for i, step in enumerate(steps) if "gh release upload" in step.get("run", ""))
+    assert gate_index < upload_index, "unverified local DMG must not become a release upload"
+    publish_commands = "\n".join(step.get("run", "") for step in steps)
+    assert 'Local.Project.Hub.dmg#source:$GITHUB_SHA' in publish_commands, (
+        "private-draft retries must retain the Mac asset's exact source receipt"
     )
 
 
