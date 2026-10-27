@@ -295,6 +295,12 @@ class ProjectProcess(QObject):
     # ---------- state ----------
 
     @property
+    def is_stopping(self) -> bool:
+        """A requested Stop is still waiting for this tracked child to exit."""
+        return bool(self._user_stopped and not self._pending_restart
+                    and self.proc is not None and self.proc.state() != QProcess.NotRunning)
+
+    @property
     def state(self) -> str:
         if self.proc is None:
             return "stopped"

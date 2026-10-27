@@ -1,6 +1,62 @@
 # HANDOFF — Local Project Hub
 
-## Current release closeout — v0.7.2 public and verified (2026-10-26)
+## Current work — v0.7.3 verification/release in progress (2026-10-27)
+
+The owner reported dashboard upload loss on sidebar focus/Add, tab/sidebar action
+mismatch, wrong bot-close log attribution, unreadable Sphere asset choices, and
+one unreproduced bot survivor; requested dated/clearable logs. They explicitly
+selected **Publish v0.7.3 after all checks pass**. This source is not published yet;
+installed0.7.2 and real bot registrations must remain untouched. The owner has
+standing permission for test runs to stop running apps: the unchanged full runner
+may deliberately free legacy test port8787 (the observability dashboard). Warn
+before that launch, record the stop as test setup and do not restart it automatically.
+
+- Sidebar focus no longer refreshes an existing page; list rebuilding/Add are
+  registration-only and preserve the actual visible tab and in-memory uploads.
+- Tab ownership now synchronizes the sidebar, controls and terminal, including
+  child/nested popups; mutable titles/indices cannot identify a project in logs.
+  Last-project/Remove transitions preserve a valid overview or remaining owner.
+- Date/time formatting is centralized per event/line. Clear log affects only
+  the visible stored pane, not other logs, the backend or its current page.
+- Reopening during a requested shutdown now says Stopping, based on actual live
+  child + Stop intent, without changing signal/identity/grace logic. A real
+  TERM-ignoring owned fixture is force-reaped after close/reopen. This does NOT
+  diagnose or refute the original one-off permanent-survivor report.
+- Sphere's dropdown is a separate local page-CSS correction in
+  `the_sphere_project/styles.css`: explicit opaque option/optgroup colours, not
+  Hub HTML rewriting. Native popup screenshots/pixel controls and a source guard
+  discriminate the fix. Other pre-existing dirty Sphere files/art are untouched.
+- Fifteen new native cases have each passed under actual Python3.11 and3.9 /
+  Qt6.9.3 across development (30 historical case/interpreter observations, NOT
+  exact-final-source full acceptance). The independent review's F1 opener-lifetime
+  and F2 stale stopped-Edit findings were both reproduced RED, then fixed after
+  the owner selected Fix both before release. Popup registration now belongs to
+  the long-lived Hub, not an opener; explicit Edit refreshes saved launch content
+  without restoring sidebar reload. Both correction cases pass on both interpreters;
+  coupled sidebar-upload/Add/nested-once controls also pass. Original evidence is
+  retained in `review-073-raw.json` / `review-073-audit.json` and native case logs.
+  Actual pixels show readable options, dated log lines and Clear log. The single
+  scoped correction re-review (`deleg_c2c8a837`, gpt-6.1-sol/openai-codex) is CLEAR;
+  boolean verdict/schema, all3271packet lines, permitted-only8tool audit and all
+  frozen hashes were independently checked. Exact-source full strict regression
+  and real0.7.3 installer acceptance remain REQUIRED. Review is not release signoff.
+- Version/changelog are prepared for0.7.3. Existing Windows/Ubuntu CI stays
+  max-parallel1; local Mac build only, unchanged pins/sandbox/deployment floor.
+  README downloads already track the latest complete published release.
+
+**NEXT:** commit only the scoped source/test/version/docs (review is complete);
+launch `~/.hermes/cache/scratch/lph-release-0.7.3/run_native_strict.py` using the
+exact clean candidate SHA and label `full-native-v073`, then reconcile all
+identities/raw exits. Push/read back that candidate to main and require serial
+Ubuntu/Windows source CI. Build/inspect and actually exercise its Mac DMG locally
+in isolated scratch state. Only then create NEW immutablev0.7.3/exact-SHA private
+Mac input; require native Windows/Linux builders/runtime gates, publish all3
+assets together, verify anonymous latest/download hashes and installed0.7.2
+updater discovery without installing. Never retag v0.7.2 or replace its assets.
+Evidence/progress: `~/.hermes/cache/scratch/lph-ui-followup-072/STATUS.md`.
+Older checkpoints below retain their historical scope.
+
+## Previous release closeout — v0.7.2 public and verified (2026-10-26)
 
 **This section supersedes the historical checkpoints below. No v0.7.2 release
 verification remains pending. Installation is left to the owner.**

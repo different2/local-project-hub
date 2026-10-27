@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.3
+
+- Preserve live dashboard pages and uploaded-image state when selecting an existing project in the sidebar or adding a registration; adding a project no longer steals the active tab.
+- Keep the sidebar, toolbar actions and project terminal aligned with the active tab, including project-owned child tabs.
+- Attribute close/stop messages to the clicked project's registered identity, and keep popup title updates attached to the correct widget after tabs move.
+- Show local date/time on log lines and add Clear log for the displayed pane without stopping projects or clearing other panes.
+- Show Stopping while a requested shutdown is still in progress instead of a misleading Project is running card; retain existing termination grace and identity-safe cleanup.
+
 ## 0.7.2
 
 - Drag projects up or down in the sidebar and retain their order across restarts, renames, and export/import. New projects appear at the bottom.
