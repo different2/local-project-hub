@@ -102,12 +102,21 @@ def start_page_html(
 
     `state` is the process state: "stopped" / "error" show the Start button,
     "starting" says so and offers nothing to click, "running" becomes the
-    status card used by projects that have no dashboard at all.
+    status card used by projects that have no dashboard at all. "stopping"
+    explains a requested Stop whose child has not actually exited yet.
     """
     name = html.escape(str(rec.get("name") or "Project"))
     command = html.escape(str(rec.get("command") or ""))
     pid = str(rec.get("id") or "")
     c = _colors(colors)
+
+    if state == "stopping":
+        body = (
+            f'<p class="status">Stopping {name}…</p>'
+            '<p class="hint" style="margin-top:0">Waiting for the process to exit. '
+            'The Hub will finish stopping it if it does not exit cleanly.</p>'
+        )
+        return _shell(name, body, c)
 
     if state == "running":
         body = (

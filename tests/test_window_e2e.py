@@ -1711,6 +1711,648 @@ def test_sidebar_rename_keeps_the_saved_custom_position(tmp: Path) -> None:
         w.close()
 
 
+def _uploaded_image_window(tmp: Path):
+    """A real HTML upload whose image exists only in the live document."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    image = io.BytesIO()
+    Image.new("RGB", (2, 2), "magenta").save(image, format="PNG")
+    encoded = base64.b64encode(image.getvalue()).decode("ascii")
+    (tmp / "index.html").write_text('''<!doctype html><html><body>
+<input id="upload" type="file"><img id="image" alt="uploaded fixture">
+<p id="state">NO_IMAGE</p>
+<script>
+document.getElementById('upload').onchange = function () {
+    const reader = new FileReader();
+    reader.onload = function () {
+        const image = document.getElementById('image');
+        image.onload = function () {
+            document.getElementById('state').textContent = 'UPLOADED_IMAGE';
+        };
+        image.src = reader.result;
+    };
+    reader.readAsDataURL(this.files[0]);
+};
+</script></body></html>''', encoding="utf-8")
+    port = reserve_port()
+    server = tmp / "image_server.py"
+    server.write_text(
+        "from http.server import HTTPServer, SimpleHTTPRequestHandler\n"
+        "class Handler(SimpleHTTPRequestHandler):\n"
+        "    def log_message(self, *args): pass\n"
+        f"HTTPServer(('127.0.0.1', {port}), Handler).serve_forever()\n",
+        encoding="utf-8",
+    )
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add({
+        "name": "Sphere-like upload",
+        "command": f"{sys.executable} {server}",
+        # Match the user's persisted Sphere endpoint: no trailing slash.
+        "url": f"http://127.0.0.1:{port}",
+        "working_dir": str(tmp),
+    })
+    other = st.add({"name": "Other project", "command": "echo unused"})
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(rec["id"], start=True)
+        view = w._view_for(rec["id"])
+        assert view is not None and _wait_for_page_text(view, "NO_IMAGE"), (
+            "upload fixture did not render its initial document"
+        )
+        script = (
+            "const bytes = Uint8Array.from(atob('" + encoded + "'), c => c.charCodeAt(0));"
+            "const transfer = new DataTransfer();"
+            "transfer.items.add(new File([bytes], 'fixture.png', {type:'image/png'}));"
+            "const input = document.getElementById('upload');"
+            "input.files = transfer.files;"
+            "input.dispatchEvent(new Event('change', {bubbles:true}));"
+        )
+        view.page().runJavaScript(script)
+        assert _wait_for_page_text(view, "UPLOADED_IMAGE"), (
+            "real FileReader/image decode did not establish uploaded image state"
+        )
+        return w, rec, other, view
+    except BaseException:
+        w.close()
+        assert _wait_for(lambda: all(p.state == "stopped" for p in w.procs.values()), 8), (
+            "upload fixture backend did not exit after setup failure"
+        )
+        raise
+
+
+def test_sidebar_reselect_preserves_uploaded_image_and_backend(tmp: Path) -> None:
+    """Focusing an existing tab must not navigate away from its live document."""
+    w, rec, other, view = _uploaded_image_window(tmp)
+    proc = w.procs[rec["id"]]
+    try:
+        qproc = proc.proc
+        assert qproc is not None, "fixture has no actual QProcess"
+        original_pid = int(qproc.processId())
+        assert original_pid > 0 and proc.state == "running"
+        loads = []
+        view.loadStarted.connect(lambda: loads.append("navigation"))
+        # These are the sidebar's real selection signals, not a direct refresh.
+        w.list.setCurrentRow(1)
+        _spin(100)
+        assert w.web.property("hub_project_id") == other["id"]
+        assert w.procs[other["id"]].state == "stopped"
+        w.list.setCurrentRow(0)
+        assert w.tabs.currentWidget() is view and view.isVisible()
+        assert _wait_for_page_text(view, "UPLOADED_IMAGE", 2), (
+            "sidebar selection erased the uploaded image from the live document"
+        )
+        assert loads == [], f"sidebar focus navigated the existing page: {loads}"
+        assert proc.proc is qproc and int(qproc.processId()) == original_pid and proc.state == "running", (
+            "sidebar navigation restarted the backend"
+        )
+    finally:
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
+
+
+def test_adding_a_project_preserves_the_current_tab_and_upload(tmp: Path) -> None:
+    """Registering a project must not steal focus or reset an existing page."""
+    import hub.window as wm
+    from PySide6.QtWidgets import QDialog
+
+    w, rec, other, upload_view = _uploaded_image_window(tmp)
+    proc = w.procs[rec["id"]]
+    original_dialog = wm.ProjectDialog
+    marker = tmp / "new_project_was_started"
+    command = tmp / "new_project.py"
+    command.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+
+    class AddDialog:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.Accepted
+
+        def result_record(self):
+            return sm.validate({
+                "name": "New registration", "command": f"{sys.executable} {command}",
+                "working_dir": str(tmp),
+            })
+
+    try:
+        # Leave Sphere selected in the sidebar but look at another browser tab,
+        # matching the reported state before Add. Tab synchronization has its
+        # own regression; Add must preserve the actual visible widget either way.
+        w._select_id(other["id"], start=False)
+        other_view = w._view_for(other["id"])
+        assert other_view is not None
+        w.list.setCurrentRow(0)
+        w.tabs.setCurrentWidget(other_view)
+        assert w.tabs.currentWidget() is other_view
+        loads = []
+        upload_view.loadStarted.connect(lambda: loads.append("navigation"))
+        wm.ProjectDialog = AddDialog
+        w.act_add.trigger()  # real toolbar action; only modal data entry is stubbed
+        _spin(200)
+        assert any(r["name"] == "New registration" for r in w.store.ordered())
+        assert w.tabs.currentWidget() is other_view, (
+            "adding a project took over the current browser tab"
+        )
+        assert _wait_for_page_text(upload_view, "UPLOADED_IMAGE", 2), (
+            "adding a project erased an existing uploaded image"
+        )
+        assert loads == [], f"Add navigated an existing project: {loads}"
+        assert not marker.exists(), "adding a project launched its command"
+        assert proc.state == "running", "adding a record stopped the current backend"
+    finally:
+        wm.ProjectDialog = original_dialog
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
+
+
+def test_tab_navigation_selects_project_and_stop_targets_visible_tab(tmp: Path) -> None:
+    """Toolbar Stop follows the active tab, not a previously selected sidebar row."""
+    script = tmp / "idle_bot.py"
+    script.write_text("import time\nwhile True: time.sleep(0.1)\n")
+    st = sm.Store(tmp / "registry.json")
+    records = [st.add({
+        "name": name, "command": f"{sys.executable} {script}",
+        "working_dir": str(tmp),
+    }) for name in ("discordbot fixture", "cardbot fixture")]
+    w = HubWindow(st)
+    w.show()
+    try:
+        for rec in records:
+            w._select_id(rec["id"], start=True)
+        first, second = (r["id"] for r in records)
+        assert _wait_for(lambda: all(w.procs[p].state == "running" for p in (first, second)))
+        second_qproc = w.procs[second].proc
+        assert second_qproc is not None
+        second_pid = int(second_qproc.processId())
+        assert second_pid > 0
+        first_view = w._view_for(first)
+        assert first_view is not None
+        w.tabs.setCurrentWidget(first_view)
+        _spin(100)
+        item = w.list.currentItem()
+        assert w.active_id == first and item is not None and item.data(Qt.UserRole) == first, (
+            "switching tabs left the sidebar/toolbar targeting a different project"
+        )
+        assert w.log_view.header.text() == "Logs — discordbot fixture"
+        w.act_stop.trigger()
+        assert _wait_for(lambda: w.procs[first].state == "stopped", 8), (
+            "toolbar Stop did not stop the visible tab's backend"
+        )
+        assert w._view_for(first) is None, "stopped project's tab stayed open"
+        assert w.procs[second].state == "running" and int(second_qproc.processId()) == second_pid, (
+            "toolbar Stop affected the other project's live process"
+        )
+    finally:
+        w.close()
+        assert _wait_for(lambda: all(p.state == "stopped" for p in w.procs.values()), 8), (
+            "isolated bot fixture survived window quit"
+        )
+
+
+def test_every_log_line_has_a_local_date_and_time(tmp: Path) -> None:
+    """Hub, project, multiline and compatibility appends use the same formatter."""
+    from datetime import datetime
+    import re
+
+    from hub.window import LogDrawer
+
+    drawer = LogDrawer()
+    drawer.show()
+    before = datetime.now().replace(microsecond=0)
+    try:
+        drawer.append_for("first event\nsecond event\n", "alpha")
+        drawer.show_page("alpha")
+        drawer.appendPlainText("third event")
+        drawer.append_for("hub event")
+        after = datetime.now().replace(microsecond=0)
+        project_lines = drawer.toPlainText().splitlines()
+        hub_lines = drawer.hub_text().splitlines()
+        assert len(project_lines) == 3 and len(hub_lines) == 1
+        for line, content in zip(project_lines + hub_lines,
+                                 ["first event", "second event", "third event", "hub event"]):
+            match = re.fullmatch(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.*)", line)
+            assert match is not None, f"log line has no readable date and time: {line!r}"
+            stamp = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+            assert before <= stamp <= after, f"log timestamp is not event time: {stamp}"
+            assert match.group(2) == content, "timestamp formatting changed the log content"
+    finally:
+        drawer.close()
+
+
+def test_clear_log_removes_only_visible_history_and_keeps_project_running(tmp: Path) -> None:
+    """The visible Clear log button clears history, not the process or other panes."""
+    from PySide6.QtWidgets import QPushButton
+
+    w, rec, other, view = _uploaded_image_window(tmp)
+    proc = w.procs[rec["id"]]
+    try:
+        qproc = proc.proc
+        assert qproc is not None
+        original_pid = int(qproc.processId())
+        w._append_log("old sphere event", rec["id"])
+        w._append_log("other history", other["id"])
+        w._append_log("hub history")
+        other_before = w.log_view._edit_for(other["id"]).toPlainText()
+        hub_before = w.log_view.hub_text()
+        buttons = [b for b in w.log_view.findChildren(QPushButton) if b.text() == "Clear log"]
+        assert len(buttons) == 1 and buttons[0].isVisible(), (
+            "the visible log drawer has no Clear log button"
+        )
+        assert buttons[0].width() > 0 and buttons[0].height() > 0
+        loads = []
+        view.loadStarted.connect(lambda: loads.append("navigation"))
+        buttons[0].click()
+        assert w.log_view.toPlainText() == "", "Clear log left past events in the pane"
+        assert w.log_view._edit_for(other["id"]).toPlainText() == other_before
+        assert w.log_view.hub_text() == hub_before
+        w._select_id(other["id"], start=False)
+        w._select_id(rec["id"], start=False)
+        assert w.log_view.toPlainText() == "", "cleared events came back on tab selection"
+        w._append_log("after clear", rec["id"])
+        assert "after clear" in w.log_view.toPlainText() and "old sphere event" not in w.log_view.toPlainText()
+        assert proc.proc is qproc and int(qproc.processId()) == original_pid and proc.state == "running"
+        assert _wait_for_page_text(view, "UPLOADED_IMAGE", 2) and loads == [], (
+            "clearing logs disturbed the running dashboard"
+        )
+    finally:
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
+
+
+def test_close_press_log_uses_the_clicked_projects_registry_identity(tmp: Path) -> None:
+    """A mutable page title cannot rename the project in close/stop logs."""
+    script = tmp / "idle_bot.py"
+    script.write_text("import time\nwhile True: time.sleep(0.1)\n")
+    st = sm.Store(tmp / "registry.json")
+    records = [st.add({
+        "name": name, "command": f"{sys.executable} {script}",
+        "working_dir": str(tmp),
+    }) for name in ("discordbot", "cardbot")]
+    w = HubWindow(st)
+    w.show()
+    try:
+        for rec in records:
+            w._select_id(rec["id"], start=True)
+        discord, card = (r["id"] for r in records)
+        assert _wait_for(lambda: all(w.procs[p].state == "running" for p in (discord, card)))
+        w._select_id(discord, start=False)
+        index = w._tab_index_for_project(card)
+        assert index is not None
+        # Page titles can legitimately differ from a registration's name;
+        # neither captions nor the active row establish the clicked owner.
+        w.tabs.setTabText(index, "discordbot")
+        w.tabs.tabCloseRequested.emit(index)
+        assert _wait_for(lambda: w.procs[card].state == "stopped", 8)
+        assert w.procs[discord].state == "running" and w._view_for(discord) is not None
+        text = w.log_view._edit_for(card).toPlainText()
+        assert "[hub] close pressed on 'cardbot'" in text, (
+            f"close press was not logged with the clicked project's own name/pane: {text!r}"
+        )
+        assert "[hub] closed tab 'cardbot'" in text
+        assert "close pressed on 'discordbot'" not in text + w.log_view.hub_text(), (
+            "a page caption was mistaken for the stopped project's identity"
+        )
+    finally:
+        w.close()
+        assert _wait_for(lambda: all(p.state == "stopped" for p in w.procs.values()), 8)
+
+
+def test_popup_tab_keeps_its_project_owner_without_stopping_the_backend(tmp: Path) -> None:
+    """A dashboard's child tab shares selection/actions, but closing it is not Stop."""
+    from PySide6.QtWebEngineCore import QWebEnginePage
+
+    w, rec, other, dashboard = _uploaded_image_window(tmp)
+    proc = w.procs[rec["id"]]
+    try:
+        popup = dashboard.createWindow(QWebEnginePage.WebBrowserTab)
+        assert popup is not None and w.tabs.currentWidget() is popup
+        item = w.list.currentItem()
+        assert w.active_id == rec["id"] and item is not None and item.data(Qt.UserRole) == rec["id"], (
+            "a project's popup lost its sidebar/toolbar owner"
+        )
+        assert w.log_view.header.text() == "Logs — Sphere-like upload"
+        popup_index = w.tabs.indexOf(popup)
+        w.tabs.tabCloseRequested.emit(popup_index)
+        assert w._view_for(rec["id"]) is dashboard and proc.state == "running", (
+            "closing a child tab stopped its parent project"
+        )
+        assert _wait_for_page_text(dashboard, "UPLOADED_IMAGE", 2)
+    finally:
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8)
+
+
+def test_popup_title_updates_follow_its_widget_after_tabs_move(tmp: Path) -> None:
+    """An asynchronous popup title must never overwrite another project's caption."""
+    from PySide6.QtWebEngineCore import QWebEnginePage
+
+    st = sm.Store(tmp / "registry.json")
+    first, second = [st.add({"name": name, "command": "echo unused"})["id"]
+                     for name in ("Alpha", "Beta")]
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(first, start=False)
+        main = w._view_for(first)
+        assert main is not None
+        popup = main.createWindow(QWebEnginePage.WebBrowserTab)
+        w._select_id(second, start=False)
+        other = w._view_for(second)
+        assert other is not None
+        # Move the popup away from its insertion index, as real movable tabs do.
+        old_index = w.tabs.indexOf(popup)
+        w.tabs.tabBar().moveTab(old_index, 0)
+        protected = {id(v): w.tabs.tabText(w.tabs.indexOf(v)) for v in (main, other)}
+        popup.titleChanged.emit("Popup Alpha view")
+        assert w.tabs.tabText(w.tabs.indexOf(popup)) == "Popup Alpha view", (
+            "popup title callback used a stale insertion index"
+        )
+        assert all(w.tabs.tabText(w.tabs.indexOf(v)) == protected[id(v)] for v in (main, other)), (
+            "popup title callback renamed another project's tab"
+        )
+    finally:
+        w.close()
+
+
+def test_stopping_the_last_project_reopens_overview_without_a_stale_target(tmp: Path) -> None:
+    w, rec, other, view = _uploaded_image_window(tmp)
+    proc = w.procs[rec["id"]]
+    try:
+        starter = w.starter_index()
+        assert starter is not None
+        w.tabs.tabCloseRequested.emit(starter)
+        assert w.tabs.count() == 1 and w.active_id == rec["id"]
+        w.act_stop.trigger()
+        assert _wait_for(lambda: proc.state == "stopped", 8)
+        assert _wait_for(lambda: w.starter_index() is not None, 2), (
+            "stopping the last project left no overview tab"
+        )
+        assert w.active_id is None and w.list.currentItem() is None
+        assert not w.act_stop.isEnabled() and not w.act_start.isEnabled(), (
+            "the overview retained a stale project action target"
+        )
+        assert w.welcome.isVisible()
+    finally:
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8)
+
+
+def test_nested_popups_are_registered_once_and_log_to_their_owner(tmp: Path) -> None:
+    from PySide6.QtWebEngineCore import QWebEnginePage
+
+    st = sm.Store(tmp / "registry.json")
+    first, second = [st.add({"name": name, "command": "echo unused"})["id"]
+                     for name in ("Alpha", "Beta")]
+    w = HubWindow(st)
+    w.show()
+    try:
+        w._select_id(first, start=False)
+        main = w._view_for(first)
+        assert main is not None
+        popup = main.createWindow(QWebEnginePage.WebBrowserTab)
+        child = popup.createWindow(QWebEnginePage.WebBrowserTab)
+        text = w.log_view._edit_for(first).toPlainText()
+        assert text.count("[hub] opened a new tab") == 2, (
+            f"nested popup registration was delivered more than once: {text!r}"
+        )
+        w._select_id(second, start=False)
+        child.urlChanged.emit(QUrl("https://example.invalid/owned-popup"))
+        assert "owned-popup" in w.log_view._edit_for(first).toPlainText(), (
+            "background popup URL was logged under the selected unrelated project"
+        )
+        assert "owned-popup" not in w.log_view._edit_for(second).toPlainText()
+    finally:
+        w.close()
+
+
+def test_close_and_reopen_still_reaps_an_owned_bot_ignoring_termination(tmp: Path) -> None:
+    """Investigative coverage: a closed/reopened tab cannot cancel forced cleanup."""
+    from PySide6.QtCore import QProcess
+
+    script = tmp / "stubborn_bot.py"
+    script.write_text(
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "print('STUBBORN_BOT_READY', flush=True)\n"
+        "while True: time.sleep(0.1)\n"
+    )
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add({"name": "Owned stubborn bot", "command": f"{sys.executable} {script}",
+                  "working_dir": str(tmp)})
+    w = HubWindow(st)
+    w.show()
+    proc = w._proc_for(rec)
+    qproc = None
+    try:
+        # Existing test seam; shipped POSIX/Windows grace periods are unchanged.
+        proc._term_grace_ms = 5000
+        w._select_id(rec["id"], start=True)
+        assert _wait_for(lambda: "STUBBORN_BOT_READY" in "".join(proc.history), 8)
+        qproc = proc.proc
+        assert qproc is not None and qproc.processId() > 0
+        index = w._tab_index_for_project(rec["id"])
+        assert index is not None
+        w.tabs.tabCloseRequested.emit(index)
+        assert w._view_for(rec["id"]) is None
+        w._select_id(rec["id"], start=False)
+        assert proc.proc is qproc, "reopening the tab created another bot process"
+        reopened = w._view_for(rec["id"])
+        assert reopened is not None and _wait_for_page_text(reopened, "Stopping", 2), (
+            "reopened tab claimed the stopped bot was running instead of showing pending shutdown"
+        )
+        # Exercise the actual armed escalation without spending the production
+        # grace interval in every regression invocation.
+        proc._on_kill_timer()
+        assert _wait_for(lambda: qproc.state() == QProcess.NotRunning, 8), (
+            "the owned bot survived Stop's termination/escalation after close and reopen"
+        )
+        assert proc.state == "stopped" and not proc.is_stopping
+        assert "killing" in w.log_view._edit_for(rec["id"]).toPlainText(), (
+            "the stubborn fixture was not actually exercised through forced cleanup"
+        )
+    finally:
+        # A deliberately broken escalation control must not leave this fixture
+        # alive. QProcess.kill targets only the exact child created by this test.
+        if qproc is not None and qproc.state() != QProcess.NotRunning:
+            qproc.kill()
+            assert _wait_for(lambda: qproc.state() == QProcess.NotRunning, 8)
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8)
+
+
+def test_removing_a_project_keeps_remaining_tab_actions_synchronized(tmp: Path) -> None:
+    import hub.window as wm
+    from PySide6.QtWidgets import QMessageBox
+
+    st = sm.Store(tmp / "registry.json")
+    first, second = [st.add({"name": name, "command": "echo unused"})["id"]
+                     for name in ("Alpha", "Beta")]
+    w = HubWindow(st)
+    w.show()
+    original_question = wm.QMessageBox.question
+    try:
+        w._select_id(second, start=False)
+        remaining = w._view_for(second)
+        w._select_id(first, start=False)
+        w.tabs.tabBar().setSelectionBehaviorOnRemove(QTabBar.SelectRightTab)
+        wm.QMessageBox.question = lambda *args, **kwargs: QMessageBox.Yes
+        w.act_remove.trigger()
+        assert w.store.get(first) is None and w.tabs.currentWidget() is remaining
+        item = w.list.currentItem()
+        assert w.active_id == second and item is not None and item.data(Qt.UserRole) == second, (
+            "removing a project disconnected the remaining tab from its sidebar/action target"
+        )
+        assert w.act_start.isEnabled() and w.log_view.header.text() == "Logs — Beta"
+    finally:
+        wm.QMessageBox.question = original_question
+        w.close()
+
+
+def test_upload_fixture_cleans_up_if_initial_render_setup_fails(tmp: Path) -> None:
+    original_window = globals()["HubWindow"]
+    original_wait = globals()["_wait_for_page_text"]
+    windows = []
+
+    def make_tracked_window(*args, **kwargs):
+        window = original_window(*args, **kwargs)
+        windows.append(window)
+        return window
+
+    def fail_after_real_load(view, needle, *args):
+        assert original_wait(view, needle, *args), "negative fixture never loaded its actual page"
+        return False
+
+    globals()["HubWindow"] = make_tracked_window
+    globals()["_wait_for_page_text"] = fail_after_real_load
+    try:
+        try:
+            _uploaded_image_window(tmp)
+        except AssertionError as exc:
+            assert "initial document" in str(exc), str(exc)
+        else:
+            raise AssertionError("fixture did not reject the forced setup failure")
+        assert len(windows) == 1
+        assert _wait_for(lambda: all(p.state == "stopped" for p in windows[0].procs.values()), 2), (
+            "upload fixture setup failure left its backend running"
+        )
+    finally:
+        globals()["HubWindow"] = original_window
+        globals()["_wait_for_page_text"] = original_wait
+        for window in windows:
+            window.close()
+            assert _wait_for(lambda: all(p.state == "stopped" for p in window.procs.values()), 8)
+
+
+def test_surviving_nested_popup_can_open_tabs_after_its_opener_is_deleted(tmp: Path) -> None:
+    """Popup delivery must outlive a closed intermediate opener QObject."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWebEngineCore import QWebEnginePage
+    from shiboken6 import isValid
+
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add({"name": "Popup owner", "command": "echo unused"})
+    w = HubWindow(st)
+    w.show()
+    created = []
+    try:
+        w._select_id(rec["id"], start=False)
+        main = w._view_for(rec["id"])
+        assert main is not None
+        opener = main.createWindow(QWebEnginePage.WebBrowserTab)
+        survivor = opener.createWindow(QWebEnginePage.WebBrowserTab)
+        survivor.setHtml("<body>NESTED_SURVIVOR_READY</body>")
+        assert _wait_for_page_text(survivor, "NESTED_SURVIVOR_READY", 5)
+        w.tabs.tabCloseRequested.emit(w.tabs.indexOf(opener))
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert _wait_for(lambda: not isValid(opener), 2), "intermediate opener was not actually deleted"
+        assert w._view_for(rec["id"]) is main and isValid(survivor)
+        before = w.tabs.count()
+        # Observe the local signal independently of Hub registration, retaining
+        # an unadopted view even in the RED control for deterministic cleanup.
+        survivor.popup_opened.connect(lambda view: created.append(view))
+        survivor.page().runJavaScript(
+            "const child = window.open('about:blank', '_blank');"
+            "if (child) { child.document.write('<body>AFTER_OPENER_DELETE_VISIBLE</body>');"
+            "child.document.close(); }"
+        )
+        assert _wait_for(lambda: len(created) == 1, 5), "real window.open did not create a view"
+        new_view = created[0]
+        assert w.tabs.count() == before + 1 and w.tabs.indexOf(new_view) >= 0, (
+            "surviving nested popup lost Hub registration after its opener was deleted"
+        )
+        assert w.tabs.currentWidget() is new_view and new_view.isVisible()
+        assert new_view.width() > 0 and new_view.height() > 0
+        assert new_view.property("hub_owner_project_id") == rec["id"]
+        assert _wait_for_page_text(new_view, "AFTER_OPENER_DELETE_VISIBLE", 5)
+        assert w.log_view._edit_for(rec["id"]).toPlainText().count("[hub] opened a new tab") == 3, (
+            "descendant was registered more than once"
+        )
+        assert all(p.state == "stopped" for p in w.procs.values()), "popup navigation started a backend"
+    finally:
+        for view in created:
+            if isValid(view) and w.tabs.indexOf(view) < 0:
+                view.close()
+                view.deleteLater()
+        w.close()
+
+
+def test_editing_a_never_started_project_refreshes_its_rendered_start_page(tmp: Path) -> None:
+    """Explicit Edit updates visible configuration without implicitly running it."""
+    import hub.window as wm
+    from PySide6.QtWidgets import QDialog
+
+    before_script, after_script = tmp / "launch_before_edit.py", tmp / "launch_after_edit.py"
+    markers = [tmp / "before_was_started", tmp / "after_was_started"]
+    for script, marker in zip((before_script, after_script), markers):
+        script.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add({"name": "Name before Edit", "command": f"{sys.executable} {before_script}",
+                  "working_dir": str(tmp)})
+    changed = dict(rec, name="Name after explicit Edit", command=f"{sys.executable} {after_script}")
+    w = HubWindow(st)
+    w.show()
+    original_dialog = wm.ProjectDialog
+
+    class EditDialog:
+        def __init__(self, parent, record):
+            assert record["id"] == rec["id"]
+
+        def exec(self):
+            return QDialog.Accepted
+
+        def result_record(self):
+            return dict(changed)
+
+    try:
+        w._select_id(rec["id"], start=False)
+        view = w._view_for(rec["id"])
+        assert view is not None and _wait_for_page_text(view, rec["name"], 5)
+        assert _wait_for_page_text(view, before_script.name, 2)
+        assert w.procs[rec["id"]].proc is None, "fixture was not a never-started project"
+        wm.ProjectDialog = EditDialog
+        w.act_edit.trigger()
+        saved = w.store.get(rec["id"])
+        assert saved is not None, "Edit lost the registration"
+        assert saved["name"] == changed["name"] and saved["command"] == changed["command"]
+        assert w.tabs.currentWidget() is view and view.isVisible()
+        assert _wait_for_page_text(view, changed["name"], 3), (
+            "Edit saved the registration but left the old name rendered in its Start page"
+        )
+        assert _wait_for_page_text(view, after_script.name, 3), (
+            "Edit left the Start page displaying a different command from the saved one"
+        )
+        assert all(p.proc is None and p.state == "stopped" for p in w.procs.values())
+        assert not any(marker.exists() for marker in markers), "Edit implicitly started a project"
+    finally:
+        wm.ProjectDialog = original_dialog
+        w.close()
+
+
 if __name__ == "__main__":
     import tempfile
 
