@@ -1219,12 +1219,16 @@ def test_no_tab_dashboard_does_not_navigate_the_active_tab(tmp: Path) -> None:
         idx = w._tab_index_for_project(a["id"])
         assert idx is not None
         removed = w.tabs.widget(idx)
-        w.tabs.removeTab(idx)  # direct removal leaves active_id == Alpha
+        w.tabs.removeTab(idx)
         if removed is not None:
             removed.deleteLater()
-        assert w.active_id == a["id"], w.active_id
+        assert w.active_id == b["id"], "tab removal did not synchronize the surviving owner"
         assert w._view_for(a["id"]) is None
         assert w.web is beta_view, "the test did not select Beta's view"
+        # Normal tab removal now synchronizes immediately. Explicitly recreate
+        # the historical stale-owner condition that the no-fallback guard must
+        # still tolerate (e.g. a delayed callback for an already removed tab).
+        w.active_id = a["id"]
 
         before = beta_view.url().toString()
         st.get(a["id"])["url"] = "http://127.0.0.1:9876/alpha"

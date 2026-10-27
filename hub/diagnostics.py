@@ -154,7 +154,10 @@ def _sanitise_hub_log(
     kept = []
     for line in (text or "").splitlines():
         stripped = line.strip()
-        if not stripped.startswith(_HUB_PREFIX):
+        # The drawer dates every line. Classify the message after that known
+        # prefix, but retain the original dated line for the existing redactor.
+        message = re.sub(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+", "", stripped, count=1)
+        if not message.startswith(_HUB_PREFIX):
             continue
         kept.append(sanitise_text(stripped, sensitive, project_names))
     return "\n".join(kept)
