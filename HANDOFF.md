@@ -1,6 +1,76 @@
 # HANDOFF — Local Project Hub
 
-## Current work — v0.7.3 verification/release in progress (2026-10-27)
+## CURRENT — v0.7.3 release verification in progress (2026-10-27)
+
+**Release/build/tag source is exactly `21e5f498dff0993ee58e4617c40584f9b33ca240`.**
+Do NOT tag a later `[skip ci]` documentation HEAD. The owner authorized publishing
+v0.7.3 once all checks pass, not installing it. Installed0.7.2/build1 remains
+unchanged. No0.7.3 tag/draft/publication has happened at this checkpoint.
+
+### Verified
+- Source fast-forward pushed to GitHub main and the exact remote ref read back.
+- Complete local native Cocoa/Qt6.9.3 regression at that exact clean source:
+  **21suites,377unique test IDs,374PASS/3explicit platformSKIP/0FAIL,126actual
+  runner children all exit0**. All identities reconciled with no missing/extra/
+  duplicate; strict/ordinary/outer exits0; no owned live survivors; installed
+  Info.plist SHA256 unchanged (`940156833bc82d91581c0fe5d9bf13fb98623cdc672a133a7c0dc700a205805a`).
+- Review findings F1/F2 were corrected, scoped correction review CLEAR and audited.
+  Initial full0719ca1's2failures were retained, not relabelled green: one obsolete
+  no-tab fixture expectation and one real dated-Hub-log export omission. Both
+  corrected with load-bearing negative controls; new bounded integration review
+  CLEAR, all2221packet lines/6permitted tools/schema/boolean/hashes verified.
+  Final30-case updater/diagnostics suites match final bytes on actual3.11 and3.9.
+- Native source screenshots/controls showed readable Sphere menu options, dated
+  log lines and Clear log. Actual packaged0.7.3 acceptance is still separate.
+
+### IN FLIGHT at writing — do not duplicate
+- Source CI **40506817730** at exact release SHA/main:
+  https://github.com/different2/local-project-hub/actions/runs/40506817730
+  Serial Ubuntu24.04/Windows2022/Windows2025, no hosted Mac. Background notified
+  `gh run watch` is `proc_cf45f35d13e4` (PID72010). Current conclusion/raw artifacts
+  must be read after it completes; local green is not remote acceptance.
+- Local Mac build `proc_63c63469a4f0` (PID72034), clean detached source worktree
+  `~/.hermes/cache/scratch/lph-release-0.7.3/tree`, pinned existing Qt6.9.3 env.
+  Log `.../lph-release-0.7.3/macos-build.log`; expected no-clobber output
+  `tree/release-assets/Local.Project.Hub.dmg`. Read real exit/artifact, not a
+  completed wrapper. No actual Mac installer/runtime signoff yet.
+
+### NEXT ACTIONS
+1. On local build completion inspect the actual DMG with the prepared read-only
+   `.../lph-release-0.7.3/inspect_macos_qt693.py --source-sha <exact21e5f49> --dmg
+   <actualDMG> --output <fresh-owned-dir>`. Require source parity, bundled version/
+   Qt/physical helpers/signatures/Mach-O12 floors, read-only mount detach, then
+   exercise the actual copied bundle in isolated native HOME/registry/cache.
+   Verify visible UI, uploaded-state focus behavior and actual exits/owned cleanup.
+   Never modify bundled source to fake acceptance or replace `/Applications`.
+2. On source CI completion download every distinct test-log artifact and reconcile
+   each actual raw identity/exit against exact release source; all3platform jobs
+   must pass. Use `reconcile_strict.py` in the new release workspace; it is calibrated
+   and preserves retries/skips rather than trusting aggregate counts.
+3. Only after those gates, follow DEVELOPMENT.md release steps: annotated NEW tag
+   v0.7.3 at explicit21e5f49, push/verify its exact tag run, immediately create or
+   resume PRIVATE DRAFT only and upload verified Mac DMG label `source:<fullSHA>`.
+   Read draft BY release ID and run the real Mac-input metadata/file/hash gate.
+   No public replacement, retagging or0.7.2 asset changes.
+4. Tag workflow requires serial source matrix, native Windows MSI build, native
+   DEB/APT-installed Linux renderer/sandbox/negative/cleanup and Mac input before
+   complete-three publication. Watch one notified waiter, inspect actual MSI
+   version/UpgradeCode and Linux runtime evidence, then verify anonymous latest/
+   download bytes/digests/metadata and installed0.7.2 updater discovery. User installs.
+
+The original intermittent permanent bot-survivor report is still undiagnosed and
+unreproduced, not fixed/refuted; tested ownership/log attribution and truthful
+Stopping feedback are distinct. Test cleanup stopped the old8787 dashboard after
+the owner was warned; no auto restart was issued.
+
+Separate Sphere fix is local-only commit `d37f0d1e2ece3519174372892b79da06a1459535`
+(CSS/guard/secret-ignore); unrelated dirty scripts/art preserved, no Sphere push
+or live-page reload. It is NOT part of the Hub installer.
+
+**Live continuation authority:** `~/.hermes/cache/scratch/lph-release-0.7.3/STATUS.md`.
+All sections below retain historical evidence and are superseded by this section.
+
+## Previous source-preparation checkpoint — v0.7.3 (historical)
 
 **LATEST GATE:** full native candidate0719ca1486f396f2f722acf9815acef3060f0b3b
 FAILED with371PASS/3SKIP/2FAIL across376exact unique IDs/126actual children.
