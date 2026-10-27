@@ -1,6 +1,62 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT — v0.7.3 TAG BUILDS / PRIVATE STAGING (2026-10-27)
+## CURRENT — v0.7.3 PUBLIC, VERIFIED (2026-10-27)
+
+**Released:** https://github.com/different2/local-project-hub/releases/tag/v0.7.3
+ReleaseID425706169 is public/latest with exactly3complete stable assets:
+`Local.Project.Hub.dmg`, `Local.Project.Hub.msi`,
+`Local.Project.Hub.Ubuntu-24.04-amd64.deb`.
+
+**Immutable source:** `21e5f498dff0993ee58e4617c40584f9b33ca240`.
+Annotated tag object `2df5daf7f0b119413b85dbe548c7411858096e2d`.
+Later `[skip ci]` docs commits do not replace the release source or installers.
+
+### Final acceptance — complete, do not rerun historical work
+- Main sourceCI40506817730 and exact tagCI40539877288 passed. All6tag jobs
+  succeeded, including gated complete-three promotion. All3distinct tag raw
+  artifacts independently reconcile377unique IDs/126actual child exits0 each,
+  with no missing/extra/duplicate. Ubuntu374PASS/3platformSKIP;
+  both Windows2022/2025370PASS/7platformSKIP. Local nativeMac374PASS/3SKIP.
+- Local Mac DMG source/runtime/helpers/signatures/macOS12floor and ACTUAL copied
+  bundle UI accepted: decoded upload survives native A→Z, owners/logs aligned,
+  visible dates/Clear/futureoutput, normal OSexit0/no forced cleanup/survivors.
+- Actual native Windows MSI0.7.3 x64/unchanged UpgradeCode inspected read-only on
+  Mac. Actual APT-installed Linux0.7.3/Qt6.7.3 pixels/nonce/default sandbox/
+  calibrated wrongtext/clean exit/source restoration verified on Ubuntu24.04.
+- Anonymous latestAPI/page and all3README latest-download links resolve0.7.3.
+  Actual full downloaded bytes, sizes, digests and containers equal the accepted
+  installers; downloaded publishedDMG also passes hdiutilverify. Public notes
+  match prepared release notes. No published0.7.2 assets were replaced.
+- The ACTUAL installed0.7.2 updater modules fetch public0.7.3, select the Mac
+  asset and verify its downloaded hash; wrongdigest is rejected. Copied0.7.3
+  correctly does not offer itself. No app or installer was launched by these
+  read-only updater probes. **Installed `/Applications` is still0.7.2/build1**
+  with its original Info.plist hash. Owner installs the update themselves.
+- All6real registrations roundtripped through shippedStore0.7.3 on an isolated
+  private copy without running commands or altering live data. That owned700/600
+  private QA copy was moved to Trash, not deleted/uploaded. No owned QA GUI/server
+  remains. README correctly distinguishes selection from Start/autostart.
+
+### Remaining limits / separate work
+- Original intermittent permanent bot survivor is still unreproduced and
+  undiagnosed, NOT fixed/refuted. Tested ownership/log attribution and truthful
+  Stopping feedback are different fixes; termination mechanism remains unchanged.
+- Sphere's readable native-option CSS/guard is LOCAL ONLY commit
+  `d37f0d1e2ece3519174372892b79da06a1459535`, not in Hub installers. No Sphere
+  push/reload; unrelated dirty scripts/art preserved.
+- Installers remain not notarized/Authenticode-signed; first-launch guidance is
+  in README. Actions v5 upload/download emit Node20→24 deprecation warnings but
+  alljobs passed; future CI maintenance is separate, not a reason to retag.
+
+**Receipts:** `~/.hermes/cache/scratch/lph-release-0.7.3/` holds
+`tag-ci-final.json`, `tag-source-reconciliation.json`, `release073-public.json`,
+`public-download-acceptance.json`, `public-page-acceptance.json`, actual installed/
+copied updater results and `release-final-cleanup.json`; full native/review/
+negative-control artifacts retained there. Earlier failed runs remain historical
+failures, not silently relabelled green. No verifier/debug code was added to the
+application. All older checkpoints below are superseded by this completed status.
+
+## Previous staging checkpoint — v0.7.3 (historical)
 
 **Immutable release source:** `21e5f498dff0993ee58e4617c40584f9b33ca240`.
 Annotated tagv0.7.3 was pushed and read back: tag object
