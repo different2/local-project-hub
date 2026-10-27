@@ -2,6 +2,25 @@
 
 ## Current work — v0.7.3 verification/release in progress (2026-10-27)
 
+**LATEST GATE:** full native candidate0719ca1486f396f2f722acf9815acef3060f0b3b
+FAILED with371PASS/3SKIP/2FAIL across376exact unique IDs/126actual children.
+All15new native cases passed. The two failures were a stale no-tab test setup
+(it expected the removed owner to remain selected) and an actual diagnostic-log
+integration omission (the new date prefix no longer passed the `[hub]` filter).
+The fixture now asserts normal owner synchronization then explicitly injects
+the historical stale-owner condition; restoring the bad dashboard fallback
+makes its original safety assertion fail. Diagnostics now classifies after one
+known timestamp while retaining the dated original for unchanged redaction.
+Full30-case updater/diagnostics suites and both original failing native cases
+pass on actual Python3.11 and3.9. A deliberately permissive date filter is
+rejected for admitting raw/malformed output, then restored bytes pass again.
+Their scoped integration review (`deleg_db060046`, gpt-6.1-sol/openai-codex) is
+CLEAR: schema/actual boolean, all2221packet lines,6permitted read-only calls and
+frozen hashes audited. The final strengthened30-case test file also passed again
+on Python3.9, closing the review's historical test-hash caveat. A NEW clean-source
+full run remains REQUIRED. The previous F1/F2 checkpoint is complete, not being
+looped again. No source push/tag/draft/publication/install has occurred.
+
 The owner reported dashboard upload loss on sidebar focus/Add, tab/sidebar action
 mismatch, wrong bot-close log attribution, unreadable Sphere asset choices, and
 one unreproduced bot survivor; requested dated/clearable logs. They explicitly
@@ -44,9 +63,9 @@ before that launch, record the stop as test setup and do not restart it automati
   max-parallel1; local Mac build only, unchanged pins/sandbox/deployment floor.
   README downloads already track the latest complete published release.
 
-**NEXT:** commit only the scoped source/test/version/docs (review is complete);
-launch `~/.hermes/cache/scratch/lph-release-0.7.3/run_native_strict.py` using the
-exact clean candidate SHA and label `full-native-v073`, then reconcile all
+**NEXT:** commit the reviewed post-full-run integration source/test/docs delta. Launch
+`~/.hermes/cache/scratch/lph-release-0.7.3/run_native_strict.py` using the NEW
+exact clean candidate SHA and label `full-native-v073-v2`, then reconcile all
 identities/raw exits. Push/read back that candidate to main and require serial
 Ubuntu/Windows source CI. Build/inspect and actually exercise its Mac DMG locally
 in isolated scratch state. Only then create NEW immutablev0.7.3/exact-SHA private

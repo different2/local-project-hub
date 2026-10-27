@@ -263,6 +263,48 @@ def test_report_drops_project_lines_even_without_a_sensitive_list():
     assert "process exited (code=1)" in text, text
 
 
+def test_timestamped_hub_messages_remain_useful_and_private_in_reports():
+    """A date prefix must not drop useful Hub text or admit raw project output."""
+    import urllib.parse
+    from hub import update_config
+
+    stamp = "[2026-10-27 05:00:01]"
+    markers = {"name": "PrivateTimestampProject", "path": "/private/fixture/secret-project.py",
+               "url": "https://example.invalid/private-dashboard", "value": "SYNTHETIC_PRIVATE_VALUE"}
+    report = diagnostics.build_report(
+        log_tail=(
+            f"{stamp} [hub] update check failed: {markers['name']} {markers['path']} "
+            f"{markers['url']} {markers['value']}\n"
+            "[hub] legacy process exited (code=1)\n"
+            f"{stamp} RAW-STAMPED-PROJECT [hub] this is not a Hub line\n"
+            "[not-a-timestamp] [hub] MALFORMED-PREFIX-OUTPUT\n"
+        ), sensitive=list(markers.values()), project_names=[markers["name"]],
+    )
+    text = diagnostics.format_report(report)
+    assert "update check failed" in text and stamp in text, (
+        "timestamped Hub diagnostics were discarded from the exported report"
+    )
+    assert "legacy process exited" in text
+    assert "RAW-STAMPED-PROJECT" not in text and "MALFORMED-PREFIX-OUTPUT" not in text, (
+        "timestamped project output or malformed prefixes were admitted as Hub diagnostics"
+    )
+    _assert_no_markers(text, markers)
+    with tempfile.TemporaryDirectory() as directory:
+        saved = diagnostics.save_report(report, directory=Path(directory)).read_text()
+        assert "update check failed" in saved and stamp in saved
+        _assert_no_markers(saved, markers)
+    original = update_config.ISSUES_URL
+    try:
+        update_config.ISSUES_URL = "https://example.invalid/issues/new"
+        url = diagnostics.issue_url(report)
+        assert url is not None
+        issue = urllib.parse.unquote(url)
+        assert "update check failed" in issue
+        _assert_no_markers(issue, markers)
+    finally:
+        update_config.ISSUES_URL = original
+
+
 # ---------- INFO-001: release asset names are paths ----------
 
 
