@@ -1,6 +1,79 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT — v0.7.3 release verification in progress (2026-10-27)
+## CURRENT — v0.7.3 TAG BUILDS / PRIVATE STAGING (2026-10-27)
+
+**Immutable release source:** `21e5f498dff0993ee58e4617c40584f9b33ca240`.
+Annotated tagv0.7.3 was pushed and read back: tag object
+`2df5daf7f0b119413b85dbe548c7411858096e2d`, peeled exact21e5f49.
+Later documentation HEADs must never replace this tag or Mac source receipt.
+
+### Completed gates — do not repeat
+- Local native Cocoa/Qt6.9.3 full:377exact IDs,374PASS/3platformSKIP,126actual
+  children exit0. Main source CI40506817730 SUCCESS on all3native platforms:
+  Ubuntu24.04=374PASS/3SKIP; Windows2022+2025=370PASS/7SKIP each. Every platform's
+  distinct raw artifact independently reconciled377IDs/126clean exits, no
+  missing/extra/duplicate. All scoped reviews audited and complete.
+- Actual local DMG263975668bytes, SHA256
+  `0b35a5a3acb5737e1c25bfa7d5b8b94182ec3a3bc638c91ac57799148eeaf73a`.
+  Read-only mounted/copied/source20files/version0.7.3/build1/Qt6.9.3/signatures/
+  both physical WebEngine helpers/Mach-O12 floors verified and own mount detached.
+- Actual copied executable `native-runtime-v2` passed: genuine decoded upload,
+  native A→Z focus with unchanged page session/PNG/backendPID; own tab/sidebar/
+  log header aligned; visible dates, real Clear then fresh dated output; requested
+  normal quit/actual OS exit0, no forced cleanup/survivors. Actual screenshots
+  and raw report retained. First unanswered/expired QA remains FAILED history,
+  not an app regression; no owner gesture was needed for final accepted run.
+- The shipped Store0.7.3 read-save-reloaded a private copy of all6real records,
+  preserving order/name/command/URL/env/interpreter/etc; no real commands ran and
+  the live registry was unchanged. Private snapshot is700directory/600file,
+  never upload it. Installed0.7.2/build1 remains untouched.
+
+### ACTIVE — tag source matrix / publication gate
+- **Tag run40539877288**, exactv0.7.3+21e5f49:
+  https://github.com/different2/local-project-hub/actions/runs/40539877288
+- BOTH native installer jobs SUCCESS and actual artifacts independently accepted
+  in `native-artifact-acceptance.json`. MSI0.7.3 x64/unchanged UpgradeCode, SHA256
+  `b97e8f5899c5d0f055375c787b627974f1912c4cff53f2cc40a9fc25c91e979d`.
+  DEB0.7.3/amd64, SHA256
+  `fc4e1c3365fa956b57d088512ccfa75250b876fe46b7c660d4d54ccd651d7fe8`.
+  Actual APT-installed Linux native pixels/nonce/default renderer seccomp2/
+  no_new_privs1/nonroot/wrong-text control/clean exits/source restoration accepted.
+  No Windows binary was executed on Mac; native Windows source tests remain distinct.
+- Native-only waiter proc_07ff9bf9434f finished. ONE whole-tag notified waiter is
+  now **proc_4716b61102fb** (PID4053), `gh run watch40539877288 --exit-status`.
+  Do not duplicate. Latest tag job read: Ubuntu sourceSUCCESS, Windows2022 suite
+  actually running, Windows2025 queued; globalqueued is not allocation failure.
+- PRIVATE draft release **425706169** read back by ID, draft=true. Actual DMG
+  uploaded with exact `source:21e5f498dff0993ee58e4617c40584f9b33ca240` label,
+  size/digest verified. Real `verify-macos-input` metadata+local-byte gate PASSED.
+  Preview reference `untagged-464974871f339b4b1d60` is valid draft state, not a
+  missing public release. Do not replace public assets or touch0.7.2.
+
+### NEXT ACTIONS
+1. When notified tag waiter ends, read the real run/jobs by exact tag+SHA. Download
+   all3tag test-log artifacts and reconcile377IDs/raw exits independently as with
+   mainCI; retain any failing retries or explicitly named platform skips. Installer
+   artifacts were ALREADY independently accepted; no source/full native redo.
+2. The tag workflow itself requires all serial source tests, native builders/
+   installed Linux acceptance and verified Mac input before complete-three
+   publication. One whole-run waiter already exists above; don't start another.
+3. After publication read release425706169 back, validate exactly3stable assets,
+   anonymous latest/download links+actual bytes/digests/container/metadata, and
+   installed0.7.2 updater discovery without installation. User installs themselves.
+4. Finish docs/checklist/GitHub/local owned-QA cleanup. README's docs-only
+   correction makes the existing contract explicit: selection does not launch,
+   Start/autostart do. README+this checkpoint are the docs-only `[skip ci]`
+   checkpoint; all homepage links already use latest/stable names. Source/tag
+   stays21e5f49 regardless of later documentation HEAD.
+
+Live authority/evidence: `~/.hermes/cache/scratch/lph-release-0.7.3/STATUS.md` and
+`pre-tag-acceptance.json`, `real-registry-roundtrip.json`, `native-runtime-v2/`.
+No UI/server is left from owned Mac QA. Original intermittent permanent bot
+survivor remains undiagnosed/unreproduced; do not claim otherwise. Sphere CSS
+commitd37f0d1 is local-only, not bundled, unrelated dirty scripts/art preserved.
+All older sections below are historical and superseded by this checkpoint.
+
+## Previous pre-tag checkpoint — v0.7.3 (historical)
 
 **Release/build/tag source is exactly `21e5f498dff0993ee58e4617c40584f9b33ca240`.**
 Do NOT tag a later `[skip ci]` documentation HEAD. The owner authorized publishing

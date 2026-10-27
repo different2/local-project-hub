@@ -74,8 +74,9 @@ Older versions: [Releases](https://github.com/different2/local-project-hub/relea
    starts it. The Hub reads what you chose and fills in the startup command —
    adjust it if needed. Leave **Dashboard URL** blank for most projects: if
    the server prints its address, the Hub detects it.
-2. **Open it** — click the project in the sidebar. If it isn't running, the
-   Hub starts it, and the dashboard opens in a tab once the server answers.
+2. **Open it** — click the project in the sidebar to view its dashboard or
+   launch page. Press **Start** to launch it; the dashboard opens in a tab once
+   the server answers.
 3. **Drive it** — **Start**, **Stop**, **Restart**, and **Open in browser**
    act on the project you are viewing. Everything a project prints appears in
    the **log drawer** at the bottom; toggle it with **Logs**.
@@ -85,9 +86,9 @@ Worth knowing:
 - Drag projects up or down in the sidebar to arrange them. The order is saved
   across restarts; new projects are added at the bottom. Double-click a name
   to rename it without changing its position.
-- Adding a project never starts it, and opening the Hub never starts anything
-  by itself. A project runs when you click it, press Start, or tick **Start
-  automatically when the hub opens** on it.
+- Adding or selecting a project does not start it. Press **Start** to run it,
+  or tick **Start automatically when the hub opens** to opt that project into
+  autostart.
 - Desktop apps get launched in their own window instead of a tab.
 - The Hub's own tab is a short getting-started page; reopen it via the app
   menu's **Show Overview** if you close it.
