@@ -1,6 +1,72 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT — v0.7.3 PUBLIC, VERIFIED (2026-10-27)
+## CURRENT — GitHub cleanup applied; contributor cache pending (2026-10-28)
+
+The owner authorized removing automated attribution, preserving genuine human
+credit, rewriting/force-pushing `main`, and deleting incorporated branches.
+
+### Applied and independently read back
+- Removed ONLY the automated co-author footer from Tahir Masood's original
+  `174e90c55b696f592d58ed83f5f5e8552a51242a`; his human author/committer identity
+  and dates remain exact. Clean equivalent:
+  `b616a79d19dd94ec266fd7a8320de17433dc804a`. GitHub maps BOTH roles to
+  `tahirmasood2`. The README acknowledgement and LICENSE blobs are unchanged.
+- All194 original commits remain:41commit IDs changed,1message changed, every
+  source tree/human identity/date/parent mapping preserved. Two invalidated
+  historical merge signatures necessarily disappear. Pre-policy main
+  `6601c32e1e546ebfd977e990bb1b14ded6595809` maps to
+  `e4254e9fc054ae7e1e3cc4be22dde014bead3890`, with identical whole source tree.
+- Policy commit `3178fa5d9f8b90b00688bee9da3f696c34a18c4a` was published by
+  one atomic explicit `--force-with-lease` push, together with deletion of the
+  already-merged `feat/linux-release` and `fix/windows-qt-compatibility` refs.
+  GitHub now has ONLY `main`. All10 obsolete local branch refs were also removed.
+- Complete branch audit found no missing intended source:10refs already merged,
+  1alternate patch equivalent,2superseded with features preserved. Do not merge
+  old snapshots back. All old worktree directories/files/venv links were retained;
+  branch-bound worktrees were detached at the SAME original HEAD, not removed.
+- A fresh clone directly from GitHub rechecked all194old/newcommit objects and
+  the exact reviewed policy files. Actual canonical commit-hook tests pass on
+  Python3.9 and3.11, including real rejected bot commits and accepted human
+  primary/coauthor/sign-off cases. Scoped independent review was clear; no new
+  application runtime/full-GUI/build acceptance is claimed for this metadata task.
+
+### Future attribution
+`AGENTS.md` records human-only authorship and no tool/model/agent advertising in
+commits or pull requests. The executable `.githooks/commit-msg` is enabled by
+LOCAL `core.hooksPath=.githooks` in this checkout. It rejects common bot credit
+without editing messages or source notices. New clones must opt in; local hooks
+can be bypassed, so retain the written rule. See DEVELOPMENT.md. The owner's
+cross-project preference is also recorded outside the repository.
+
+### Pending external display refresh — do not rewrite again
+Actual remote `main` contains no automated credit, and GitHub's contributor REST
+API includes Tahir and no automated contributor. However, a browser read after
+publication still showed the old automated entry in the homepage sidebar.
+GitHub documents that contributor displays can take about24hours after a history
+rewrite. Do NOT report the visible sidebar as already cleared; if still stale
+roughly24hours after the 2026-10-28 publication, the next step is a fresh check and,
+if needed, GitHub Support—not another history rewrite. No watcher/server is left
+running for this wait. Other clones/forks must rebase or re-clone rather than
+merge the old history back.
+
+### Original releases remain unchanged
+All13 published tag objects and release/asset IDs, sizes, digests and metadata
+remain exact. In particular, `v0.7.3` STILL points at original released source
+`21e5f498dff0993ee58e4617c40584f9b33ca240`, tag object
+`2df5daf7f0b119413b85dbe548c7411858096e2d`. Historical release tags/PR references
+can retain the old metadata; this cleanup targeted default-branch contribution
+attribution, not retagging or replacing shipped artifacts. No installed app,
+project registration, running service or release asset was changed.
+
+**Durable private rollback/evidence:**
+`~/.local/share/local-project-hub/history-backups/20261027T183120Z/` contains
+verified original local/remote ALL-ref Git bundles, original refs/releases,
+old-to-new commit map and cleanup receipts. Do not publish these backups or push
+backup refs to GitHub. Scratch working evidence is under
+`~/.hermes/cache/scratch/lph-history-cleanup/`. The completed original release
+acceptance below remains valid for the ORIGINAL release source, not a new build.
+
+## v0.7.3 release acceptance — completed (2026-10-27)
 
 **Released:** https://github.com/different2/local-project-hub/releases/tag/v0.7.3
 ReleaseID425706169 is public/latest with exactly3complete stable assets:
