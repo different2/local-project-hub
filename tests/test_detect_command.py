@@ -347,14 +347,19 @@ def test_static_html_named_page_is_read_only_and_url_encoded() -> None:
     from copy import deepcopy
     from hub.static_site import dashboard_url
 
-    with tempfile.TemporaryDirectory() as d:
-        name = "review #1 ? 50% café.htm"
-        body = "<main>Original page</main>"
-        _mk_project(Path(d), {name: body, ".hidden.html": "hidden", "notes.txt": "notes"})
-        rec = {"command": "python3 -m http.server 8000", "working_dir": d, "url": "http://[::]:8000/"}
-        before = deepcopy(rec)
-        assert dashboard_url(rec) == "http://[::]:8000/review%20%231%20%3F%2050%25%20caf%C3%A9.htm"
-        assert rec == before and (Path(d) / name).read_text() == body
+    # Windows cannot create '?'; all platforms still exercise spaces, '#', '%'
+    # and Unicode. Keep the extra POSIX filename coverage where it is legal.
+    cases = [("review #1 50% café.htm", "review%20%231%2050%25%20caf%C3%A9.htm")]
+    if sys.platform != "win32":
+        cases.append(("review #1 ? 50% café.htm", "review%20%231%20%3F%2050%25%20caf%C3%A9.htm"))
+    for name, encoded in cases:
+        with tempfile.TemporaryDirectory() as d:
+            body = "<main>Original page</main>"
+            _mk_project(Path(d), {name: body, ".hidden.html": "hidden", "notes.txt": "notes"})
+            rec = {"command": "python3 -m http.server 8000", "working_dir": d, "url": "http://[::]:8000/"}
+            before = deepcopy(rec)
+            assert dashboard_url(rec) == "http://[::]:8000/" + encoded
+            assert rec == before and (Path(d) / name).read_text() == body
 
 
 def test_static_html_explicit_routes_and_other_servers_stay_unchanged() -> None:
