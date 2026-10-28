@@ -4,6 +4,31 @@ Everything about building, testing, packaging, and releasing the Hub. If you
 just want to use the app, see the [README](README.md). The project's current
 state and open threads live in [HANDOFF.md](HANDOFF.md).
 
+## Human attribution and local commit guard
+
+Contributor credit is for people. Keep human authorship/co-authors/sign-offs and
+required copyright/licence notices; do not add agent, model or tool credits or
+advertising footers to commits or pull requests. See [AGENTS.md](AGENTS.md).
+
+Enable the checked-in guard once per checkout (requires `python3` on PATH):
+
+```sh
+git config --local core.hooksPath .githooks
+python3 tests/test_commit_attribution.py
+```
+
+The guard rejects common automated author/committer/co-author identities and
+"Generated with/by" tool advertising. It does not rewrite the message, alter
+source notices, or reject ordinary technical discussion of a tool. Human credit,
+including Tahir Masood's, is retained. These standalone tests use isolated real
+Git repositories; they do not start the app or touch live project data.
+
+Git does not automatically enable hooks in new clones, and local hooks can be
+bypassed or skipped by GitHub's web editor. The written rule applies regardless;
+install the guard in each working checkout and do not bypass it to add bot credit.
+If another hooks directory is already configured, integrate this guard with it
+rather than overwriting existing hooks.
+
 ## Run from source
 
 ```bash

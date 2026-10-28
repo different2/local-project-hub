@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Reject automated attribution without editing human credit or message text."""
+import re
+import subprocess
+import sys
+from email.utils import parseaddr
+from pathlib import Path
+
+TOOL_NAMES = {
+    "aider", "anthropic claude", "chatgpt", "claude", "claude code",
+    "codex", "commandcode", "commandcode bot", "commandcodebot", "copilot",
+    "cursor", "devin", "gemini", "github actions", "github copilot",
+    "hermes", "hermes agent", "openai codex", "opencode", "windsurf",
+}
+TOOL_EMAILS = {"noreply@commandcode.ai", "noreply@anthropic.com", "noreply@openai.com"}
+CREDIT = re.compile(r"^\s*(?:co-authored-by|co-committed-by|signed-off-by|reviewed-by|assisted-by|generated-by):\s*(.+)$", re.I)
+ADVERTISING = re.compile(r"^\s*(?:🤖\s*)?(?:generated|created|written|authored|assisted|powered)\s+(?:with|by|using)\b", re.I)
+TOOL_MENTION = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(name) for name in sorted(TOOL_NAMES, key=len, reverse=True)) + r")(?!\w)", re.I)
+
+
+def is_tool(identity):
+    # git var appends an epoch and timezone; modern parseaddr rejects that suffix.
+    clean_identity = re.sub(r"(?<=>)\s+\d+\s+[+-]\d{4}\s*$", "", identity.strip())
+    name, email = parseaddr(clean_identity)
+    normalized_name = " ".join(name.casefold().split())
+    return (
+        normalized_name in TOOL_NAMES
+        or email.casefold() in TOOL_EMAILS
+        or "[bot]" in identity.casefold()
+    )
+
+
+def reject():
+    print("Commit blocked: tool/bot attribution is not allowed. Keep the configured human author and genuine human contributor credit; remove automated credit/advertising.", file=sys.stderr)
+    return 1
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: commit-msg COMMIT_MESSAGE_FILE", file=sys.stderr)
+        return 1
+    try:
+        message = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+        for line in message.splitlines():
+            match = CREDIT.match(line)
+            if match and is_tool(match.group(1)):
+                return reject()
+            if ADVERTISING.match(line) and TOOL_MENTION.search(line):
+                return reject()
+        for variable in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+            identity = subprocess.run(
+                ["git", "var", variable], check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            ).stdout
+            if is_tool(identity):
+                return reject()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print("Commit attribution check failed: %s" % exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
