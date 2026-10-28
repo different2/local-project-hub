@@ -2357,6 +2357,173 @@ def test_editing_a_never_started_project_refreshes_its_rendered_start_page(tmp: 
         w.close()
 
 
+def test_picked_html_entry_survives_save_with_multiple_pages(tmp: Path) -> None:
+    """File choice, not index.html or directory order, identifies the app page."""
+    import shlex
+    from hub.project_dialog import ProjectDialog
+
+    folder = tmp / "multiple pages"
+    folder.mkdir()
+    (folder / "index.html").write_text("<title>Wrong default</title><main>WRONG_DEFAULT</main>")
+    chosen = folder / "chosen review #1.html"
+    original = b"<title>Chosen review</title><main>PICKED_HTML_OPENED</main>"
+    chosen.write_bytes(original)
+    port = reserve_port()
+    dialog = ProjectDialog()
+    dialog._apply_file_choice(str(chosen))
+    dialog.command.setText(f"{shlex.quote(sys.executable)} -m http.server {port} --bind 127.0.0.1")
+    dialog.accept()
+    picked = dialog.result_record()
+    assert picked is not None
+    assert picked.get("entry_file") == chosen.name, "Hub discarded the HTML file selected in File…"
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add(picked)
+    reloaded = sm.Store(st.path)
+    saved = reloaded.get(rec["id"])
+    assert saved is not None and saved.get("entry_file") == chosen.name, "Store discarded the HTML entry"
+    editor = ProjectDialog(record=saved)
+    editor.accept()
+    edited = editor.result_record()
+    assert edited is not None and edited.get("entry_file") == chosen.name, "Edit lost the saved HTML entry"
+    other_folder = tmp / "other project"
+    other_folder.mkdir()
+    editor = ProjectDialog(record=saved)
+    editor.wd.setText(str(other_folder))
+    editor.accept()
+    edited = editor.result_record()
+    assert edited is not None and not edited.get("entry_file"), "changing folders retained a stale HTML selection"
+    w = HubWindow(reloaded)
+    w.show()
+    proc = w._proc_for(saved)
+    try:
+        w._select_id(saved["id"], start=True)
+        view = w._view_for(saved["id"])
+        assert view is not None and _wait_for_page_text(view, "PICKED_HTML_OPENED", 8), (
+            f"the selected HTML was not shown: {view.url().toString() if view else 'no view'}"
+        )
+        assert view.url().path() == "/chosen review #1.html", view.url().toString()
+        assert chosen.read_bytes() == original, "Hub changed the selected source file"
+    finally:
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8)
+
+
+def test_static_single_html_opens_page_not_directory_listing(tmp: Path) -> None:
+    """An old saved root URL must open the sole HTML page without changing it."""
+    import shlex
+    import hub.window as wm
+
+    folder = tmp / "standalone"
+    folder.mkdir()
+    page = folder / "review tool.html"
+    original = b"<title>Standalone review</title><main>STATIC_ENTRY_OPENED</main>"
+    page.write_bytes(original)
+    port = reserve_port()
+    root_url = f"http://127.0.0.1:{port}/"
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add({
+        "name": "Standalone review", "working_dir": str(folder),
+        "command": f"{shlex.quote(sys.executable)} -m http.server {port} --bind 127.0.0.1",
+        "url": root_url,
+    })
+    w = HubWindow(st)
+    w.show()
+    proc = w._proc_for(rec)
+    readiness_urls = []
+    browser_urls = []
+    original_waiter = wm.ReadinessWaiter
+    original_browser = wm.QDesktopServices.openUrl
+
+    def observe_waiter(url, *args, **kwargs):
+        readiness_urls.append(QUrl(url).path())
+        return original_waiter(url, *args, **kwargs)
+
+    wm.ReadinessWaiter = observe_waiter
+    wm.QDesktopServices.openUrl = lambda url: browser_urls.append(url.path()) or True
+    try:
+        w._select_id(rec["id"], start=True)
+        view = w._view_for(rec["id"])
+        assert view is not None
+        assert _wait_for_page_text(view, "STATIC_ENTRY_OPENED", 8), (
+            f"Hub opened the server folder, not its standalone HTML page: {view.url().toString()!r}"
+        )
+        assert view.url().path() == "/review tool.html", view.url().toString()
+        assert view.isVisible() and view.width() > 0 and view.height() > 0
+        saved = st.get(rec["id"])
+        assert saved is not None and saved["url"] == root_url, "saved URL was silently overwritten"
+        assert page.read_bytes() == original, "the project page was changed to fit Hub"
+        assert readiness_urls and all(path == "/review tool.html" for path in readiness_urls), (
+            f"readiness tested the directory instead of the actual page: {readiness_urls}"
+        )
+        w._open_external()
+        assert browser_urls == ["/review tool.html"], "Open in browser targeted another page"
+        loads = []
+        view.loadStarted.connect(lambda: loads.append(True))
+        w._show_dashboard(rec)
+        _spin(200)
+        assert not loads, "encoded filenames caused the unchanged dashboard to reload"
+    finally:
+        wm.ReadinessWaiter = original_waiter
+        wm.QDesktopServices.openUrl = original_browser
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8), "owned fixture server did not stop"
+
+
+def test_static_html_private_storage_survives_reload_and_isolates_projects(tmp: Path) -> None:
+    """Generated standalone HTML can autosave without changing its source file."""
+    import shlex
+
+    folder = tmp / "storage app"
+    folder.mkdir()
+    page = folder / "review.html"
+    source = b'''<main id="result">BOOTING</main><script>
+    (async () => {
+      try {
+        const old = await window.storage.get('review-notes', false);
+        await window.storage.set('review-notes', 'saved-notes', false);
+        const saved = await window.storage.get('review-notes', false);
+        let sharedRejected = false;
+        try { await window.storage.set('review-notes', 'leaked', true); }
+        catch (e) { sharedRejected = true; }
+        if (!saved || saved.value !== 'saved-notes' || !sharedRejected) throw Error('storage contract failed');
+        result.textContent = 'STORAGE_OK previous=' + (old ? old.value : 'empty');
+      } catch (e) { result.textContent = 'STORAGE_ERROR ' + e.message; }
+    })();</script>'''
+    page.write_bytes(source)
+    port = reserve_port()
+    st = sm.Store(tmp / "registry.json")
+    rec = st.add({"name": "Private storage A", "working_dir": str(folder),
+                  "command": f"{shlex.quote(sys.executable)} -m http.server {port} --bind 127.0.0.1",
+                  "url": f"http://127.0.0.1:{port}/"})
+    other = st.add(dict(rec, id="", name="Private storage B"))
+    w = HubWindow(st)
+    w.show()
+    proc = w._proc_for(rec)
+    try:
+        w._select_id(rec["id"], start=True)
+        view = w._view_for(rec["id"])
+        assert view is not None and _wait_for_page_text(view, "STORAGE_OK previous=empty", 8), (
+            "standalone HTML's window.storage get/set API is unavailable or not private"
+        )
+        assert not view.page().profile().isOffTheRecord(), "autosave cannot survive app exit in an off-record profile"
+        storage_path = Path(view.page().profile().persistentStoragePath()).resolve()
+        assert tmp.resolve() in storage_path.parents, "HTML state escaped the isolated Hub registry directory"
+        view.reload()
+        assert _wait_for_page_text(view, "STORAGE_OK previous=saved-notes", 8), "saved notes did not survive reload"
+        w._select_id(other["id"], start=False)
+        other_view = w._view_for(other["id"])
+        assert other_view is not None
+        other_view.setUrl(view.url())  # Same exact origin; only the project differs.
+        assert _wait_for_page_text(other_view, "STORAGE_OK previous=empty", 8), "another project read private notes"
+        assert other_view.page().profile() is not view.page().profile()
+        other_view.setHtml("<main id='result'></main><script>result.textContent = typeof window.storage === 'undefined' ? 'OUTSIDE_SCOPE_OK' : 'OUTSIDE_SCOPE_LEAK';</script>", QUrl("https://unrelated.invalid/"))
+        assert _wait_for_page_text(other_view, "OUTSIDE_SCOPE_OK", 5), "storage compatibility leaked to an unrelated origin"
+        assert page.read_bytes() == source, "compatibility rewrote the source HTML"
+    finally:
+        w.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8)
+
+
 if __name__ == "__main__":
     import tempfile
 

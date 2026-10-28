@@ -70,6 +70,7 @@ class ProjectDialog(QDialog):
     def __init__(self, parent=None, record: dict | None = None, base_dir: str = ""):
         super().__init__(parent)
         self._record = dict(record) if record else {}
+        self._entry_file = str(self._record.get("entry_file") or "")
         self._editing = bool(record)
         self.setWindowTitle("Edit project" if record else "Add project")
         # Wide enough that no hint has to wrap into a clipped second line.
@@ -222,6 +223,7 @@ class ProjectDialog(QDialog):
         self._suggested_interpreter = ""
         self._command_touched = False
         self.command.textEdited.connect(self._mark_command_touched)
+        self.wd.textChanged.connect(self._forget_entry_file)
         self.wd.textChanged.connect(self._maybe_suggest_from_folder)
 
         # The name follows the folder/file the user picks until they type their
@@ -382,6 +384,10 @@ class ProjectDialog(QDialog):
 
     # ---------- picking ----------
 
+    def _forget_entry_file(self) -> None:
+        """A file chosen in the previous directory is not this folder's entry."""
+        self._entry_file = ""
+
     def _pick_dir(self) -> None:
         d = QFileDialog.getExistingDirectory(
             self, "Project folder", self.wd.text() or os.path.expanduser("~")
@@ -411,6 +417,8 @@ class ProjectDialog(QDialog):
         parent = os.path.dirname(os.path.abspath(path))
         if parent and parent != self.wd.text().strip():
             self.wd.setText(parent)  # may fill a folder suggestion first
+        picked = Path(path)
+        self._entry_file = picked.name if picked.suffix.lower() in (".html", ".htm") else ""
         self._maybe_name_from_file(path)
         if self._command_touched:
             return
@@ -470,6 +478,7 @@ class ProjectDialog(QDialog):
                 "command": self.command.text().strip(),
                 "args": self.args.text().strip(),
                 "url": self.url.text().strip(),
+                "entry_file": self._entry_file,
                 "autostart": self.autostart.isChecked(),
                 "env": self._parse_env(self.env.toPlainText()),
                 "detected": det.as_dict(),

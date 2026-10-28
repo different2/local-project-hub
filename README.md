@@ -93,6 +93,19 @@ Worth knowing:
 - The Hub's own tab is a short getting-started page; reopen it via the app
   menu's **Show Overview** if you close it.
 
+### Standalone HTML — unreleased source changes
+
+**File…** remembers the HTML page you picked, including folders with several
+pages. For older Python `http.server` registrations, a sole HTML page opens
+instead of a folder listing; explicit routes and uncertain choices stay intact.
+
+Inside Hub, local Python static sites also get private, persistent
+`window.storage.get/set` compatibility for generated HTML that uses that API.
+Each project has its own browser storage under Hub's settings directory, not
+inside your project. Browser storage quotas still apply; shared/cloud storage
+is not provided. This compatibility does not extend to an external browser.
+These changes are not yet in the published installers.
+
 ## Updating
 
 **Help → Check for Updates…** shows the newest release; **Download and

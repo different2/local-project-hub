@@ -1,6 +1,66 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT — GitHub cleanup applied; contributor cache pending (2026-10-28)
+## CURRENT — Static HTML entry + private autosave, unreleased (2026-10-28)
+
+The owner reported a standalone HTML project opening as a directory listing,
+and explicitly required changes in Hub, NOT edits to the original project.
+After the page opened, testing exposed its nonstandard `window.storage` API;
+the owner approved Hub-side autosave compatibility as well.
+
+### Implemented
+- `hub/static_site.py` resolves only recognized local Python `http.server`
+  entry pages. File… selection persists as `entry_file` through Add/Edit/Store.
+  Legacy root URLs infer only a sole visible top-level HTML file without an
+  index. Explicit routes/query/fragment/credentials, another port/bind address,
+  ambiguous folders, path escapes and unknown servers are left alone. Navigation,
+  readiness and Open in browser share the effective URL; saved URLs stay exact.
+- `hub/html_storage.py` supplies private `window.storage.get/set` only inside
+  eligible local static sites. Each stable project ID gets a separate persistent
+  Chromium profile under the registry's `html-storage/` directory. Injection is
+  main-frame/main-world and origin-limited; native browser same-origin rules and
+  quota errors remain. There is no Python filesystem bridge, shared/cloud store,
+  external-browser adapter, new dependency or sandbox bypass.
+- Static popups inherit their opener's profile. Ordinary non-static projects
+  retain the default profile; creating/selecting a tab still starts nothing.
+  Original project HTML, scripts, dependencies and saved live registrations must
+  remain untouched. No per-project CSS/JS source edits are an acceptable workaround.
+
+### Targeted evidence already collected
+- Real native Cocoa source execution of the unchanged original Trade Ledger:
+  upload UI and synthetic CSV review form visibly rendered. Its actual Save &
+  mark reviewed handler reports saved. Normal app quit followed by a DIFFERENT
+  OS process, same isolated registry/profile and re-uploaded synthetic CSV,
+  restores one reviewed trade and zero left in queue.
+- Removing entry resolution reproduces the directory listing; removing storage
+  compatibility reproduces the original page's save-failed message. Both controls
+  exit1 as expected; positive native write/restart executions exit0 and stop their
+  owned servers. Original HTML hashes match before/after.
+- Three new native regressions pass on Python3.9/Qt6.9.3: legacy entry/navigation/
+  readiness/external target/no reload; picked-file save/Edit/reopen/folder-change;
+  private get/set/reload/different-project same-origin isolation and origin guard.
+  Pure detection/static-origin tests pass under Python3.9 and3.11.
+- Early native presentation captures were stale, not acceptance; retained the
+  failed images and improved the observer. An early observer lost its script
+  during navigation; an initial Qt collection method name was corrected against
+  actual Qt6 introspection. Do not erase these failed attempts.
+
+### Remaining gates at this checkpoint
+- Independent frozen-delta review and final full native source regression.
+- Final whole-project snapshot, live registry and installed-app no-change checks.
+- No push, new version, release, installer build or installation is authorized by
+  this bug-fix request. The installed app was read back as0.7.3 during this task;
+  historical installed0.7.2 statements below refer to earlier release acceptance.
+- Windows/Linux source paths and new installers have NOT been retested with this
+  delta. Preserve existing platform pins/floors and published release artifacts.
+- Full-suite verification must NOT call the runner's destructive port cleanup on
+  the owner's existing listeners. Use the separately recorded scratch safety
+  wrapper; all product assertions/raw child exits still need strict acceptance.
+
+Working evidence: `~/.hermes/cache/scratch/lph-static-html/`, including the
+221-entry original-project snapshot, native-original write/restart/control
+receipts and PNGs, raw targeted case exits, and protected-state hashes.
+
+## GitHub cleanup applied; contributor cache pending (2026-10-28)
 
 The owner authorized removing automated attribution, preserving genuine human
 credit, rewriting/force-pushing `main`, and deleting incorporated branches.

@@ -25,7 +25,7 @@ from urllib.parse import unquote
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPalette
-from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -57,10 +57,12 @@ from . import __version__
 from . import diagnostics as diagnostics_mod
 from . import launch_at_login, startpage, store as store_mod, urldetect
 from .diagnostics import build_report, format_report, save_report
+from .html_storage import HtmlStorageProfiles
 from .platform import IS_MACOS, IS_WINDOWS
 from .process_manager import ProjectProcess
 from .project_dialog import ProjectDialog
 from .readiness import ReadinessWaiter
+from .static_site import dashboard_url
 from .update_dialog import UpdateDialog
 from .updater import (
     UpdateError,
@@ -150,12 +152,22 @@ class HubWebView(QWebEngineView):
         page.stop_requested.connect(self.stop_requested)
         self.setPage(page)
 
+    def use_profile(self, profile: QWebEngineProfile) -> None:
+        """Install a project's profile only when it actually changes."""
+        if self.page().profile() is profile:
+            return
+        page = _HubPage(profile, self)
+        page.start_requested.connect(self.start_requested)
+        page.stop_requested.connect(self.stop_requested)
+        self.setPage(page)
+
     def createWindow(self, window_type):
         # NOTE: PySide6 expects the QWebEngineView itself here, not .page() —
         # returning a page raises RuntimeWarning and the popup never navigates.
         # No show(): as a tab child the QTabWidget owns visibility. Calling
         # show() here would pop a floating window.
         view = HubWebView()
+        view.use_profile(self.page().profile())
         # Child tabs share the opener's project for controls/logs, but are not
         # another primary dashboard: closing one must not stop its backend.
         view.setProperty("hub_owner_project_id", self.property("hub_project_id")
@@ -300,6 +312,7 @@ class HubWindow(QMainWindow):
         self.setWindowTitle("Local Project Hub")
         self.resize(1180, 780)
         self.store = store
+        self._html_storage = HtmlStorageProfiles(store.path.parent, self)
         self.procs: dict[str, ProjectProcess] = {}
         self.active_id: str | None = None
         self.waiters: dict[str, ReadinessWaiter] = {}
@@ -1352,6 +1365,7 @@ class HubWindow(QMainWindow):
             return
 
         view = HubWebView()
+        view.use_profile(self._profile_for(rec))
         view.setProperty("hub_project_id", rec["id"])
         view.popup_opened.connect(self._on_popup_opened)
         view.loadFinished.connect(self._on_load_finished)
@@ -1839,6 +1853,15 @@ class HubWindow(QMainWindow):
 
     # ---------- dashboard display ----------
 
+    def _profile_for(self, rec: dict) -> QWebEngineProfile:
+        try:
+            profile = self._html_storage.for_record(rec)
+        except OSError as exc:
+            self._append_log(f"[hub] HTML autosave storage unavailable: {exc}", rec["id"])
+            self.status.showMessage("HTML autosave storage is unavailable; see this project's log", 8000)
+            profile = None
+        return profile if profile is not None else QWebEngineProfile.defaultProfile()
+
     def _show_dashboard(self, rec: dict) -> None:
         """Point this project's OWN tab at its URL (not the active tab's).
 
@@ -1853,8 +1876,10 @@ class HubWindow(QMainWindow):
         view = self._view_for(rec["id"])
         if view is None:
             return
-        if view.url().toString() != rec["url"]:
-            view.setUrl(QUrl(rec["url"]))
+        view.use_profile(self._profile_for(rec))
+        target = QUrl(dashboard_url(rec))
+        if view.url() != target:
+            view.setUrl(target)
 
     def _on_load_finished(self, ok: bool) -> None:
         view = self.sender()
@@ -1886,7 +1911,7 @@ class HubWindow(QMainWindow):
         pid = rec["id"]
         if pid in self.waiters:
             return
-        waiter = ReadinessWaiter(rec["url"], timeout_ms=45000)
+        waiter = ReadinessWaiter(dashboard_url(rec), timeout_ms=45000)
         self.waiters[pid] = waiter
 
         def _cleanup():
@@ -2164,7 +2189,8 @@ class HubWindow(QMainWindow):
         pid = self.active_id
         if not pid:
             return
-        url = self.store.get(pid).get("url")
+        rec = self.store.get(pid)
+        url = dashboard_url(rec) if rec else ""
         if url:
             QDesktopServices.openUrl(QUrl(url))
 

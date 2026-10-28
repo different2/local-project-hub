@@ -315,6 +315,162 @@ def test_suggest_for_file_rejects_things_that_are_not_files() -> None:
     assert dc.suggest_for_file(None) == []
 
 
+# ---------- standalone HTML URL resolution ----------
+
+
+def test_static_html_does_not_retarget_a_different_configured_port() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"report.html": "<main>report</main>"})
+        rec = {"command": "python3 -m http.server 8000", "working_dir": d,
+               "url": "http://127.0.0.1:9000/"}
+        assert dashboard_url(rec) == rec["url"], "a different explicit endpoint was retargeted"
+
+
+def test_static_html_picked_path_is_relative_to_the_project() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"public/chosen.html": "chosen", "public/other.html": "other"})
+        rec = {"command": "python3 -m http.server 8000 --directory public", "working_dir": d,
+               "url": "http://127.0.0.1:8000/", "entry_file": "public/chosen.html"}
+        assert dashboard_url(rec) == "http://127.0.0.1:8000/chosen.html", (
+            "the picked project-relative file was resolved against the server root twice"
+        )
+        _mk_project(Path(d), {"chosen.html": "outside", "public/chosen.html": "different"})
+        rec["entry_file"] = "chosen.html"
+        assert dashboard_url(rec) == rec["url"], "a different same-named served file replaced the picked file"
+
+
+def test_static_html_named_page_is_read_only_and_url_encoded() -> None:
+    from copy import deepcopy
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        name = "review #1 ? 50% café.htm"
+        body = "<main>Original page</main>"
+        _mk_project(Path(d), {name: body, ".hidden.html": "hidden", "notes.txt": "notes"})
+        rec = {"command": "python3 -m http.server 8000", "working_dir": d, "url": "http://[::]:8000/"}
+        before = deepcopy(rec)
+        assert dashboard_url(rec) == "http://[::]:8000/review%20%231%20%3F%2050%25%20caf%C3%A9.htm"
+        assert rec == before and (Path(d) / name).read_text() == body
+
+
+def test_static_html_explicit_routes_and_other_servers_stay_unchanged() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"app.html": "app"})
+        base = {"command": "python3 -m http.server 8000", "working_dir": d, "url": "http://localhost:8000/"}
+        for url in ("http://localhost:8000/chosen", "http://localhost:8000/?view=files",
+                    "http://localhost:8000/#anchor", "https://localhost:8000/", "http://example.com:8000/"):
+            rec = dict(base, url=url)
+            assert dashboard_url(rec) == url, url
+        for command in ("npm run dev", "python3 server.py", "python3 server.py -m http.server",
+                        "python3 -m other http.server", "python3 -m http.server 8000 --cgi",
+                        "python3 -m http.server 8000 && echo no", "python3 -m http.server --directory"):
+            rec = dict(base, command=command)
+            assert dashboard_url(rec) == rec["url"], command
+
+
+def test_static_html_ambiguous_and_default_index_folders_stay_unchanged() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        rec = {"command": "python3 -m http.server 8000", "working_dir": d, "url": "http://localhost:8000/"}
+        assert dashboard_url(rec) == rec["url"]
+        _mk_project(Path(d), {"one.html": "one", "two.html": "two"})
+        assert dashboard_url(rec) == rec["url"], "ambiguous folder was guessed"
+        _mk_project(Path(d), {"index.html": "index"})
+        assert dashboard_url(rec) == rec["url"], "conventional index route was changed"
+        rec["entry_file"] = "two.html"
+        assert dashboard_url(rec).endswith("/two.html"), "explicit picked file did not outrank index"
+
+
+def test_static_html_served_directory_and_interpreter_are_respected() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"wrong.html": "wrong", "served pages/right.html": "right"})
+        base = {"working_dir": d, "url": "http://127.0.0.1:8123/"}
+        for command, extra in (("python3 -m http.server 8123 --directory 'served pages'", ""),
+                               ("python3 -u -m http.server", "8123 -b 127.0.0.1 -d 'served pages'"),
+                               ("python3 -m http.server 8123 --directory='served pages' --protocol HTTP/1.1", "")):
+            rec = dict(base, command=command, args=extra)
+            assert dashboard_url(rec).endswith("/right.html"), (command, extra)
+        rec = dict(base, interpreter=".venv/bin/python", command="-m http.server 8123", args="-d 'served pages'")
+        assert dashboard_url(rec).endswith("/right.html")
+
+
+def test_static_html_missing_files_and_path_escapes_fail_closed() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "root"
+        root.mkdir()
+        _mk_project(root, {"one.html": "one"})
+        outside = Path(d) / "outside.html"
+        outside.write_text("outside")
+        base = {"command": "python3 -m http.server 8000", "working_dir": str(root), "url": "http://localhost:8000/"}
+        for entry in ("missing.html", "../outside.html", str(outside)):
+            rec = dict(base, entry_file=entry)
+            assert dashboard_url(rec) == rec["url"], entry
+        assert dashboard_url(dict(base, working_dir="")) == base["url"]
+        assert dashboard_url(dict(base, url="http://[broken")) == "http://[broken"
+
+
+def test_static_html_authenticated_addresses_are_not_inferred() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"one.html": "one"})
+        rec = {"command": "python3 -m http.server 8000", "working_dir": d,
+               "url": "http://user:password@localhost:8000/"}
+        assert dashboard_url(rec) == rec["url"], "explicit authenticated address was retargeted"
+
+
+def test_static_html_does_not_retarget_a_different_bound_address() -> None:
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"one.html": "one"})
+        for bind in ("--bind 127.0.0.2", "--bind=::1", "-b localhost"):
+            rec = {"command": "python3 -m http.server 8000 " + bind,
+                   "working_dir": d, "url": "http://127.0.0.1:8000/"}
+            assert dashboard_url(rec) == rec["url"], "a different or uncertain bind address was retargeted"
+
+
+def test_static_html_storage_origin_is_canonical_and_conservative() -> None:
+    from hub.static_site import static_site_origin
+
+    with tempfile.TemporaryDirectory() as d:
+        base = {"command": "python3 -m http.server 8000", "working_dir": d,
+                "url": "http://LOCALHOST:8000/report.html?view=1#section"}
+        assert static_site_origin(base) == "http://localhost:8000"
+        assert static_site_origin(dict(base, command="python3 -m http.server 80", url="http://127.0.0.1:80/")) == "http://127.0.0.1"
+        assert static_site_origin(dict(base, url="http://[::1]:8000/")) == "http://[::1]:8000"
+        for url in ("http://example.com:8000/", "https://localhost:8000/", "http://localhost:9000/",
+                    "http://name:password@localhost:8000/", "http://[broken", ""):
+            assert not static_site_origin(dict(base, url=url)), url
+        assert not static_site_origin(dict(base, command="python3 server.py"))
+
+
+def test_static_html_path_resolution_failures_are_advisory() -> None:
+    from unittest.mock import patch
+    from hub.static_site import dashboard_url
+
+    with tempfile.TemporaryDirectory() as d:
+        rec = {"command": "python3 -m http.server 8000", "working_dir": d, "url": "http://localhost:8000/"}
+        # Path.resolve raises RuntimeError for symlink loops on supported Python3.9.
+        with patch("hub.static_site.Path.resolve", side_effect=RuntimeError("Symlink loop")):
+            try:
+                actual = dashboard_url(rec)
+            except RuntimeError as exc:
+                raise AssertionError("an advisory filesystem failure escaped into the GUI") from exc
+        assert actual == rec["url"]
+
+
 if __name__ == "__main__":
     fails = 0
     for _name, _fn in sorted(globals().items()):

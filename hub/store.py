@@ -306,6 +306,7 @@ _STR_FIELDS = (
     "command",
     "args",
     "url",
+    "entry_file",
 )
 _BOOL_FIELDS = ("autostart",)
 
