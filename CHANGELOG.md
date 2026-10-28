@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.4
+
+- Open the actual standalone HTML page instead of a Python static server's directory listing. Preserve explicit routes and uncertain server configurations.
+- Remember the HTML file selected through File… across saving, editing and reopening, including folders containing multiple pages.
+- Provide private, persistent window.storage get/set compatibility inside Hub for local Python static sites. Keep each project's browser data separate and restore saved state after restarting Hub without changing project source files.
+- Use the same resolved page for embedded navigation, readiness checks and Open in browser, without overwriting the saved URL or unnecessarily reloading an unchanged page.
+
 ## 0.7.3
 
 - Preserve live dashboard pages and uploaded-image state when selecting an existing project in the sidebar or adding a registration; adding a project no longer steals the active tab.

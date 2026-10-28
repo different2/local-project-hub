@@ -93,7 +93,7 @@ Worth knowing:
 - The Hub's own tab is a short getting-started page; reopen it via the app
   menu's **Show Overview** if you close it.
 
-### Standalone HTML — unreleased source changes
+### Standalone HTML — 0.7.4 release candidate
 
 **File…** remembers the HTML page you picked, including folders with several
 pages. For older Python `http.server` registrations, a sole HTML page opens

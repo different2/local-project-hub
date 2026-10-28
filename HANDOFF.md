@@ -1,5 +1,27 @@
 # HANDOFF — Local Project Hub
 
+## CURRENT — v0.7.4 release authorized; verification in progress (2026-10-28)
+
+The owner explicitly chose **Build, verify, and publish the next release with
+these fixes**, after confirming the installed app and latest public installer
+were still0.7.3. This supersedes the earlier source-only publication boundary;
+it does NOT authorize installing or restarting the owner's app. Preserve the
+original trading project, live registrations, unrelated services and all existing
+published tags/assets. No hosted Mac or paid CI; native Mac locally, native
+Windows/Ubuntu on the existing GitHub runners, with normal renderer sandboxing.
+
+- Candidate version0.7.4 includes the source-accepted standalone HTML entry and
+  private autosave changes below. No runtime/dependency/platform-floor changes
+  are planned beyond the release version; existing pins remain.
+- Required gates: scoped release review, exact frozen-source native regression,
+  source CI on Ubuntu24.04/Windows2022/Windows2025, locally built/read-only
+  inspected/copied DMG and real packaged HTML save/restart QA, actual MSI and
+  APT-installed Linux checks, immutable explicit source tag, complete private
+  draft checks, tag CI, anonymous release/asset/digest and installed0.7.3 updater
+  discovery verification. Earlier source tests do not certify these new artifacts.
+- Work/evidence directory: `~/.hermes/cache/scratch/lph-release-0.7.4/`.
+  Do not tag a docs commit carrying `[skip ci]` or replace any public asset.
+
 ## CURRENT — Static HTML entry + private autosave, unreleased (2026-10-28)
 
 The owner reported a standalone HTML project opening as a directory listing,

@@ -7,7 +7,7 @@ project_name = "local-project-hub"
 # upgrading — each release installs alongside the last instead of over it,
 # with no error to explain why. The same applies to renaming the app key.
 bundle = "local.projecthub"
-version = "0.7.3"
+version = "0.7.4"
 url = "https://github.com/different2/local-project-hub"
 license = "MIT"
 license-files = ["LICENSE"]
