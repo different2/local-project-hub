@@ -44,9 +44,27 @@ the owner approved Hub-side autosave compatibility as well.
   during navigation; an initial Qt collection method name was corrected against
   actual Qt6 introspection. Do not erase these failed attempts.
 
-### Remaining gates at this checkpoint
-- Independent frozen-delta review and final full native source regression.
-- Final whole-project snapshot, live registry and installed-app no-change checks.
+### Verified native source acceptance
+- Runtime source commit: `8aa4bca643294d6f9549ca42f5bc728946246f92`.
+  Independent frozen-delta review returned clear; its schema, boolean gate and
+  packet/candidate hashes were checked. This is scoped source review, not
+  installer or untested-platform approval.
+- Full native Cocoa source suite: **391 unique test identities,388PASS,
+  3platformSKIP,0FAIL;129actual child exits0**. Every identity reconciles exactly
+  against the source registry, with no missing/extra/duplicate verdicts and no
+  premature Chromium-profile-release warnings. The canonical strict runner
+  passed through the documented safety transport without changing assertions.
+- All221 snapshotted original-project entries still match; no extra original
+  project files appeared. The real saved registration resolves the intended
+  page without mutation. Live registry and installed Info.plist hashes match
+  their protected snapshots. Final process inspection found no owned QA survivors.
+- Private durable evidence, including raw per-child logs, native control and
+  write/restart PNGs, review packet/verdict and reconciled acceptance:
+  `~/.local/share/local-project-hub/acceptance/static-html-20261028T101955Z/`.
+  Its177copied evidence files were hash-verified; no browser caches/profiles,
+  actual registry contents or credentials were archived.
+
+### Not released or installed
 - No push, new version, release, installer build or installation is authorized by
   this bug-fix request. The installed app was read back as0.7.3 during this task;
   historical installed0.7.2 statements below refer to earlier release acceptance.
