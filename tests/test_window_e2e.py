@@ -2524,6 +2524,84 @@ def test_static_html_private_storage_survives_reload_and_isolates_projects(tmp: 
         assert _wait_for(lambda: proc.state == "stopped", 8)
 
 
+def _assert_legacy_selected_python_html_storage(tmp: Path, explicit_route: bool) -> None:
+    import json
+    import urllib.request
+    from urllib.parse import quote
+    from hub.readiness import tcp_open
+
+    folder = tmp / "legacy selected app"
+    folder.mkdir()
+    page = folder / "chosen page.html"
+    source = b'''<main id="result">BOOTING</main><script>
+    (async () => {
+      try {
+        const old = await window.storage.get('legacy-notes', false);
+        await window.storage.set('legacy-notes', 'kept', false);
+        result.textContent = 'LEGACY_STORAGE_OK previous=' + (old ? old.value : 'empty');
+      } catch (e) { result.textContent = 'LEGACY_STORAGE_ERROR ' + e.message; }
+    })();</script>'''
+    page.write_bytes(source)
+    wrong = folder / "index.html"
+    wrong.write_bytes(b"<main>WRONG_LEGACY_DEFAULT</main>")
+    port = reserve_port()
+    root = f"http://127.0.0.1:{port}/"
+    target = root + quote(page.name) + ("?view=1" if explicit_route else "")
+    raw = {"id": "legacy-selected", "name": "Legacy selected HTML", "working_dir": str(folder),
+           "interpreter": sys.executable, "command": f"python3 -u -m http.server {port} --bind 127.0.0.1",
+           "url": target if explicit_route else root, "env": {}}
+    path = tmp / "registry.json"
+    if explicit_route:
+        # Attainable v1 shape: explicit route predates entry_file metadata.
+        path.write_text(json.dumps({"version": 1, "projects": [raw]}), encoding="utf-8")
+        store = sm.Store(path)
+    else:
+        store = sm.Store(path)
+        store.add(dict(raw, entry_file=page.name))
+        store = sm.Store(path)
+    rec = store.get(raw["id"])
+    assert rec is not None
+    window = HubWindow(store)
+    window.show()
+    proc = window._proc_for(rec)
+    try:
+        window._select_id(rec["id"], start=False)
+        assert proc.proc is None, "opening the legacy entry implicitly started it"
+        window.act_start.trigger()
+        assert _wait_for(lambda: proc.state == "running" and tcp_open("127.0.0.1", port), 10), list(proc.history)
+        # Independent backend proof distinguishes HTML recognition from launch.
+        with urllib.request.urlopen(target, timeout=3) as response:
+            assert b"LEGACY_STORAGE_OK" in response.read(), "the selected server did not serve the unchanged HTML"
+        view = window._view_for(rec["id"])
+        assert view is not None
+        assert _wait_for_page_text(view, "LEGACY_STORAGE_OK previous=empty", 8), (
+            "legacy selected interpreter/full Python command lost picked-page navigation or storage",
+            view.url().toString(), view.page().profile().isOffTheRecord()
+        )
+        assert view.url().toString(QUrl.FullyEncoded) == target, view.url().toString(QUrl.FullyEncoded)
+        assert not view.page().profile().isOffTheRecord(), "legacy HTML used the shared/default profile"
+        storage = Path(view.page().profile().persistentStoragePath()).resolve()
+        assert tmp.resolve() in storage.parents, "legacy private storage escaped isolated Hub state"
+        assert window.tabs.currentWidget() is view and view.isVisible() and view.width() > 0 and view.height() > 0
+        view.reload()
+        assert _wait_for_page_text(view, "LEGACY_STORAGE_OK previous=kept", 8), "legacy HTML autosave did not survive reload"
+        saved = sm.Store(path).get(rec["id"])
+        assert saved is not None and saved["command"] == raw["command"] and saved["interpreter"] == raw["interpreter"]
+        assert saved["url"] == raw["url"]
+        assert page.read_bytes() == source and wrong.read_bytes() == b"<main>WRONG_LEGACY_DEFAULT</main>"
+    finally:
+        window.close()
+        assert _wait_for(lambda: proc.state == "stopped", 8), "owned legacy fixture did not stop"
+
+
+def test_legacy_selected_python_opens_picked_html_with_private_storage(tmp: Path) -> None:
+    _assert_legacy_selected_python_html_storage(tmp, False)
+
+
+def test_legacy_selected_python_explicit_html_keeps_private_storage(tmp: Path) -> None:
+    _assert_legacy_selected_python_html_storage(tmp, True)
+
+
 if __name__ == "__main__":
     import tempfile
 

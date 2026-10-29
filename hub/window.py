@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import weakref
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -90,6 +91,13 @@ def _short_label(text: str, limit: int = 22) -> str:
     """Trim a tab label, leaving the tooltip to carry the full text."""
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _cancel_readiness(waiters: dict[str, ReadinessWaiter], pid: str) -> None:
+    waiter = waiters.pop(pid, None)
+    if waiter is not None:
+        waiter.stop()
+        waiter.deleteLater()
 
 
 class _PopupBridge(QObject):
@@ -1490,8 +1498,14 @@ class HubWindow(QMainWindow):
         before asking the OS. Best-effort — silence here is not an error.
         """
 
+        pid, generation = rec["id"], proc._generation
+
         def _scan():
-            if rec.get("url"):  # meanwhile it announced itself
+            current = self.store.get(pid)
+            if (current is None or current.get("url")
+                    or self.procs.get(pid) is not proc
+                    or proc._generation != generation or proc.state != "running"
+                    or (current.get("detected") or {}).get("type") == "desktop"):
                 return
             url = proc.detect_url_from_ports()
             if url:
@@ -1503,15 +1517,25 @@ class HubWindow(QMainWindow):
         pid = rec["id"]
         if pid not in self.procs:
             proc = ProjectProcess(rec)
-            proc.state_changed.connect(lambda s, p=pid: self._on_state(p, s))
+            # Edit/Remove replaces this owner. Late events from the old process
+            # must not change its successor; a weak origin avoids a new cycle.
+            owner = weakref.ref(proc)
+            proc.state_changed.connect(
+                lambda s, p=pid, origin=owner: self._on_state(p, s)
+                if origin() is not None and self.procs.get(p) is origin() else None
+            )
             proc.output.connect(lambda text, p=pid: self._append_log(text, p))
             # Carry the originating project id through the signal. Without it
             # the handler used self.active_id, so a background project's URL
             # was saved against whichever project the user happened to be
             # viewing when the server announced itself.
-            proc.url_detected.connect(lambda u, p=pid: self._on_url_detected(u, p))
+            proc.url_detected.connect(
+                lambda u, p=pid, origin=owner: self._on_url_detected(u, p)
+                if origin() is not None and self.procs.get(p) is origin() else None
+            )
             proc.port_conflict_from_output.connect(
-                lambda port, p=pid: self._on_port_conflict_from_output(p, port)
+                lambda port, p=pid, origin=owner: self._on_port_conflict_from_output(p, port)
+                if origin() is not None and self.procs.get(p) is origin() else None
             )
             self.procs[pid] = proc
         return self.procs[pid]
@@ -1789,6 +1813,8 @@ class HubWindow(QMainWindow):
         rec = self.store.get(pid)
         if rec is None:
             return
+        if state in ("error", "stopped"):
+            _cancel_readiness(self.waiters, pid)
         if pid == self.active_id:
             self.status.showMessage(f"{rec['name']}: {_STATE_LABEL.get(state, state)}")
         if state == "error":
@@ -1804,10 +1830,6 @@ class HubWindow(QMainWindow):
             if pid in self._user_stopped_ids:
                 self._user_stopped_ids.discard(pid)
                 self._close_tabs_for_project(pid)
-                w = self.waiters.pop(pid, None)
-                if w:
-                    w.stop()
-                    w.deleteLater()
                 if pid == self.active_id or self.tabs.count() == 0:
                     self.active_id = None
                     # Removing the active project can synchronously clear its
@@ -1824,6 +1846,10 @@ class HubWindow(QMainWindow):
                 # It exited on its own: keep the tab (so the terminal is still
                 # there to read) but put the Start button back.
                 self._show_start_page(rec, state="stopped")
+        if state == "running" and not rec.get("url"):
+            proc = self.procs.get(pid)
+            if proc is not None and (rec.get("detected") or {}).get("type") != "desktop":
+                self._scan_ports_after(rec, proc)
         if state == "running" and rec.get("url"):
             self._wait_ready(rec)
         elif state in ("error", "starting", "running"):
@@ -1909,18 +1935,24 @@ class HubWindow(QMainWindow):
 
     def _wait_ready(self, rec: dict) -> None:
         pid = rec["id"]
-        if pid in self.waiters:
-            return
-        waiter = ReadinessWaiter(dashboard_url(rec), timeout_ms=45000)
+        target = dashboard_url(rec)
+        existing = self.waiters.get(pid)
+        if existing is not None:
+            if existing.url == target:
+                return
+            _cancel_readiness(self.waiters, pid)
+        waiter = ReadinessWaiter(target, timeout_ms=45000)
         self.waiters[pid] = waiter
 
         def _cleanup():
-            w = self.waiters.pop(pid, None)
-            if w:
-                w.deleteLater()
+            if self.waiters.get(pid) is not waiter:
+                return False
+            _cancel_readiness(self.waiters, pid)
+            return True
 
         def _ready():
-            _cleanup()
+            if not _cleanup():
+                return
             # A URL that answers is only THIS project's dashboard if this
             # project's process is actually alive. Otherwise something else
             # owns the port and we would be showing a stranger's page.
@@ -1948,7 +1980,8 @@ class HubWindow(QMainWindow):
             self._append_log(f"[hub] {rec['name']} answered at {rec['url']}\n", pid)
             self._show_dashboard(rec)
         def _fail(reason: str):
-            _cleanup()
+            if not _cleanup():
+                return
             self._append_log(f"[hub] {reason}\n", pid)
             if pid == self.active_id:
                 self.status.showMessage(f"{rec['name']}: {reason}")
@@ -2230,6 +2263,7 @@ class HubWindow(QMainWindow):
         assert rec is not None  # exec() accepted; result_record's rejected branch cannot apply.
         self.store.update(rec)
         self._retitle_tab(pid, self._item_label(before), rec)
+        _cancel_readiness(self.waiters, pid)
         old = self.procs.pop(pid, None)
         if old:
             old.stop()
@@ -2263,10 +2297,7 @@ class HubWindow(QMainWindow):
         # live dashboard tab behind that nothing can restart or close — the tab
         # outlives the thing it belongs to.
         self._close_tabs_for_project(pid)
-        waiter = self.waiters.pop(pid, None)
-        if waiter:
-            waiter.stop()
-            waiter.deleteLater()
+        _cancel_readiness(self.waiters, pid)
         self._user_stopped_ids.discard(pid)
         self.store.remove(pid)
         self.log_view.drop_page(pid)

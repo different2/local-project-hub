@@ -6,6 +6,11 @@
 - Remember the HTML file selected through File… across saving, editing and reopening, including folders containing multiple pages.
 - Provide private, persistent window.storage get/set compatibility inside Hub for local Python static sites. Keep each project's browser data separate and restore saved state after restarting Hub without changing project source files.
 - Use the same resolved page for embedded navigation, readiness checks and Open in browser, without overwriting the saved URL or unnecessarily reloading an unchanged page.
+- Resolve Python and other bare tools against a project's configured PATH. Preserve selected interpreters, legacy full Python commands and relative virtual environments; support Windows Python aliases and saved/generated command quoting.
+- Report actual executable startup failures instead of leaving projects stuck at Starting.
+- Add browser-suppression arguments only when the current script or actual framework server CLI supports them, including older registrations. Do not take options from unrelated parser objects or lexical scopes.
+- Discover silent servers through Start, page Start and autostart. Preserve URLs and UTF-8 across stdout pipe boundaries instead of saving partial addresses.
+- Retire superseded readiness checks during Edit, Stop and Restart so late callbacks cannot navigate an old endpoint or override a replacement process.
 
 ## 0.7.3
 

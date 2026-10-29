@@ -27,6 +27,22 @@ def test_split_command_quoted():
     assert argv == ["python3", "-c", "print(1)"], argv
 
 
+def test_prepend_interpreter_preserves_tokens_and_shared_legacy_semantics():
+    cases = [
+        (["python3", "-u", "-m", "http.server"], "/selected/.venv/bin/python",
+         ["/selected/.venv/bin/python", "-u", "-m", "http.server"]),
+        (["PYTHON3.EXE", "app.py", "two words"], r"C:\selected env\Scripts\python.exe",
+         [r"C:\selected env\Scripts\python.exe", "app.py", "two words"]),
+        (["app.py", "--label=exact"], "/selected/python", ["/selected/python", "app.py", "--label=exact"]),
+        (["./start.sh", "two words"], "/bin/bash", ["/bin/bash", "./start.sh", "two words"]),
+        (["node", "app.js"], "", ["node", "app.js"]),
+    ]
+    for argv, interpreter, expected in cases:
+        original = list(argv)
+        assert pf.prepend_interpreter(argv, interpreter) == expected
+        assert argv == original, "composition mutated parsed/saved tokens"
+
+
 def test_split_command_empty():
     assert pf.split_command("") == []
     assert pf.split_command("   ") == []
@@ -200,6 +216,71 @@ def test_resolve_interpreter_error_is_language_neutral():
     if path is None:
         assert "Python" not in err, f"wrong language in message: {err}"
         assert "could not find" in err, err
+
+
+def test_windows_generic_python_fallback_preserves_explicit_choices():
+    from unittest.mock import patch
+
+    child_path = r"C:\project\tools"
+    found = r"C:\project\tools\python.exe"
+    calls = []
+
+    def which(name, *, path=None):
+        calls.append((name, path))
+        return found if name == "python" else None
+
+    with patch.object(pf, "IS_WINDOWS", True), patch.object(pf.shutil, "which", which):
+        for name in ("python3", "python3.exe", "python", "python.exe"):
+            path, error = pf.resolve_interpreter(name, path=child_path)
+            assert (path, error) == (found, None), (name, path, error, calls)
+        assert calls and all(path == child_path for name, path in calls), calls
+        calls.clear()
+        chosen = r"C:\chosen\venv\Scripts\python.exe"
+        assert pf.resolve_interpreter(chosen, path=child_path) == (chosen, None)
+        assert calls == [], "an explicitly selected executable must never be substituted"
+        path, error = pf.resolve_interpreter("missing-node", path=child_path)
+        assert path is None and error and "Python" not in error, (path, error)
+
+
+def test_windows_commands_round_trip_suggestions_and_native_arguments():
+    import random
+    import subprocess
+    import tempfile
+    from hub import detect_command as dc
+
+    failures = []
+    with tempfile.TemporaryDirectory() as folder:
+        for name in ("my server.py", "owner's app.py", "O'Brien.py", "café's tool.py"):
+            script = Path(folder) / name
+            script.write_text("pass\n", encoding="utf-8")
+            suggestion = dc.suggest_for_file(str(script))[0]
+            actual = pf._windows_argv(suggestion.command)
+            if actual != ["python3", name]:
+                failures.append(("Hub-generated command", suggestion.command, actual, ["python3", name]))
+
+    cases = [[], [""], ["plain's.py"], [r"C:\new\theme.json"],
+             [r"C:\Program Files\site\\"], ['print("hi")'], ["a b", 'c"d', "e\\\"f"],
+             ["two\twords", "café", "a#b%20"]]
+    rng = random.Random(741)
+    for _ in range(80):
+        values = []
+        for _ in range(rng.randrange(1, 5)):
+            value = "".join(rng.choice("ab ç'\"\\\t") for _ in range(rng.randrange(0, 20)))
+            # A leading unquoted apostrophe is reserved for legacy POSIX-style
+            # Hub commands. Literal such values can use surrounding double quotes.
+            values.append("arg" + value if value.startswith("'") else value)
+        cases.append(values)
+    for args in cases:
+        expected = ["program.exe", *args]
+        line = subprocess.list2cmdline(expected)
+        try:
+            actual = pf._windows_argv(line)
+        except ValueError as error:
+            failures.append((line, str(error), expected))
+            continue
+        if actual != expected:
+            failures.append((line, actual, expected))
+    assert not failures, failures
 
 
 if __name__ == "__main__":

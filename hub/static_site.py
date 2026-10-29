@@ -9,8 +9,9 @@ from __future__ import annotations
 import ntpath
 from pathlib import Path
 import re
-import shlex
 from urllib.parse import quote, urlsplit, urlunsplit
+
+from .platform import prepend_interpreter, split_command
 
 
 def _served_directory(record: dict, expected_host: str, expected_port: int) -> Path | None:
@@ -18,10 +19,9 @@ def _served_directory(record: dict, expected_host: str, expected_port: int) -> P
     if not cwd:
         return None
     try:
-        tokens = shlex.split(str(record.get("command") or ""))
-        tokens += shlex.split(str(record.get("args") or ""))
-        if record.get("interpreter"):
-            tokens.insert(0, str(record["interpreter"]))
+        tokens = split_command(str(record.get("command") or ""))
+        tokens += split_command(str(record.get("args") or ""))
+        tokens = prepend_interpreter(tokens, str(record.get("interpreter") or ""))
         if not tokens or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", ntpath.basename(tokens[0]), re.I):
             return None
         module = tokens.index("-m")

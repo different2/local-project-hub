@@ -1,6 +1,79 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT — v0.7.4 release authorized; verification in progress (2026-10-28)
+## CURRENT — v0.7.4 publication HELD; expanded host compatibility candidate (2026-10-28)
+
+**This checkpoint overrides the historical release instructions below.** After
+finding more opening failures, the owner selected: **"Hold publication, fix these
+issues, and run a broader compatibility pass"**. Do not create a tag/draft, publish,
+install or restart the user's app on the strength of the earlier authorization.
+Installed/public latest remains0.7.3. Preserve all original projects/venvs,
+live registry, unrelated services, human credit and immutable published assets.
+No real bots as fixtures; no paid/hosted-Mac CI; renderer sandbox and all pins stay.
+
+### Implemented in the expanded source checkpoint
+- Project-effective PATH for Python and other bare tools, including lexical
+  project-relative PATH entries and Windows Path/PATH casing. Explicit choices
+  remain authoritative; relative venv executables retain their venv identity.
+- Old full Python commands no longer stack behind the selected Python. Windows
+  generic Python aliases can use available Python/py; Python3→py requests -3.
+- Shared Windows native/legacy quote parsing works with saved Hub suggestions;
+  quoted source entry inspection uses the same parser without executing projects.
+- Actual QProcess FailedToStart reports the program/OS cause and recovers.
+- Automatic browser flags require a current boolean source option or actual
+  supported framework server CLI, not incidental dependencies/stale metadata.
+  Older registrations recompute this launch decision without rewriting configs.
+- Incremental UTF-8/output framing prevents committing partial stdout URLs.
+  Ordinary Start/page Start/autostart reaches owned silent-server discovery.
+- Readiness observers and process signals are owned by their current target/run;
+  Edit/restart/Stop retire old observers and ignore late superseded callbacks.
+- The test cleanup helper pumps Qt so the owned process is actually reaped.
+
+### Current evidence and remaining gate
+- Historical frozen d391c85832e4e273f9a7c3a82f367e356c7b7cc3 was accepted on
+  Mac/Ubuntu/Windows2022/Windows2025:391identities/129actual child exits0 each;
+  its copied DMG original-HTML save/cold-restart passed. **Those artifacts do
+  not accept this expanded runtime.** They are retained, never overwritten.
+- Current affected suites pass on Python3.11 and3.9:128exact identities per
+  interpreter (20platform,44command,26type,38real/core process cases).
+  The preceding-stage split-banner persistence/visible-dashboard checks passed
+  on both, with old per-read drain mutant correctly failing for a lost address.
+- Independent complete-packet review found two medium gaps; the owner selected
+  **Reproduce and fix both findings**. Actual v1 standalone CLI controls ran0
+  while Hub injected an inactive parser's option and exited2. Conservative
+  parser/receiver binding now declines ambiguous subcommands/multiple parsers;
+  single-parser, argument-group and explicit-argument controls stay supported.
+- Shared pure interpreter composition now serves both launch and static HTML
+  recognition. Real legacy selected-interpreter/full-http.server tests initially
+  served unchanged HTML but failed native picked-page/storage checks with child1.
+  Root picked-page and explicit v1 route cases now pass native3.11/3.9, all4actual
+  child exits0, private get/set/reload/visible view and saved fields unchanged.
+- Real owned generic-tool/relative-PATH and installed Node/Bash cases are covered;
+  no actual managed project/bot was executed. The first3.9 generic fixture copied
+  a non-relocatable framework launcher; its standalone control caught that. The
+  corrected POSIX fixture uses an owned argv-forwarding shim, not a product fix.
+- The preceding-stage eight additional Python3.9 native cases passed actual0:
+  toolbar/page/autostart discovery, Edit/restart readiness and original HTML
+  entry/persistence/isolation. Their receipts and four combined native cases
+  above remain scoped evidence, not the new full-candidate acceptance.
+- The single correction review found a remaining lexical-scope variant of the
+  parser issue, not another HTML/composition defect. Owner explicitly selected
+  **Reproduce and fix it with regression tests; no further review rounds**.
+  Actual standalone0/Hub2 was reproduced on3.11/3.9. Scope-bound declarations now
+  pass both: seven calibrated cross-scope negatives, ten standalone/Hub contract
+  cases (including called main/group positives), and old-guard mutant actual1.
+  The final correction is directly tested, NOT independently re-reviewed; keep
+  both prior concerns_found verdicts. Do not schedule another reviewer.
+- Full frozen native suite, fresh actual Windows/Linux source/packages and
+  rebuilt Mac package remain required. Any skip-CI development checkpoint is
+  not a release-tag target; publication authorization is still held.
+- Known limit: pinned macOS Qt can canonically normalize Unicode argv. This was
+  independently reproduced outside Hub; no byte-exact Unicode claim or workaround
+  in managed projects is made. Shell-free commands and best-effort silent-server
+  discovery remain documented limits (README/SPEC).
+- Working ledger/evidence: `~/.hermes/cache/scratch/lph-release-0.7.4/compatibility-pass/`.
+  Preserve failed attempts separately. Keep progress writes outside a frozen tree.
+
+## HISTORICAL — v0.7.4 release authorized; verification in progress (2026-10-28)
 
 The owner explicitly chose **Build, verify, and publish the next release with
 these fixes**, after confirming the installed app and latest public installer

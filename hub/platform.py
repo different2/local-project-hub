@@ -8,6 +8,8 @@ function, so supporting another platform later is a change to this file only.
 from __future__ import annotations
 
 import os
+import ntpath
+import re
 import shlex
 import shutil
 import sys
@@ -22,13 +24,8 @@ def split_command(command: str) -> list[str]:
 
     shlex defaults to POSIX rules, which mangle Windows paths — a backslash is
     an escape character there, so `C:\\Projects\\app\\server.py` loses its
-    separators. On Windows we use posix=False, which keeps backslashes intact
-    and treats only double quotes as quoting.
-
-    posix=False has one catch: it keeps the quote characters in the token, so
-    `python3 -c "print(1)"` yields '"print(1)"' rather than 'print(1)'. The
-    child then receives literal quotes as part of its argument. Strip a single
-    matching pair from each end, which is what posix=True would have produced.
+    separators. On Windows use native double-quote/backslash rules, plus the
+    legacy single-quote syntax used by Hub-generated suggestions and records.
     """
     command = (command or "").strip()
     if not command:
@@ -38,27 +35,91 @@ def split_command(command: str) -> list[str]:
     return shlex.split(command, posix=True)
 
 
-def _windows_argv(command: str) -> list[str]:
-    """Split a command line the way Windows needs it.
+def prepend_interpreter(argv: list[str], interpreter: str = "") -> list[str]:
+    """Compose saved launch fields consistently, without lookup or mutation.
 
-    posix=False keeps backslashes intact, so `C:\\Projects\\app\\server.py`
-    survives. Its one catch is that it keeps the quote characters in the token,
-    so `python3 -c "print(1)"` yields '"print(1)"' rather than 'print(1)' and
-    the child receives literal quotes as part of its argument. Strip a single
-    matching pair from each end, which is what posix=True would have produced.
-
-    Split out from split_command() so a non-Windows host can test the Windows
-    path: the branch itself is platform-independent and only the choice to use
-    it is not.
+    Legacy records can name Python in both fields. A selected Python replaces
+    only that redundant executable; script-only and other-language forms keep
+    the ordinary interpreter-prepending contract.
     """
-    return [_unquote(t) for t in shlex.split(command, posix=False)]
+    tokens = list(argv)
+    interpreter = (interpreter or "").strip()
+    if not interpreter:
+        return tokens
+    python_name = r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?"
+    if (tokens and re.fullmatch(python_name, ntpath.basename(interpreter), re.I)
+            and re.fullmatch(python_name, ntpath.basename(tokens[0]), re.I)):
+        tokens = tokens[1:]
+    return [interpreter, *tokens]
 
 
-def _unquote(token: str) -> str:
-    """Remove one matching pair of surrounding quotes, as POSIX shlex would."""
-    if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
-        return token[1:-1]
-    return token
+def _windows_argv(command: str) -> list[str]:
+    """Parse Windows double quotes and legacy Hub single-quoted fragments.
+
+    The latter include shlex.quote's concatenated spans for apostrophes. Treat
+    an unquoted interior apostrophe literally; no shell metacharacters execute.
+    """
+    argv: list[str] = []
+    token: list[str] = []
+    quote = ""
+    started = False
+    legacy_single = False
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if not quote and char in " \t":
+            if started:
+                argv.append("".join(token))
+                token = []
+            started = legacy_single = False
+            i += 1
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = ""
+            else:
+                token.append(char)
+            i += 1
+            continue
+        if char == "'" and not quote and (not started or legacy_single):
+            quote = "'"
+            started = legacy_single = True
+            i += 1
+            continue
+        if char == "\\":
+            started = True
+            end = i
+            while end < len(command) and command[end] == "\\":
+                end += 1
+            count = end - i
+            if end < len(command) and command[end] == '"':
+                token.append("\\" * (count // 2))
+                i = end
+                if count % 2:
+                    token.append('"')
+                    i += 1
+                # An even run leaves the following quote as a delimiter.
+            else:
+                token.append("\\" * count)
+                i = end
+            continue
+        if char == '"':
+            started = True
+            if quote == '"' and i + 1 < len(command) and command[i + 1] == '"':
+                token.append('"')
+                i += 2
+            else:
+                quote = "" if quote == '"' else '"'
+                i += 1
+            continue
+        token.append(char)
+        started = True
+        i += 1
+    if quote:
+        raise ValueError("No closing quotation")
+    if started:
+        argv.append("".join(token))
+    return argv
 
 
 def interpreter_candidates(explicit: str = "") -> list[str]:
@@ -77,8 +138,8 @@ def interpreter_candidates(explicit: str = "") -> list[str]:
     return ["python3", "python"]
 
 
-def resolve_interpreter(explicit: str = "") -> tuple[str | None, str | None]:
-    """Find a usable interpreter.
+def resolve_interpreter(explicit: str = "", *, path: str | None = None) -> tuple[str | None, str | None]:
+    """Find a usable interpreter, searching the child's PATH when supplied.
 
     Returns (path_or_name, error). When nothing is found the error explains
     what to install, which the UI surfaces instead of a bare "file not found"
@@ -89,25 +150,28 @@ def resolve_interpreter(explicit: str = "") -> tuple[str | None, str | None]:
     lecture the user about installing Python.
     """
     explicit = (explicit or "").strip()
-    if explicit:
-        # A path was given: accept it if it exists, else let the OS try it as
-        # a name so a venv-relative entry still works from the project folder.
-        if os.path.exists(explicit) or os.sep in explicit or (os.altsep and os.altsep in explicit):
-            return explicit, None
-        found = shutil.which(explicit)
+    path_rules = ntpath if IS_WINDOWS else os.path
+    if explicit and path_rules.dirname(explicit):
+        # Explicit paths are never substituted with a different installation.
+        # The launch layer anchors relative paths to the project's directory.
+        return explicit, None
+
+    candidates = [explicit] if explicit else interpreter_candidates()
+    if IS_WINDOWS and explicit.lower() in {"python", "python.exe", "python3", "python3.exe"}:
+        # Existing/auto-detected commands commonly say python3, even when the
+        # Windows installation exposes only python.exe or the py launcher.
+        candidates.extend(interpreter_candidates())
+    for candidate in dict.fromkeys(candidates):
+        found = shutil.which(candidate, path=path)
         if found:
             return found, None
+
+    if explicit:
         return None, (
             f"could not find “{explicit}”. Check the path, or put the tool on "
             "your PATH."
         )
 
-    # Nothing configured: only hunt for Python when the caller is asking about
-    # a Python command (see process_manager._looks_like_python).
-    for candidate in interpreter_candidates():
-        found = shutil.which(candidate)
-        if found:
-            return found, None
     if IS_WINDOWS:
         return None, (
             "no Python interpreter found on PATH. Install Python from "

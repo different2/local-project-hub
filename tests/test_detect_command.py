@@ -362,6 +362,34 @@ def test_static_html_named_page_is_read_only_and_url_encoded() -> None:
             assert rec == before and (Path(d) / name).read_text() == body
 
 
+def test_static_html_uses_the_windows_launch_parser_for_paths_and_arguments() -> None:
+    from unittest.mock import patch
+    from hub import platform as pf
+    from hub.static_site import dashboard_url, static_site_origin
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _mk_project(root / "simple", {"trade review.html": "<main>Windows entry</main>"})
+        _mk_project(root / "nested", {"public/pages/selected #1.html": "<main>Selected</main>"})
+        for executable in (r"C:\Python311\python.exe", r'"C:\Program Files\Python311\python.exe"'):
+            with patch.object(pf, "IS_WINDOWS", True):
+                rec = {"command": executable + " -m http.server 8000",
+                       "working_dir": str(root / "simple"), "url": "http://127.0.0.1:8000/"}
+                assert dashboard_url(rec) == rec["url"] + "trade%20review.html", (
+                    f"Windows launch path was not recognized as the same static server: {executable}"
+                )
+                assert static_site_origin(rec) == "http://127.0.0.1:8000"
+                rec.update(command=executable + " -m http.server", working_dir=str(root / "nested"),
+                           args=r'8000 --directory "public\pages"', entry_file="public/pages/selected #1.html")
+                # Host-native separators make the same fixture valid on Mac and
+                # Windows, while the argument must retain its Windows backslash.
+                if sys.platform != "win32":
+                    _mk_project(root / "nested", {r"public\pages/selected #1.html": "<main>Selected</main>"})
+                    rec["entry_file"] = r"public\pages/selected #1.html"
+                assert dashboard_url(rec) == rec["url"] + "selected%20%231.html", rec
+                assert static_site_origin(rec) == "http://127.0.0.1:8000"
+
+
 def test_static_html_explicit_routes_and_other_servers_stay_unchanged() -> None:
     from hub.static_site import dashboard_url
 
@@ -474,6 +502,26 @@ def test_static_html_path_resolution_failures_are_advisory() -> None:
             except RuntimeError as exc:
                 raise AssertionError("an advisory filesystem failure escaped into the GUI") from exc
         assert actual == rec["url"]
+
+
+def test_legacy_selected_python_static_command_keeps_entry_and_origin() -> None:
+    from hub.static_site import dashboard_url, static_site_origin
+
+    with tempfile.TemporaryDirectory() as folder:
+        page = Path(folder) / "chosen page.html"
+        page.write_text("<main>SELECTED_LEGACY_PAGE</main>", encoding="utf-8")
+        (Path(folder) / "index.html").write_text("<main>WRONG_PAGE</main>", encoding="utf-8")
+        rec = {"interpreter": sys.executable, "command": "python3 -u -m http.server 8000 --bind 127.0.0.1",
+               "working_dir": folder, "url": "http://127.0.0.1:8000/", "entry_file": page.name}
+        original = dict(rec)
+        assert dashboard_url(rec) == "http://127.0.0.1:8000/chosen%20page.html", (
+            "static entry resolution disagrees with launch-time legacy interpreter normalization", dashboard_url(rec)
+        )
+        assert static_site_origin(rec) == "http://127.0.0.1:8000", "legacy launch lost the private-storage origin"
+        explicit = dict(rec, url="http://127.0.0.1:8000/chosen%20page.html?view=1#notes")
+        assert dashboard_url(explicit) == explicit["url"]
+        assert static_site_origin(explicit) == "http://127.0.0.1:8000"
+        assert rec == original, "recognition rewrote saved launch fields"
 
 
 if __name__ == "__main__":

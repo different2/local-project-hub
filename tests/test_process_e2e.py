@@ -976,6 +976,538 @@ def test_readiness_with_no_listener_fails_once_at_the_deadline(tmp: Path) -> Non
         waiter.stop()
 
 
+def test_project_path_selects_its_python_and_explicit_interpreter_still_wins(tmp: Path) -> None:
+    """Run real isolated environments: the child's PATH must choose its Python."""
+    import os
+    import shlex
+    import subprocess
+    from unittest.mock import patch
+
+    environments = []
+    for name, marker in (("Hub environment", "HUB_ENV"), ("Project environment", "PROJECT_ENV")):
+        folder = tmp / name
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(folder)], check=True)
+        binary = folder / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        purelib = Path(subprocess.check_output(
+            [str(binary), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True
+        ).strip())
+        (purelib / "hub_compat_env_marker.py").write_text(f"VALUE = {marker!r}\n", encoding="utf-8")
+        environments.append(binary)
+    hub_python, project_python = environments
+    inherited_path = os.environ.get("PATH", "")
+    parent_path = str(hub_python.parent) + os.pathsep + inherited_path
+    project_path = str(project_python.parent) + os.pathsep + inherited_path
+    expression = "import hub_compat_env_marker; print(hub_compat_env_marker.VALUE)"
+    import hub.process_manager as pm
+    for path_key in ("PATH", "Path", "pAtH"):
+        for explicit, expected, marker in (("", project_python, "PROJECT_ENV"),
+                                           (str(hub_python), hub_python, "HUB_ENV")):
+            rec = {"id": "path-fixture", "name": "Own environments", "working_dir": str(tmp),
+                   "command": ("" if explicit else "python ") + "-c " + shlex.quote(expression),
+                   "interpreter": explicit, "url": "", "env": {path_key: project_path}}
+            proc = ProjectProcess(rec)
+            logs = []
+            proc.output.connect(logs.append)
+            try:
+                # Mixed-case names are Windows semantics, not a POSIX override.
+                # Run the actual OS process after exercising that lookup branch;
+                # native Windows CI repeats it with its real environment rules.
+                with patch.dict(os.environ, {"PATH": parent_path}), \
+                        patch.object(pm, "IS_WINDOWS", pm.IS_WINDOWS or path_key != "PATH"):
+                    proc.start()
+                    assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), logs
+                handle = proc.proc
+                assert handle is not None, logs
+                launched = handle.program()
+                if pm.POSIX_SETSID and launched == pm.POSIX_SETSID:
+                    launched = handle.arguments()[0]  # actual Linux launch wrapper
+                assert launched == str(expected), (
+                    f"project {path_key} chose {project_python}, explicit={explicit!r}, "
+                    f"but Hub launched {launched}; output={logs}"
+                )
+                assert handle.exitCode() == 0 and marker in "".join(logs), logs
+            finally:
+                proc.stop()
+                assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_legacy_full_python_command_uses_selected_interpreter_once(tmp: Path) -> None:
+    import json
+    import shlex
+
+    script = tmp / "legacy entry.py"
+    body = "print('HUB_LEGACY_ENTRY_OK', flush=True)\n"
+    script.write_text(body, encoding="utf-8")
+    original_command = "python3 " + shlex.quote(script.name)
+    registry = tmp / "legacy-registry.json"
+    registry.write_text(json.dumps({"version": 1, "projects": [{
+        "id": "legacy-full", "name": "Legacy full command", "command": original_command,
+        "interpreter": sys.executable, "working_dir": str(tmp), "env": {}
+    }]}), encoding="utf-8")
+    store = sm.Store(registry)
+    rec = store.get("legacy-full")
+    assert rec is not None
+    proc = ProjectProcess(rec)
+    logs = []
+    proc.output.connect(logs.append)
+    try:
+        proc.start()
+        assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), logs
+        handle = proc.proc
+        assert handle is not None
+        assert handle.exitCode() == 0 and "HUB_LEGACY_ENTRY_OK" in "".join(logs), (
+            f"configured interpreter stacked with a full legacy command; args={handle.arguments()}; output={logs}"
+        )
+        restored = store.get("legacy-full")
+        assert restored is not None
+        assert restored["command"] == original_command
+        assert restored["interpreter"] == sys.executable
+        assert script.read_text(encoding="utf-8") == body
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_missing_program_reports_start_error_and_recovers(tmp: Path) -> None:
+    import shlex
+    from unittest.mock import patch
+
+    missing = tmp / "missing program"
+    rec = {"id": "missing-tool", "name": "Missing executable", "working_dir": str(tmp),
+           "command": shlex.quote(str(missing)), "url": "", "env": {}}
+    proc = ProjectProcess(rec)
+    states = []
+    logs = []
+    proc.state_changed.connect(states.append)
+    proc.output.connect(logs.append)
+    try:
+        # Exercise Qt's actual FailedToStart signal even on Linux, where the
+        # optional setsid wrapper otherwise starts successfully then exits127.
+        with patch("hub.process_manager.POSIX_SETSID", None):
+            proc.start()
+            assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), logs
+        assert "error" in states and "could not start" in "".join(logs) and str(missing) in "".join(logs), (
+            f"actual FailedToStart was not surfaced; states={states}, output={logs}"
+        )
+        assert proc.state == "error"
+        old = proc.proc
+        proc.rec = dict(rec, command=shlex.quote(sys.executable) + ' -c "print(12345)"')
+        proc.start()
+        # A late error from the failed handle must not poison its replacement.
+        proc._on_error(QProcess.FailedToStart, old)
+        assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning)
+        assert proc.state == "stopped" and "12345" in "".join(logs), logs
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_relative_interpreter_is_anchored_without_escaping_its_venv(tmp: Path) -> None:
+    import shlex
+    import subprocess
+    from unittest.mock import patch
+
+    folder = tmp / "selected venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(folder)], check=True)
+    binary = folder / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    relative = str(binary.relative_to(tmp))
+    script = tmp / "env_entry.py"
+    body = "import sys; print('HUB_SELECTED_PREFIX=' + sys.prefix, flush=True)\n"
+    script.write_text(body, encoding="utf-8")
+    for field in ("interpreter", "command"):
+        rec = {"id": "relative-env", "name": "Relative environment", "working_dir": str(tmp),
+               "command": shlex.quote(script.name), "url": "", "env": {}}
+        if field == "interpreter":
+            rec["interpreter"] = relative
+        else:
+            rec["command"] = shlex.quote(relative) + " " + rec["command"]
+        proc = ProjectProcess(rec)
+        logs = []
+        proc.output.connect(logs.append)
+        try:
+            with patch("hub.process_manager.POSIX_SETSID", None):
+                proc.start()
+                assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), logs
+            handle = proc.proc
+            assert handle is not None
+            assert handle.program() == str(binary), (
+                f"{field} was not anchored to the project; got={handle.program()!r}; expected={str(binary)!r}; output={logs}"
+            )
+            assert handle.exitCode() == 0 and "HUB_SELECTED_PREFIX=" + str(folder) in "".join(logs), logs
+            assert script.read_text(encoding="utf-8") == body
+        finally:
+            proc.stop()
+            assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_automatic_browser_flags_match_the_current_cli_contract(tmp: Path) -> None:
+    import json
+    import shlex
+    import subprocess
+
+    cases = [
+        ("incidental-dependency", "ap.add_argument('--port', type=int, default=0)", "streamlit\n", False, False),
+        ("value-taking-prefix", "ap.add_argument('--no-open-mode', choices=['auto','off'], default='off')", "", False, False),
+        ("value-taking-exact", "ap.add_argument('--no-open', choices=['auto','off'], default='off')", "", False, False),
+        ("stale-cache", "ap.add_argument('--port', type=int, default=0)", "", False, True),
+        ("declared-boolean", "ap.add_argument('--no-open', action='store_true')", "", True, False),
+        ("declared-group", "options = ap.add_argument_group('Browser')\noptions.add_argument('--no-open', action='store_true')", "", True, False),
+        ("declared-exclusive-group", "options = ap.add_mutually_exclusive_group()\noptions.add_argument('--no-open', action='store_true')", "", True, False),
+        ("main-boolean", "ap.add_argument('--no-open', action='store_true')", "", True, False),
+        ("main-group", "options = ap.add_argument_group('Browser')\noptions.add_argument('--no-open', action='store_true')", "", True, False),
+        ("legacy-boolean", "ap.add_argument('--no-open', action='store_true')", "", True, False),
+    ]
+    failures = []
+    for label, declaration, dependencies, expects_flag, stale in cases:
+        folder = tmp / label
+        folder.mkdir()
+        script = folder / "app.py"
+        parser_body = ("ap = argparse.ArgumentParser()\n" + declaration + "\n"
+                       "args = ap.parse_args()\nprint('HUB_CLI_CONTRACT_OK', repr(vars(args)), flush=True)\n")
+        if label.startswith("main-"):
+            import textwrap
+            parser_body = "def main():\n" + textwrap.indent(parser_body, "    ") + "\nmain()\n"
+        body = "import argparse\nfrom http.server import HTTPServer\n" + parser_body
+        script.write_text(body, encoding="utf-8")
+        baseline = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=15)
+        assert baseline.returncode == 0 and "HUB_CLI_CONTRACT_OK" in baseline.stdout, (
+            label, "fixture is not a valid standalone CLI", baseline.stdout, baseline.stderr
+        )
+        if dependencies:
+            (folder / "requirements.txt").write_text(dependencies, encoding="utf-8")
+        raw = {"id": label, "name": label, "working_dir": str(folder),
+               "command": "python3 " + shlex.quote(script.name), "interpreter": sys.executable, "env": {}}
+        if label == "legacy-boolean":
+            registry = folder / "registry.json"
+            registry.write_text(json.dumps({"version": 1, "projects": [raw]}), encoding="utf-8")
+            rec = sm.Store(registry).get(label)
+            assert rec is not None
+        else:
+            rec = sm.validate(raw)
+            if stale:
+                rec["detected"] = {"type": "web", "browser": "known-suppressible", "evidence": [
+                    "entry script declares --no-open in its argparse"]}
+        proc = ProjectProcess(rec)
+        logs = []
+        proc.output.connect(logs.append)
+        try:
+            proc.start()
+            done = _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning)
+            handle = proc.proc
+            output = "".join(logs)
+            if not done or handle is None or handle.exitCode() != 0 or "HUB_CLI_CONTRACT_OK" not in output:
+                failures.append((label, "Hub-added arguments broke a valid CLI", output))
+            elif expects_flag and "'no_open': True" not in output:
+                failures.append((label, "declared boolean flag was lost", output))
+            assert script.read_text(encoding="utf-8") == body
+            assert rec["command"] == raw["command"]
+        finally:
+            proc.stop()
+            assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+    assert not failures, failures
+
+
+def test_legacy_commands_never_get_flags_from_inactive_parsers(tmp: Path) -> None:
+    import ast
+    import json
+    import shlex
+    import subprocess
+
+    cases = {
+        "subcommand": ("ap = argparse.ArgumentParser()\n"
+                       "commands = ap.add_subparsers(dest='action', required=True)\n"
+                       "commands.add_parser('run')\n"
+                       "export = commands.add_parser('export')\n"
+                       "export.add_argument('--no-open', action='store_true')\n"),
+        "other-parser": ("unused = argparse.ArgumentParser()\n"
+                         "unused.add_argument('--no-open', action='store_true')\n"
+                         "ap = argparse.ArgumentParser()\n"
+                         "ap.add_argument('action', choices=['run'])\n"),
+        "shadowed-helper": ("def configure_export(ap):\n"
+                            "    ap.add_argument('--no-open', action='store_true')\n"
+                            "ap = argparse.ArgumentParser()\n"
+                            "ap.add_argument('action', choices=['run'])\n"),
+        "other-receiver": ("class Unrelated:\n"
+                           "    def add_argument(self, *args, **kwargs): pass\n"
+                           "unused = Unrelated()\n"
+                           "unused.add_argument('--no-open', action='store_true')\n"
+                           "ap = argparse.ArgumentParser()\n"
+                           "ap.add_argument('action', choices=['run'])\n"),
+    }
+    failures = []
+    for label, declarations in cases.items():
+        folder = tmp / label
+        folder.mkdir()
+        script = folder / "own cli.py"
+        source = ("import argparse\nfrom http.server import HTTPServer\n" + declarations +
+                  "args = ap.parse_args()\nprint('HUB_ACTIVE_COMMAND', args.action, flush=True)\n")
+        ast.parse(source)
+        script.write_text(source, encoding="utf-8")
+        control = subprocess.run([sys.executable, str(script), "run"], capture_output=True, text=True, timeout=15)
+        assert control.returncode == 0 and "HUB_ACTIVE_COMMAND run" in control.stdout, (
+            "fixture is not a valid standalone command", label, control.stdout, control.stderr
+        )
+        if label == "subcommand":
+            export = subprocess.run([sys.executable, str(script), "export", "--no-open"],
+                                    capture_output=True, text=True, timeout=15)
+            assert export.returncode == 0 and "HUB_ACTIVE_COMMAND export" in export.stdout
+        raw = {"id": label, "name": label, "command": shlex.quote(script.name) + " run",
+               "interpreter": sys.executable, "working_dir": str(folder), "env": {}}
+        path = folder / "registry.json"
+        path.write_text(json.dumps({"version": 1, "projects": [raw]}), encoding="utf-8")
+        store = sm.Store(path)
+        rec = store.get(label)
+        assert rec is not None
+        proc = ProjectProcess(rec)
+        logs = []
+        proc.output.connect(logs.append)
+        try:
+            proc.start()
+            assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), logs
+            child = proc.proc
+            if child is None or child.exitCode() != 0 or "HUB_ACTIVE_COMMAND run" not in "".join(proc.history):
+                failures.append((label, "inactive parser flag broke a standalone-valid legacy command", list(logs)))
+            assert script.read_text(encoding="utf-8") == source
+            saved = store.get(label)
+            assert saved is not None and saved["command"] == raw["command"] and saved["interpreter"] == raw["interpreter"]
+        finally:
+            proc.stop()
+            assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+    assert not failures, failures
+
+
+def test_python3_fallback_to_py_requests_version_three(tmp: Path) -> None:
+    from unittest.mock import patch
+    import hub.process_manager as pm
+
+    launches = []
+    def capture(handle, program, args):
+        launches.append((program, list(args)))
+
+    launcher = r"C:\Python\py.exe"
+    with patch.object(pm, "IS_WINDOWS", True), \
+            patch.object(pm, "resolve_interpreter", return_value=(launcher, None)), \
+            patch.object(QProcess, "start", capture):
+        for command, interpreter, expected_program, expected_args in (
+                ("python3 app.py", "", launcher, ["-3", "app.py"]),
+                ("python app.py", "", launcher, ["app.py"]),
+                ("python3 app.py", sys.executable, sys.executable, ["app.py"])):
+            proc = ProjectProcess({"id": "py-fallback", "name": "Python alias", "command": command,
+                                   "interpreter": interpreter, "working_dir": str(tmp), "env": {}})
+            proc.start()
+            assert launches[-1] == (expected_program, expected_args), launches
+            proc.stop()
+
+
+def test_generated_apostrophe_command_reaches_real_child_argv(tmp: Path) -> None:
+    import json
+    import subprocess
+    from unittest.mock import patch
+    from hub import platform as pf, detect_command as dc
+
+    script = tmp / "owner's café app.py"
+    body = "import json, sys; print('HUB_EXACT_ARGV=' + json.dumps(sys.argv[1:], ensure_ascii=False), flush=True)\n"
+    script.write_text(body, encoding="utf-8")
+    suggestion = dc.suggest_for_file(str(script))[0]
+    # Exact quote/backslash argv plus a real Unicode filename. Arbitrary Unicode
+    # argument normalization is an upstream macOS QProcess property, separately
+    # calibrated with raw QProcess vs subprocess; do not hide it as a Hub pass.
+    arguments = [r"C:\new\theme.json", "a b", 'literal"quote', "slash\\\"quote"]
+    rec = {"id": "quoted-child", "name": "Quoted child", "command": suggestion.command,
+           "interpreter": sys.executable, "working_dir": str(tmp),
+           "args": subprocess.list2cmdline(arguments), "env": {}}
+    proc = ProjectProcess(rec)
+    logs = []
+    proc.output.connect(logs.append)
+    try:
+        with patch.object(pf, "IS_WINDOWS", True):
+            proc.start()
+            assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), logs
+        expected = "HUB_EXACT_ARGV=" + json.dumps(arguments, ensure_ascii=False)
+        assert proc.proc is not None and proc.proc.exitCode() == 0 and expected in "".join(logs), logs
+        assert rec["command"] == suggestion.command
+        assert script.read_text(encoding="utf-8") == body
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_stdout_url_and_utf8_survive_every_pipe_boundary(tmp: Path) -> None:
+    class Pipe:
+        data = b""
+        def readAllStandardOutput(self):
+            data, self.data = self.data, b""
+            return data
+        def processId(self):
+            return 0
+        def state(self):
+            return QProcess.NotRunning
+        def exitCode(self):
+            return 0
+
+    expected = "http://127.0.0.1:8123/dashboard?x=1%202"
+    failures = []
+    for ending in ("\n", "\r\n", " "):
+        text = "café server at " + expected + ending
+        payload = text.encode("utf-8")
+        for cut in range(1, len(payload)):
+            proc = ProjectProcess({"name": "Pipe framing", "command": "node server.js",
+                                   "working_dir": str(tmp), "detected": {"type": "web"}})
+            pipe = Pipe()
+            proc.proc = pipe
+            seen = []
+            proc.url_detected.connect(seen.append)
+            for chunk in (payload[:cut], payload[cut:]):
+                pipe.data = chunk
+                proc._drain(pipe)
+                if any(url != expected for url in seen):
+                    failures.append((ending, cut, "partial URL emitted", list(seen)))
+                    break
+            if seen != [expected] or "".join(proc.history) != text:
+                failures.append((ending, cut, "lost URL or damaged UTF8", seen, "".join(proc.history)))
+    assert not failures, failures
+
+    # A final unterminated token becomes complete only at actual stream end.
+    proc = ProjectProcess({"name": "Final pipe", "command": "node server.js", "detected": {"type": "web"}})
+    pipe = Pipe()
+    proc.proc = pipe
+    seen = []
+    proc.url_detected.connect(seen.append)
+    pipe.data = ("Serving on " + expected).encode()
+    proc._drain(pipe)
+    assert seen == [], ("unterminated token was committed early", seen)
+    proc._on_finished(0, None, pipe)
+    assert seen == [expected], ("final output was lost", seen)
+
+
+def test_cleanup_waiter_actually_reaps_the_owned_qprocess(tmp: Path) -> None:
+    import shlex
+    from helpers import stop_and_release
+
+    expression = "import time; print('HUB_CLEANUP_READY', flush=True); time.sleep(60)"
+    proc = ProjectProcess({"id": "cleanup-owned", "name": "Owned cleanup", "working_dir": str(tmp),
+                           "command": shlex.quote(sys.executable) + " -c " + shlex.quote(expression), "env": {}},
+                          term_grace_ms=100)
+    output = []
+    proc.output.connect(output.append)
+    try:
+        proc.start()
+        assert _wait_for(lambda: "HUB_CLEANUP_READY" in "".join(output)), output
+        stop_and_release(proc, timeout_s=3)
+        state = proc.proc.state() if proc.proc is not None else None
+        assert state == QProcess.NotRunning, (
+            "cleanup returned before Qt reaped the owned child; blocking sleep starved its finished signal", state, list(output)
+        )
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_non_python_program_uses_the_project_path(tmp: Path) -> None:
+    """A generic executable must use the same PATH as its actual environment."""
+    import os
+    import shlex
+    import shutil
+    import subprocess
+    from unittest.mock import patch
+
+    tools = []
+    for label in ("parent", "project"):
+        folder = tmp / label
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(folder)], check=True)
+        binary = folder / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        tool = binary.with_name("hub-compat-tool.exe" if sys.platform == "win32" else "hub-compat-tool")
+        if sys.platform == "win32":
+            shutil.copy2(binary, tool)
+        else:
+            # macOS framework Python is not a relocatable binary. Use an owned
+            # executable shim; forward argv unchanged to the intact test venv.
+            tool.write_text("#!" + sys.executable + "\nimport os, sys\nos.execv(" +
+                            repr(str(binary)) + ", [" + repr(str(binary)) + "] + sys.argv[1:])\n", encoding="utf-8")
+            tool.chmod(0o700)
+        expression = "import sys; print('HUB_GENERIC_PREFIX=' + sys.prefix, flush=True)"
+        control = subprocess.run([str(tool), "-c", expression], capture_output=True, text=True, timeout=15)
+        assert control.returncode == 0 and str(folder) in control.stdout, (
+            "fixture is not a working standalone generic executable", control.stdout, control.stderr
+        )
+        tools.append(tool)
+    parent_tool, project_tool = tools
+    inherited = os.environ.get("PATH", "")
+    rec = {"id": "generic-path", "name": "Generic tool", "working_dir": str(tmp),
+           "command": project_tool.name + " -c " + shlex.quote(expression),
+           "env": {"PATH": str(project_tool.parent) + os.pathsep + inherited}}
+    original = dict(rec)
+    proc = ProjectProcess(rec)
+    output = []
+    proc.output.connect(output.append)
+    try:
+        with patch.dict(os.environ, {"PATH": str(parent_tool.parent) + os.pathsep + inherited}):
+            proc.start()
+            assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), output
+        assert proc.proc is not None and proc.proc.exitCode() == 0
+        assert "HUB_GENERIC_PREFIX=" + str(project_tool.parent.parent) in "".join(output), (
+            "generic command did not use its project PATH", list(output)
+        )
+        assert rec == original, "launch rewrote the saved command or environment"
+        # Relative PATH entries are interpreted from the child's working folder,
+        # not the Hub's own directory; keep the saved spelling unchanged.
+        relative_env = {"PATH": os.path.relpath(project_tool.parent, tmp) + os.pathsep + inherited}
+        proc.rec = dict(rec, env=relative_env)
+        output.clear()
+        with patch.dict(os.environ, {"PATH": str(parent_tool.parent) + os.pathsep + inherited}):
+            proc.start()
+            assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), output
+        assert "HUB_GENERIC_PREFIX=" + str(project_tool.parent.parent) in "".join(output), (
+            "relative project PATH was resolved from the Hub instead of the project", list(output)
+        )
+        assert proc.rec["env"] == relative_env
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
+def test_existing_node_and_bash_commands_keep_their_cli_contract(tmp: Path) -> None:
+    """Use installed tools only; optional languages are not app dependencies."""
+    import json
+    import os
+    import shlex
+    import shutil
+
+    cases = []
+    node = shutil.which("node")
+    if node:
+        script = tmp / "own node fixture.js"
+        script.write_text("console.log(JSON.stringify({args:process.argv.slice(2), marker:process.env.HUB_FIXTURE_MARKER}));\n", encoding="utf-8")
+        cases.append((node, [str(script), "a b", "literal" + chr(34) + "quote"], "node"))
+    bash = shutil.which("bash") if sys.platform != "win32" else None
+    if bash:
+        script = tmp / "own bash fixture.sh"
+        script.write_text('printf "HUB_BASH=%s|%s\\n" "$HUB_FIXTURE_MARKER" "$1"\n', encoding="utf-8")
+        cases.append((bash, [str(script), "a b"], "bash"))
+    if not cases:
+        raise SkipTest("Node/Bash not installed; no extra language runtime installed by tests")
+    for tool, args, language in cases:
+        rec = {"id": "generic-" + language, "name": language, "working_dir": str(tmp),
+               "command": " ".join(shlex.quote(value) for value in [tool, *args]),
+               "env": {"HUB_FIXTURE_MARKER": "OWNED_COMPAT"}}
+        proc = ProjectProcess(rec)
+        output = []
+        proc.output.connect(output.append)
+        try:
+            proc.start()
+            assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), output
+            text = "".join(proc.history)  # child bytes, not Hub's exit-status decoration
+            assert proc.proc is not None and proc.proc.exitCode() == 0, (language, text)
+            if language == "node":
+                value = json.loads(text)
+                assert value == {"args": ["a b", 'literal"quote'], "marker": "OWNED_COMPAT"}, value
+            else:
+                assert text == "HUB_BASH=OWNED_COMPAT|a b" + os.linesep or text == "HUB_BASH=OWNED_COMPAT|a b\n", text
+        finally:
+            proc.stop()
+            assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
+
+
 if __name__ == "__main__":
     import tempfile
 

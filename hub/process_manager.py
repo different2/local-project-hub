@@ -16,7 +16,9 @@ canonical case) need room to finish; a 3s hard kill destroys them mid-warm-up.
 
 from __future__ import annotations
 
+import codecs
 import os
+import ntpath
 import re
 import shutil
 import signal
@@ -27,7 +29,7 @@ from collections import deque
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
-from .platform import resolve_interpreter, split_command
+from .platform import prepend_interpreter, resolve_interpreter, split_command
 from .readiness import url_host_port
 from . import urldetect
 
@@ -209,22 +211,12 @@ def _find_foreign_port_holder(
 
 
 def _detected_suppress_flag(rec: dict) -> str:
-    """The browser-suppress flag this project's own code declares, or "".
+    """Read the current CLI contract without executing or editing the project.
 
-    Prefers the stored detection (already computed, no re-read), and falls back
-    to running detection when a record has none — so a project added before the
-    `detected` block existed still benefits. Returns "" for anything that does
-    not declare a flag, which is what keeps spec §2's "never guess a flag"
-    honest.
+    Saved descriptive evidence neither proves an option's arity nor that it
+    still exists. Recompute only this runtime launch decision, including for
+    pre-detection/v1 records; do not rewrite their saved configuration.
     """
-    det_block = rec.get("detected")
-    if isinstance(det_block, dict) and det_block.get("evidence"):
-        try:
-            from .detect_type import Detection, browser_suppress_args
-
-            return browser_suppress_args(Detection.from_dict(det_block))
-        except Exception:
-            return ""
     try:
         from .detect_type import detect, browser_suppress_args
 
@@ -250,6 +242,9 @@ class ProjectProcess(QObject):
         self.rec = rec
         self.proc: QProcess | None = None
         self.history: deque[str] = deque(maxlen=LOG_HISTORY)
+        self._stdout_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._stdout_pending = ""
+        self._start_failed = False
         self._user_stopped = False
         self._started_at = 0.0
         self._pending_restart = False
@@ -306,6 +301,8 @@ class ProjectProcess(QObject):
             return "stopped"
         s = self.proc.state()
         if s == QProcess.NotRunning:
+            if self._start_failed:
+                return "error"
             # Do NOT consult exitStatus(): in PySide6 it reports CrashExit even
             # for a clean SIGTERM (verified: code=15, exitStatus=CrashExit),
             # which would flag every user-initiated stop as an error. Judge by
@@ -337,6 +334,7 @@ class ProjectProcess(QObject):
         self._generation += 1
         self._restart_waiting = None
         self._stop_kill_timer()
+        self._start_failed = False
         # Refuse to start when a foreign process already holds this project's
         # port. This used to live only in HubWindow._launch(), so any other path
         # into start() -- tests, and any future headless use -- launched straight
@@ -393,26 +391,50 @@ class ProjectProcess(QObject):
         # names. This is what makes a project's own venv usable without typing
         # its full path into every command (release spec §3: "discovering or
         # selecting Python interpreters").
-        interpreter = (self.rec.get("interpreter") or "").strip()
-        if interpreter:
-            argv = [interpreter] + argv
+        argv = prepend_interpreter(argv, self.rec.get("interpreter") or "")
         program, args = argv[0], argv[1:]
+        workdir = self.rec.get("working_dir") or None
+        if workdir and os.path.dirname(program) and not os.path.isabs(program):
+            # Windows resolves relative executables against the Hub, not the
+            # child's setWorkingDirectory(). Anchor lexically: realpath/resolve
+            # would follow a venv's Python symlink out of its environment.
+            program = os.path.abspath(os.path.join(workdir, program))
         env_mods = dict(self.rec.get("env") or {})
+        project_path = None
+        for key, value in env_mods.items():
+            if key == "PATH" or (IS_WINDOWS and key.upper() == "PATH"):
+                project_path = value
 
-        # A bare "python3" does not exist on Windows (the launcher is "python"
-        # or "py"), and the hub's own bundled interpreter must win when the
-        # command says "python3" but none is on PATH. Resolve it once here so
-        # the error the user sees names the fix instead of "file not found".
-        resolved, err = resolve_interpreter(program) if _looks_like_python(program) else (program, None)
+        if project_path is not None and workdir:
+            # PATH's relative/empty entries belong to the child's CWD. Resolve
+            # lookup only; preserve the user's actual saved environment values.
+            project_path = os.pathsep.join(
+                os.path.abspath(os.path.join(workdir, entry)) if not os.path.isabs(entry) else entry
+                for entry in project_path.split(os.pathsep)
+            )
+        # Resolve generic Python names using the project's effective PATH.
+        # Windows also permits differently spelled Path/pAtH overrides and
+        # installations exposing only python.exe or the py launcher.
+        # Qt otherwise searches the Hub's parent PATH for bare tools too.
+        # Keep language-neutral commands on the same explicit project PATH.
+        needs_lookup = _looks_like_python(program) or (
+            project_path is not None and not os.path.dirname(program)
+        )
+        resolved, err = (resolve_interpreter(program, path=project_path)
+                         if needs_lookup else (program, None))
         if err:
             self.state_changed.emit("error")
             self.output.emit(f"[hub] {err}\n")
             return
+        if (IS_WINDOWS and program.lower() in {"python3", "python3.exe"}
+                and ntpath.basename(resolved or "").lower() in {"py", "py.exe"}):
+            args = ["-3", *args]
         program = resolved or program
 
+        self._stdout_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._stdout_pending = ""
         proc = QProcess(self)
         proc.setProcessChannelMode(QProcess.MergedChannels)
-        workdir = self.rec.get("working_dir") or None
         if workdir:
             proc.setWorkingDirectory(workdir)
         env = QProcess.systemEnvironment()
@@ -433,6 +455,7 @@ class ProjectProcess(QObject):
         proc.readyReadStandardOutput.connect(lambda p=proc: self._drain(p))
         proc.finished.connect(lambda code, status, p=proc: self._on_finished(code, status, p))
         proc.started.connect(lambda p=proc: self._on_started(p))
+        proc.errorOccurred.connect(lambda error, p=proc: self._on_error(error, p))
         self._user_stopped = False
         self._started_at = time.time()
         self.proc = proc
@@ -718,20 +741,37 @@ class ProjectProcess(QObject):
         self._signal_owned_tree(tree, root_pid, _SIGKILL)
         self._tree_target = None
 
-    def _drain(self, proc: QProcess | None = None) -> None:
+    def _drain(self, proc: QProcess | None = None, *, final: bool = False) -> None:
         if not _qt_alive(self):
             return
         proc = proc if proc is not None else self.proc
         if proc is None or proc is not self.proc:
             return  # a late read from a superseded run
         try:
-            data = bytes(proc.readAllStandardOutput()).decode("utf-8", "replace")
+            raw = bytes(proc.readAllStandardOutput())
         except RuntimeError:
             return
+        if not raw and not final:
+            return
+        data = self._stdout_decoder.decode(raw, final=final)
         if data:
             self.history.append(data)
             self.output.emit(data)
-            self._maybe_detect_url(data)
+        # Pipe reads are arbitrary bytes, not complete log lines or URL tokens.
+        # Never commit :8 when the next read completes :8123/dashboard.
+        lines = re.split(r"[\r\n]", self._stdout_pending + data)
+        tail = lines.pop()
+        for line in lines:
+            self._maybe_detect_url(line)
+        if final:
+            self._maybe_detect_url(tail)
+            self._stdout_pending = ""
+        else:
+            boundary = max(tail.rfind(" "), tail.rfind("\t"))
+            if boundary >= 0:
+                self._maybe_detect_url(tail[:boundary + 1])
+            # Bound an unterminated noisy line; keep original streamed logs.
+            self._stdout_pending = tail[-65536:]
 
     # ---------- URL auto-detection ----------
 
@@ -872,6 +912,18 @@ class ProjectProcess(QObject):
             self.url_detected.emit(self.detected_url)
         return self.detected_url
 
+    def _on_error(self, error, proc: QProcess | None = None) -> None:
+        """A failed OS spawn has no finished signal; surface its actual cause."""
+        if not _qt_alive(self):
+            return
+        proc = proc if proc is not None else self.proc
+        if proc is None or proc is not self.proc or error != QProcess.FailedToStart:
+            return
+        self._start_failed = True
+        self._started_at = 0.0
+        self.output.emit(f"[hub] could not start {proc.program()}: {proc.errorString()}\n")
+        self.state_changed.emit("error")
+
     def _on_started(self, proc: QProcess | None = None) -> None:
         # QProcess reports Running but nothing forwards it; without this the
         # window never learns the process is up, so it never starts the
@@ -984,7 +1036,7 @@ class ProjectProcess(QObject):
         # a silent 'Address already in use' with no offer to free the port.
         # That race is lost on Windows and won on macOS, which is why this
         # looked like a Windows-only bug for days.
-        self._drain(proc)
+        self._drain(proc, final=True)
         # The `status` arg is unreliable in PySide6 (reports CrashExit for a
         # clean SIGTERM), so it is intentionally unused here; the state
         # property decides error vs stopped from _user_stopped + exit code.

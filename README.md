@@ -93,6 +93,25 @@ Worth knowing:
 - The Hub's own tab is a short getting-started page; reopen it via the app
   menu's **Show Overview** if you close it.
 
+### Project opening — 0.7.4 release candidate
+
+The candidate also corrects project-specific PATH/interpreter selection, Windows
+command quoting and Python aliases, old saved Python commands, actual startup
+error reporting, safe automatic browser flags, silent-server discovery and stale
+readiness checks after Edit/Restart. Split stdout deliveries no longer save a
+partial dashboard address. These changes are **not yet in published installers**.
+
+For custom Python scripts, automatic browser flags are skipped when multiple
+parsers, subcommands or cross-scope declarations make the option's applicability
+uncertain. Explicit extra arguments are always left alone.
+
+Commands are launched without an implicit shell: for shell operators, activation
+or variable expansion, explicitly invoke the shell yourself. A silent server's
+port discovery is best-effort; set **Dashboard URL** when its address cannot be
+discovered. On macOS, the bundled Qt runtime may normalize Unicode command-line
+arguments to a canonically equivalent form; exact Unicode code-point preservation
+is not guaranteed. Hub does not rewrite the saved values or the project's files.
+
 ### Standalone HTML — 0.7.4 release candidate
 
 **File…** remembers the HTML page you picked, including folders with several

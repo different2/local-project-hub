@@ -30,6 +30,22 @@ KNOWN LIMITS OF v0.1 (deferred, not hidden):
   - Env vars are a simple KEY=VALUE text field, not a vault.
   - Windows/Linux untested; macOS only.
 
+CURRENT COMPATIBILITY LIMITS (0.7.4 candidate, not yet published):
+  - Managed project sources, dependencies and virtual environments stay read-only.
+  - Commands do not run through an implicit shell. Explicitly invoke a shell for
+    operators, activation or variable expansion.
+  - Custom Python CLI browser flags are inferred only from an unambiguous
+    recognized parser in the declaration's own lexical scope. Multiple
+    parsers/subcommands or cross-scope declarations decline automatic injection;
+    explicitly configured extra arguments remain authoritative.
+  - Silent-server OS-port discovery is best-effort; an explicit dashboard URL
+    remains the supported fallback when a server announces no usable address.
+  - Pinned macOS Qt6.9.3 QProcess can normalize Unicode argv to a canonically
+    equivalent form. Exact Unicode code-point preservation is not guaranteed;
+    Hub does not normalize saved commands or alter project source to compensate.
+  - Initial-scope notes below are historical; current platform/release evidence
+    and outstanding acceptance gates live in HANDOFF.md.
+
 FULL SOURCE SPEC (verbatim from the RTF) FOLLOWS
 ================================================
 Project Description: Local Project Hub

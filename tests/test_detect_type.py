@@ -370,6 +370,40 @@ def test_custom_stdlib_server_flag_comes_from_its_own_argparse() -> None:
         assert dt.browser_suppress_args(det) == "--no-open", det
 
 
+def test_no_open_declarations_cannot_cross_parser_lexical_scopes() -> None:
+    import subprocess
+
+    flag = "ap.add_argument('--no-open', action='store_true')"
+    unrelated = "class Unrelated:\n    def add_argument(self, *args, **kwargs): pass\n"
+    cases = {
+        "parameter": "def configure_export(ap):\n    " + flag + "\n",
+        "global-helper": "def configure_export():\n    " + flag + "\n",
+        "async-parameter": "async def configure_export(ap):\n    " + flag + "\n",
+        "lambda": "configure_export = lambda ap: " + flag + "\n",
+        "comprehension": "unused = [" + flag + " for ap in []]\n",
+        "class": unrelated + "class Unused:\n    ap = Unrelated()\n    " + flag + "\n",
+        "group-assignment": (unrelated + "def configure_export(ap):\n"
+                             "    options = ap.add_argument_group('Unused')\n"
+                             "options = Unrelated()\n"
+                             "options.add_argument('--no-open', action='store_true')\n"),
+    }
+    for label, declaration in cases.items():
+        source = ("import argparse\nfrom http.server import HTTPServer\n" + declaration +
+                  "ap = argparse.ArgumentParser()\nap.add_argument('action', choices=['run'])\n"
+                  "ap.parse_args()\nprint('SCOPED_CLI_OK')\n")
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "app.py"
+            script.write_text(source, encoding="utf-8")
+            standalone = subprocess.run([sys.executable, str(script), "run"],
+                                        capture_output=True, text=True, timeout=15)
+            assert standalone.returncode == 0 and "SCOPED_CLI_OK" in standalone.stdout, (
+                label, "invalid standalone control", standalone.stdout, standalone.stderr
+            )
+            det = dt.detect({"command": "python3 app.py run", "working_dir": folder})
+            assert det.type == WEB and dt.browser_suppress_args(det) == "", (label, det)
+            assert script.read_text(encoding="utf-8") == source
+
+
 def test_stdlib_server_without_a_no_open_flag_gets_none() -> None:
     """A server that never declares the flag must not be handed one."""
     with tempfile.TemporaryDirectory() as d:
@@ -418,6 +452,51 @@ def test_detection_never_executes_the_entry_script() -> None:
         # Would raise if the module were imported or executed.
         det = dt.detect({"command": "python3 boom.py", "working_dir": d})
         assert det.type == WEB, det
+
+
+def test_quoted_entry_discovery_preserves_source_and_cli_contracts() -> None:
+    import shlex
+    from unittest.mock import patch
+    from hub import platform as pf
+
+    source = ("import argparse\nfrom http.server import HTTPServer\n"
+              "raise AssertionError('inspection must never execute this file')\n"
+              "PORT = 8123\nap = argparse.ArgumentParser()\n"
+              "ap.add_argument('--no-open', action='store_true')\n")
+    with tempfile.TemporaryDirectory() as folder:
+        for name in ("my app.py", "owner's app.py", "café tool.py"):
+            script = Path(folder) / name
+            script.write_text(source, encoding="utf-8")
+            command = "python3 " + shlex.quote(name)
+            for windows in (False, True):
+                with patch.object(pf, "IS_WINDOWS", windows):
+                    det = dt.detect({"command": command, "working_dir": folder})
+                assert det.entry_script == str(script), (windows, command, det.entry_script)
+                assert det.type == WEB and dt.browser_suppress_args(det) == "--no-open", (windows, det)
+                assert dt._script_default_port(det.entry_script) == 8123
+                assert script.read_text(encoding="utf-8") == source
+
+
+def test_framework_browser_flags_require_the_actual_server_cli() -> None:
+    cases = [
+        ("streamlit run app.py", "--server.headless true"),
+        ("python3 -m streamlit run app.py", "--server.headless true"),
+        ("streamlit cache clear", ""),
+        ("panel serve app.py", ""),  # browser opening is opt-in (--show)
+        ("shiny run app.py", ""),  # --launch-browser is a boolean, not a value option
+        ("marimo edit app.py", "--headless"),
+        ("marimo run app.py", "--headless"),
+        ("marimo export html app.py", ""),
+        ("jupyter lab", "--no-browser"),
+        ("jupyter --version", ""),
+    ]
+    failures = []
+    with tempfile.TemporaryDirectory() as folder:
+        for command, expected in cases:
+            actual = dt.browser_suppress_args(dt.detect({"command": command, "working_dir": folder}))
+            if actual != expected:
+                failures.append((command, actual, expected))
+    assert not failures, failures
 
 
 if __name__ == "__main__":

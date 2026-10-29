@@ -29,11 +29,15 @@ Types (spec §1):
 
 from __future__ import annotations
 
+import ast
 import json
+import ntpath
 import os
 import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+from .platform import split_command
 
 # The type strings, in the order they appear in the spec.
 WEB = "web"
@@ -72,8 +76,11 @@ class Detection:
     evidence: list[str] = field(default_factory=list)
     # Absolute or cwd-relative path to the .py the command runs. Lets
     # browser_suppress_args() read the script's own argparse instead of
-    # guessing a flag (spec §2). Not persisted; recomputed each detection.
+    # guessing a flag (spec §2). Revalidated from current source at launch.
     entry_script: str = field(default="", repr=False)
+    # Store only verified CLI identity, not another copy of potentially secret
+    # command-line values in the detection metadata.
+    framework_cli: str = ""
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -106,6 +113,8 @@ class Detection:
             browser=str(data.get("browser") or ""),
             display=str(data.get("display") or DISPLAY.get(t, DISPLAY[UNKNOWN])),
             evidence=list(data.get("evidence") or []),
+            entry_script=str(data.get("entry_script") or ""),
+            framework_cli=str(data.get("framework_cli") or ""),
         )
 
 
@@ -147,11 +156,29 @@ _DESKTOP_TOKENS = (
 # worse than leaving a redundant browser window (spec §2).
 BROWSER_FLAGS = {
     "streamlit": "--server.headless true",
-    "panel": "--no-browser",
     "jupyter": "--no-browser",
     "marimo": "--headless",
-    "shiny": "--launch-browser false",
 }
+
+
+def _framework_cli(command: str) -> str:
+    """A documented server CLI invocation, not merely an installed dependency."""
+    try:
+        tokens = split_command(command)
+    except ValueError:
+        return ""
+    if tokens and tokens[0] == "-m":
+        tokens = tokens[1:]
+    elif (len(tokens) > 2 and tokens[1] == "-m"
+          and re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|py)(?:\.exe)?",
+                           ntpath.basename(tokens[0]), re.I)):
+        tokens = tokens[2:]
+    if len(tokens) < 2:
+        return ""
+    tool = ntpath.basename(tokens[0]).lower().removesuffix(".exe")
+    subcommands = {"streamlit": {"run"}, "jupyter": {"lab", "notebook", "server"},
+                   "marimo": {"edit", "run", "new", "tutorial"}}
+    return tool if tokens[1] in subcommands.get(tool, set()) else ""
 
 # Python packages that imply a web app, from the most to least specific.
 _WEB_DEPS = (
@@ -246,6 +273,15 @@ def detect(record: dict) -> Detection:
     det = Detection()
     det.port = _port_from_command(f"{command} {args}")
 
+    cli = _framework_cli(command)
+    if cli:
+        det.type, det.confidence, det.framework = WEB, 0.9, cli
+        det.framework_cli = cli
+        det.browser, det.display = "known-suppressible", DISPLAY[WEB]
+        det.entry_script = _entry_script_path(command, cwd)
+        det.evidence.append(f"command invokes the {cli} server CLI")
+        return det
+
     # 1. Explicit desktop markers are the strongest signal.
     if any(t in haystack for t in _DESKTOP_TOKENS):
         det.type = DESKTOP
@@ -284,7 +320,9 @@ def detect(record: dict) -> Detection:
             det.confidence = 0.8
             det.framework = framework
             det.entry_script = _entry_script_path(command, cwd)
-            det.browser = "known-suppressible" if framework in BROWSER_FLAGS else "unknown"
+            # A dependency identifies a framework, not the entry script's CLI.
+            # Actual framework CLI invocations were handled above.
+            det.browser = "unknown"
             # A custom server can still advertise the flag in its own argparse;
             # that is evidence, so it counts as suppressible too.
             if det.browser == "unknown" and _argparse_no_open_flag(det):
@@ -380,37 +418,16 @@ def browser_suppress_args(det: Detection) -> str:
     spec §2 forbids: an unknown flag is worse than an extra browser window,
     because it can break the command outright.
 
-    Two sources of truth, in order:
-      1. BROWSER_FLAGS — the framework's own documented switch.
-      2. The entry script's own ``argparse`` — if the script literally declares
-         a no-open style flag, using it is quoting the program, not guessing.
-      3. The evidence text, for a record saved before ``entry_script`` was
-         persisted: detection already wrote the flag it found into the evidence
-         line ("entry script declares --no-open in its argparse"), so a stored
-         block that names the flag is trusted. Without this, upgrading the app
-         would silently lose a flag it had already discovered.
+    A framework flag needs its actual server CLI invocation. A custom script
+    needs a currently declared, zero-argument boolean option with an exact
+    no-browser name. Old descriptive evidence proves neither arity nor that
+    the option still exists; runtime callers recompute from the current source.
     """
     if not det or det.browser != "known-suppressible":
         return ""
-    if det.framework in BROWSER_FLAGS:
+    if det.framework in BROWSER_FLAGS and det.framework_cli == det.framework:
         return BROWSER_FLAGS[det.framework]
-    flag = _argparse_no_open_flag(det)
-    if flag:
-        return flag
-    return _flag_from_evidence(det.evidence)
-
-
-def _flag_from_evidence(evidence: list[str] | None) -> str:
-    """A no-open flag named in a stored evidence line, or "".
-
-    Only matches the exact sentence detection itself writes, so this cannot be
-    talked into inventing a flag by unrelated evidence text.
-    """
-    for line in evidence or []:
-        m = re.search(r"declares (--[A-Za-z0-9-]+) in its argparse", line)
-        if m and any(n in m.group(1).lower() for n in _NO_OPEN_NAMES):
-            return m.group(1)
-    return ""
+    return _argparse_no_open_flag(det)
 
 
 # Flags that mean "do not open a browser", as a script would spell them.
@@ -424,7 +441,10 @@ def _entry_script_path(command: str, cwd: str) -> str:
     Only the command line is parsed — the script is never imported or run
     (spec §7: no arbitrary execution for inspection).
     """
-    tokens = [t for t in command.split() if t]
+    try:
+        tokens = split_command(command)
+    except ValueError:
+        return ""
     for tok in tokens:
         if tok.endswith(".py"):
             return tok if os.path.isabs(tok) else os.path.join(cwd or ".", tok)
@@ -501,9 +521,70 @@ def _argparse_no_open_flag(det: Detection) -> str:
         return ""
     if "argparse" not in source and "ArgumentParser" not in source:
         return ""
-    for m in re.finditer(r"""add_argument\(\s*['"](--[^'"]+)['"]""", source):
-        if any(name in m.group(1).lower() for name in _NO_OPEN_NAMES):
-            return m.group(1)
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return ""
+    # A declaration on an inactive subparser/second parser is not a contract
+    # for this invocation. Decline ambiguous parser graphs rather than add an
+    # option that can prevent an otherwise valid command from starting.
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    modules = {alias.asname or alias.name for node in ast.walk(tree)
+               if isinstance(node, ast.Import) for alias in node.names if alias.name == "argparse"}
+    constructors = {alias.asname or alias.name for node in ast.walk(tree)
+                    if isinstance(node, ast.ImportFrom) and node.module == "argparse"
+                    for alias in node.names if alias.name == "ArgumentParser"}
+    factories = [node for node in calls if (
+        isinstance(node.func, ast.Name) and node.func.id in constructors
+    ) or (
+        isinstance(node.func, ast.Attribute) and node.func.attr == "ArgumentParser"
+        and isinstance(node.func.value, ast.Name) and node.func.value.id in modules
+    )]
+    if len(factories) != 1 or any(isinstance(node.func, ast.Attribute)
+                                 and node.func.attr == "add_subparsers" for node in calls):
+        return ""
+    # Receiver names are meaningful only inside their lexical scope. An uncalled
+    # helper can shadow the real parser (or group) with an identically named
+    # parameter; its declarations do not describe the active parser's options.
+    scope_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda,
+                   ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+    scopes: dict[ast.AST, ast.AST] = {}
+    pending: list[tuple[ast.AST, ast.AST]] = [(tree, tree)]
+    while pending:
+        node, scope = pending.pop()
+        scopes[node] = scope
+        child_scope = node if isinstance(node, scope_types) else scope
+        pending.extend((child, child_scope) for child in ast.iter_child_nodes(node))
+    parser_scope = scopes[factories[0]]
+    calls = [node for node in calls if scopes[node] is parser_scope]
+    assignments = [(node.targets if isinstance(node, ast.Assign) else [node.target], node.value)
+                   for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign))
+                   and scopes[node] is parser_scope]
+    receivers: set[str] = set()
+    while True:
+        before = len(receivers)
+        for targets, value in assignments:
+            is_group = (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                        and value.func.attr in {"add_argument_group", "add_mutually_exclusive_group"}
+                        and isinstance(value.func.value, ast.Name) and value.func.value.id in receivers)
+            if value is factories[0] or is_group:
+                receivers.update(target.id for target in targets if isinstance(target, ast.Name))
+        if len(receivers) == before:
+            break
+    for node in calls:
+        if not (isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in receivers):
+            continue
+        keywords = {kw.arg: kw.value for kw in node.keywords}
+        action = keywords.get("action")
+        if (not isinstance(action, ast.Constant) or action.value not in ("store_true", "store_false")
+                or "nargs" in keywords):
+            continue
+        for argument in node.args:
+            if (isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+                    and argument.value.startswith("--")
+                    and argument.value[2:].lower() in _NO_OPEN_NAMES):
+                return argument.value
     return ""
 
 

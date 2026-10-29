@@ -246,7 +246,9 @@ def stop_and_release(proc, script_path=None, timeout_s: float = 25.0) -> None:
     while time.time() < deadline:
         if getattr(proc, "state", None) == "stopped":
             break
-        time.sleep(0.2)
+        # QProcess can only reap/emit finished while Qt's event loop runs.
+        # Sleeping here exhausted the budget and left native handles 'running'.
+        _spin_qt(200)
     # Now the working DIRECTORY, which is what WinError 32 actually names. A
     # child process holds its CWD open for as long as it lives, so rmtree()
     # fails on the directory itself -- not on the script file inside it.

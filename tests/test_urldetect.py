@@ -1685,13 +1685,14 @@ def test_detected_suppress_flag_is_applied_to_the_launch(tmp: Path) -> None:
 def test_stored_detection_without_entry_script_still_yields_the_flag(tmp: Path) -> None:
     """A record saved before entry_script existed must not lose its flag.
 
-    Detection wrote the flag into the evidence text, so a stored block naming
-    it is trustworthy. Without this, upgrading the app silently drops a flag it
-    had already discovered.
+    Re-read its declared CLI rather than trusting a stale descriptive line.
+    Missing historical entry_script metadata must not lose a safe flag, and
+    removing that option in the current script must not break the next start.
     """
     rec = {
         "name": "Legacy",
         "command": "python3 obs_live.py",
+        "working_dir": str(tmp),
         "args": "",
         "url": "",
         "detected": {
@@ -1707,27 +1708,42 @@ def test_stored_detection_without_entry_script_still_yields_the_flag(tmp: Path) 
             ],
         },
     }
+    source = tmp / "obs_live.py"
+    source.write_text("import argparse\nfrom http.server import HTTPServer\n"
+                      "ap = argparse.ArgumentParser()\n"
+                      "ap.add_argument('--no-open', action='store_true')\n", encoding="utf-8")
     assert _detected_suppress_flag(rec) == "--no-open", rec["detected"]
+    source.write_text("print('option no longer exists')\n", encoding="utf-8")
+    assert _detected_suppress_flag(rec) == "", "stale evidence overrode the current CLI"
 
 
 def test_user_supplied_args_are_never_overridden(tmp: Path) -> None:
-    """A deliberate configuration is never second-guessed by detection."""
-    rec = {
-        "name": "Typed",
-        "command": "python3 obs_live.py",
-        "args": "--port 9999",
-        "url": "",
-        "detected": {
-            "type": "web",
-            "browser": "known-suppressible",
-            "evidence": ["entry script declares --no-open in its argparse"],
-        },
-    }
-    proc = ProjectProcess(dict(rec))
-    # the flag helper still reports it, but start() must not append it because
-    # the user already chose the arguments
+    """A deliberate argument field wins even when a safe flag is detectable."""
+    script = tmp / "obs_live.py"
+    source = ("import argparse\nfrom http.server import HTTPServer\n"
+              "ap = argparse.ArgumentParser()\n"
+              "ap.add_argument('--no-open', action='store_true')\n"
+              "ap.add_argument('--label')\nargs = ap.parse_args()\n"
+              "print('HUB_USER_ARGS', args.no_open, args.label, flush=True)\n")
+    script.write_text(source, encoding="utf-8")
+    rec = {"name": "Typed", "command": "python3 obs_live.py", "interpreter": sys.executable,
+           "working_dir": str(tmp), "args": "--label selected", "url": "",
+           "detected": {"type": "web", "browser": "known-suppressible", "evidence": [
+               "entry script declares --no-open in its argparse"]}}
     assert _detected_suppress_flag(rec) == "--no-open"
-    assert (rec.get("args") or "").strip() == "--port 9999"
+    proc = ProjectProcess(dict(rec))
+    output = []
+    proc.output.connect(output.append)
+    try:
+        proc.start()
+        assert _wait_for(lambda: proc.proc is not None and proc.proc.state() == QProcess.NotRunning), output
+        assert proc.proc is not None and proc.proc.exitCode() == 0, output
+        assert "HUB_USER_ARGS False selected" in "".join(output), output
+        assert rec["args"] == "--label selected"
+        assert script.read_text(encoding="utf-8") == source
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
 
 
 def test_netstat_parser_finds_only_listeners() -> None:
@@ -2086,6 +2102,358 @@ def test_unsupported_ipv6_does_not_make_a_free_port_look_busy(tmp: Path) -> None
         assert urldetect.port_in_use(port) is False
     finally:
         socket.socket = real_socket
+
+
+def _assert_silent_start_discovers_its_own_dashboard(tmp: Path, trigger: str) -> None:
+    import ast
+    import json
+    import shlex
+    import urllib.request
+
+    marker = tmp / "bound.json"
+    script = tmp / "silent_fixture.py"
+    title = "HUB_SILENT_READY_" + trigger.upper()
+    body = ("<title>" + title + "</title><h1>" + title + "</h1>").encode()
+    source = ("import json, os, sys\nfrom pathlib import Path\n"
+              "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+              + "BODY = " + repr(body) + "\n"
+              "class H(BaseHTTPRequestHandler):\n"
+              "    def do_GET(self):\n"
+              "        self.send_response(200); self.end_headers(); self.wfile.write(BODY)\n"
+              "    def log_message(self, *args): pass\n"
+              "server = HTTPServer(('127.0.0.1', 0), H)\n"
+              "target = Path(sys.argv[1]); staged = target.with_suffix('.tmp')\n"
+              "staged.write_text(json.dumps({'port': server.server_port, 'pid': os.getpid()}))\n"
+              "staged.replace(target)\nserver.serve_forever()\n")
+    ast.parse(source)
+    script.write_text(source, encoding="utf-8")
+    store = sm.Store(tmp / "registry.json")
+    rec = store.add({"id": "silent-" + trigger, "name": "Silent " + trigger,
+                     "command": shlex.quote(script.name) + " " + shlex.quote(str(marker)),
+                     "interpreter": sys.executable, "working_dir": str(tmp),
+                     "url": "", "autostart": trigger == "autostart"})
+    window = HubWindow(store)
+    window.show()
+    window._select_id(rec["id"], start=False)
+    proc = window._proc_for(rec)
+    view = window._view_for(rec["id"])
+    assert view is not None
+    try:
+        if trigger != "autostart":
+            assert proc.proc is None, "opening/selecting silently launched the fixture"
+        if trigger == "toolbar":
+            window.act_start.trigger()
+        elif trigger == "page":
+            assert _wait_for(lambda: view.title() == rec["name"]), view.title()
+            view.page().runJavaScript("document.querySelector('a.btn').click()")
+        assert _wait_for(marker.exists, timeout_s=10), list(proc.history)
+        bound = json.loads(marker.read_text(encoding="utf-8"))
+        assert bound["pid"] in _own_tree(proc), bound
+        expected = f"http://127.0.0.1:{bound['port']}/"
+        with urllib.request.urlopen(expected, timeout=3) as response:
+            assert title.encode() in response.read(), "independent owned backend did not answer"
+        assert proc.state == "running" and not proc.history, (proc.state, list(proc.history))
+        found = _wait_for(lambda: bool((store.get(rec["id"]) or {}).get("url")), timeout_s=12)
+        saved = sm.Store(store.path).get(rec["id"])
+        assert found and saved is not None and saved["url"] == expected, (
+            f"{trigger} started an answering silent server but never discovered/persisted it; "
+            f"owned={bound}, saved={saved}, displayed={view.url().toString()}"
+        )
+        assert _wait_for(lambda: view.title() == title, timeout_s=10), view.title()
+        assert window.tabs.currentWidget() is view and view.isVisible()
+        assert view.width() > 0 and view.height() > 0
+        assert script.read_text(encoding="utf-8") == source
+    finally:
+        stop_and_release(proc, script)
+        window.close()
+
+
+def test_toolbar_start_discovers_a_silent_dynamic_server(tmp: Path) -> None:
+    _assert_silent_start_discovers_its_own_dashboard(tmp, "toolbar")
+
+
+def test_page_start_discovers_a_silent_dynamic_server(tmp: Path) -> None:
+    _assert_silent_start_discovers_its_own_dashboard(tmp, "page")
+
+
+def test_autostart_discovers_a_silent_dynamic_server(tmp: Path) -> None:
+    _assert_silent_start_discovers_its_own_dashboard(tmp, "autostart")
+
+
+def test_delayed_port_discovery_ignores_superseded_owners(tmp: Path) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+    from unittest.mock import patch
+    import hub.window as wm
+
+    for change in ("generation", "replacement", "removed", "manual", "active"):
+        store = sm.Store(tmp / (change + ".json"))
+        rec = store.add({"id": change, "name": change, "command": "node fixture.js",
+                         "working_dir": str(tmp), "url": ""})
+        callbacks, calls = [], []
+        proc = SimpleNamespace(_generation=0, state="running",
+                               detect_url_from_ports=lambda: calls.append("queried"))
+        hub = SimpleNamespace(store=store, procs={rec["id"]: proc}, _append_log=lambda *args: None)
+        with patch.object(wm.QTimer, "singleShot", side_effect=lambda ms, callback: callbacks.append(callback)):
+            # Explicit controller/timer test doubles; no widgets or process run.
+            wm.HubWindow._scan_ports_after(cast(HubWindow, hub), rec, cast(ProjectProcess, proc))
+        assert len(callbacks) == 1
+        if change == "generation":
+            proc._generation += 1
+        elif change == "replacement":
+            hub.procs[rec["id"]] = SimpleNamespace(_generation=0, state="running")
+        elif change == "removed":
+            store.remove(rec["id"])
+        elif change == "manual":
+            store.update(dict(rec, url=f"http://127.0.0.1:{reserve_port()}/manual"))
+        callbacks[0]()
+        assert calls == (["queried"] if change == "active" else []), (change, calls)
+
+
+def test_replaced_process_signals_cannot_control_the_current_record(tmp: Path) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+    calls = []
+    hub = SimpleNamespace(procs={}, _on_state=lambda *args: calls.append(("state", args)),
+                          _on_url_detected=lambda *args: calls.append(("url", args)),
+                          _on_port_conflict_from_output=lambda *args: calls.append(("conflict", args)),
+                          _append_log=lambda *args: None)
+    rec = {"id": "replaced-owner", "name": "Owner", "command": "node fixture.js", "working_dir": str(tmp)}
+    old = HubWindow._proc_for(cast(HubWindow, hub), rec)
+    old.state_changed.emit("running")
+    assert calls == [("state", (rec["id"], "running"))], calls
+    calls.clear()
+    hub.procs.pop(rec["id"])
+    current = HubWindow._proc_for(cast(HubWindow, hub), dict(rec))
+    old.state_changed.emit("stopped")
+    old.url_detected.emit("http://127.0.0.1/old")
+    old.port_conflict_from_output.emit(0)
+    assert calls == [], ("a replaced process still controls its successor", calls)
+    current.state_changed.emit("running")
+    current.url_detected.emit("http://127.0.0.1/new")
+    current.port_conflict_from_output.emit(0)
+    assert [kind for kind, args in calls] == ["state", "url", "conflict"], calls
+
+
+def test_edit_cancels_old_readiness_and_ignores_its_late_callbacks(tmp: Path) -> None:
+    import ast
+    import shlex
+    from unittest.mock import patch
+    import hub.window as wm
+
+    old_port, new_port = reserve_port(), reserve_port()
+    while new_port == old_port:
+        new_port = reserve_port()
+    old_url = f"http://127.0.0.1:{old_port}/old"
+    new_url = f"http://127.0.0.1:{new_port}/new"
+    title = "HUB_EDIT_REPLACEMENT_READY"
+    body = ("<title>" + title + "</title><h1>" + title + "</h1>").encode()
+    script = tmp / "replacement.py"
+    source = _SILENT_SERVER.replace('b"OK"', repr(body))
+    ast.parse(source)
+    script.write_text(source, encoding="utf-8")
+    store = sm.Store(tmp / "registry.json")
+    record = store.add({"id": "edit-waiter", "name": "Before edit", "working_dir": str(tmp),
+                        "interpreter": sys.executable, "command": '-c "import time; time.sleep(120)"', "url": old_url})
+    window = HubWindow(store)
+    window._can_show_dialog = lambda: False
+    window.show()
+    window._select_id(record["id"], start=False)
+    old_proc = window._proc_for(record)
+    replacement = None
+    try:
+        window.act_start.trigger()
+        assert _wait_for(lambda: old_proc.state == "running")
+        old_waiter = window.waiters[record["id"]]
+        assert old_waiter.url == old_url and not old_waiter._settled
+        changed = dict(record, name="After edit", url=new_url,
+                       command=shlex.quote(script.name) + " " + str(new_port))
+        class AcceptedEdit:
+            def __init__(self, parent, record):
+                pass
+            def exec(self):
+                return QDialog.Accepted
+            def result_record(self):
+                return sm.validate(changed)
+        with patch.object(wm, "ProjectDialog", AcceptedEdit):
+            window.act_edit.trigger()
+        assert record["id"] not in window.waiters and old_waiter._settled, (
+            "Edit retained a readiness observer for the superseded URL", list(window.waiters), old_waiter.url
+        )
+        replacement = window._proc_for(changed)
+        assert replacement is not old_proc and replacement.proc is None, "Edit implicitly launched the replacement"
+        window.act_start.trigger()
+        current_waiter = window.waiters[record["id"]]
+        assert current_waiter is not old_waiter and current_waiter.url == new_url
+        view = window._view_for(record["id"])
+        assert view is not None
+        current_html = view.property("hub_page_html")
+        # No event-loop turn here: deleteLater is pending, so deliberately
+        # deliver both stale callbacks and an old-process state notification.
+        old_waiter.failed.emit("STALE_OLD_ENDPOINT")
+        old_waiter.ready.emit()
+        old_proc.state_changed.emit("stopped")
+        assert window.waiters.get(record["id"]) is current_waiter, "old cleanup removed the new waiter"
+        assert view.property("hub_page_html") == current_html, "a stale callback replaced the current page"
+        assert view.url().toString() != old_url
+        assert _wait_for(lambda: view.title() == title, timeout_s=15), (view.title(), list(replacement.history))
+        assert window.tabs.currentWidget() is view and view.isVisible() and view.width() > 0 and view.height() > 0
+        saved = sm.Store(store.path).get(record["id"])
+        assert saved is not None and saved["url"] == new_url and saved["command"] == changed["command"]
+        assert script.read_text(encoding="utf-8") == source
+    finally:
+        for proc in (old_proc, replacement):
+            if proc is not None:
+                stop_and_release(proc, script)
+        for waiter in list(window.waiters.values()):
+            waiter.stop()
+            waiter.deleteLater()
+        window.waiters.clear()
+        window.close()
+
+
+def test_readiness_target_change_retires_only_its_own_observer(tmp: Path) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+    ready, failures = [], []
+    pid = "target-owner"
+    hub = SimpleNamespace(waiters={}, procs={}, active_id=pid,
+                          _append_log=lambda *args: None, _view_for=lambda owner: object(),
+                          _show_dashboard=lambda rec: ready.append(rec["url"]),
+                          _show_start_page=lambda *args, **kwargs: failures.append(kwargs),
+                          status=SimpleNamespace(showMessage=lambda *args: None))
+    before = {"id": pid, "name": "Target", "url": f"http://127.0.0.1:{reserve_port()}/old"}
+    after = dict(before, url=f"http://127.0.0.1:{reserve_port()}/new")
+    try:
+        HubWindow._wait_ready(cast(HubWindow, hub), before)
+        old = hub.waiters[pid]
+        HubWindow._wait_ready(cast(HubWindow, hub), after)
+        current = hub.waiters[pid]
+        assert current is not old and old._settled and current.url == after["url"], (
+            "new target inherited the old readiness deadline", old.url, current.url
+        )
+        old.ready.emit()
+        old.failed.emit("STALE_OLD_TARGET")
+        assert hub.waiters.get(pid) is current and not ready and not failures
+        current.ready.emit()
+        assert ready == [after["url"]] and not failures and pid not in hub.waiters
+    finally:
+        for waiter in list(hub.waiters.values()):
+            waiter.stop()
+            waiter.deleteLater()
+        hub.waiters.clear()
+
+
+def test_restart_replaces_readiness_from_the_previous_run(tmp: Path) -> None:
+    port = reserve_port()
+    store = sm.Store(tmp / "registry.json")
+    rec = store.add({"id": "restart-pending", "name": "Pending restart", "working_dir": str(tmp),
+                     "interpreter": sys.executable, "command": '-c "import time; time.sleep(120)"',
+                     "url": f"http://127.0.0.1:{port}/"})
+    window = HubWindow(store)
+    window._can_show_dialog = lambda: False
+    window.show()
+    window._select_id(rec["id"], start=False)
+    proc = window._proc_for(rec)
+    try:
+        window.act_start.trigger()
+        assert _wait_for(lambda: proc.state == "running")
+        old_handle = proc.proc
+        old_waiter = window.waiters[rec["id"]]
+        window.act_restart.trigger()
+        assert _wait_for(lambda: proc.proc is not old_handle and proc.state == "running"), list(proc.history)
+        current = window.waiters.get(rec["id"])
+        assert current is not None and current is not old_waiter and old_waiter._settled, (
+            "restart reused the previous run's readiness observer/deadline", current, old_waiter._settled
+        )
+    finally:
+        stop_and_release(proc)
+        for waiter in list(window.waiters.values()):
+            waiter.stop()
+            waiter.deleteLater()
+        window.waiters.clear()
+        window.close()
+
+
+def test_split_banner_is_persisted_only_when_the_actual_url_is_complete(tmp: Path) -> None:
+    """Handshake a real pipe at split scheme/port boundaries, then render it."""
+    import ast
+    import json
+    import shlex
+    import urllib.request
+    from PySide6.QtCore import QUrl
+
+    title = "HUB_FRAMED_URL_READY"
+    body = ("<title>" + title + "</title><h1>" + title + "</h1>").encode()
+    script, marker, ack = tmp / "framed.py", tmp / "bound.json", tmp / "ack.txt"
+    source = ("import json, os, sys, time\nfrom pathlib import Path\n"
+              "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+              + "BODY = " + repr(body) + "\n"
+              "class H(BaseHTTPRequestHandler):\n"
+              "    def do_GET(self):\n"
+              "        self.send_response(200); self.end_headers(); self.wfile.write(BODY)\n"
+              "    def log_message(self, *args): pass\n"
+              "def wait_for_ack(value):\n"
+              "    deadline = time.monotonic() + 15\n"
+              "    while time.monotonic() < deadline:\n"
+              "        if ack.exists() and ack.read_text() == value: return\n"
+              "        time.sleep(0.01)\n"
+              "    raise RuntimeError('fixture acknowledgement timed out: ' + value)\n"
+              "ack = Path(sys.argv[2])\nserver = HTTPServer(('127.0.0.1', 0), H)\n"
+              "port = str(server.server_port)\n"
+              "url = 'http://127.0.0.1:' + port + '/dashboard?x=1%202'\n"
+              "Path(sys.argv[1]).write_text(json.dumps({'url': url, 'pid': os.getpid()}))\n"
+              "sys.stdout.write('café Serving on htt'); sys.stdout.flush()\n"
+              "wait_for_ack('scheme')\n"
+              "sys.stdout.write('p://127.0.0.1:' + port[:1]); sys.stdout.flush()\n"
+              "wait_for_ack('port')\n"
+              "sys.stdout.write(port[1:] + '/dashboard?x=1%202\\n'); sys.stdout.flush()\n"
+              "server.serve_forever()\n")
+    ast.parse(source)
+    script.write_text(source, encoding="utf-8")
+    store = sm.Store(tmp / "registry.json")
+    rec = store.add({"id": "framed-url", "name": "Framed banner", "working_dir": str(tmp),
+                     "interpreter": sys.executable,
+                     "command": " ".join(shlex.quote(str(p)) for p in (script, marker, ack)), "url": ""})
+    window = HubWindow(store)
+    # Framing must stand alone; OS-port fallback has separate real native tests.
+    window._scan_ports_after = lambda rec, proc, delay_ms=6000: None
+    window.show()
+    window._select_id(rec["id"], start=False)
+    proc = window._proc_for(rec)
+    output = []
+    proc.output.connect(output.append)
+    try:
+        window.act_start.trigger()
+        assert _wait_for(lambda: "".join(proc.history).endswith("Serving on htt")), list(proc.history)
+        partial = sm.Store(store.path).get(rec["id"])
+        assert partial is not None and not partial["url"], ("split scheme was saved", partial)
+        bound = json.loads(marker.read_text(encoding="utf-8"))
+        assert bound["pid"] in _own_tree(proc), bound
+        prefix = "café Serving on http://127.0.0.1:" + bound["url"].split(":")[-1][:1]
+        ack.write_text("scheme", encoding="utf-8")
+        assert _wait_for(lambda: "".join(proc.history) == prefix), list(proc.history)
+        partial = sm.Store(store.path).get(rec["id"])
+        assert partial is not None and not partial["url"], (
+            "unterminated port token was persisted", partial
+        )
+        ack.write_text("port", encoding="utf-8")
+        view = window._view_for(rec["id"])
+        assert view is not None
+        assert _wait_for(lambda: view.title() == title, timeout_s=15), (
+            "complete split banner did not open its owned dashboard", view.title(), output
+        )
+        saved = sm.Store(store.path).get(rec["id"])
+        assert saved is not None and saved["url"] == bound["url"], saved
+        assert view.url().toString(QUrl.FullyEncoded) == bound["url"], view.url().toString(QUrl.FullyEncoded)
+        assert window.tabs.currentWidget() is view and view.isVisible() and view.width() > 0 and view.height() > 0
+        assert "".join(proc.history) == "café Serving on " + bound["url"] + "\n", list(proc.history)
+        with urllib.request.urlopen(bound["url"], timeout=3) as response:
+            assert title.encode() in response.read()
+        assert script.read_text(encoding="utf-8") == source
+    finally:
+        stop_and_release(proc, script)
+        window.close()
 
 
 if __name__ == "__main__":
