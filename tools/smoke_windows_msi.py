@@ -747,7 +747,10 @@ def cleanup_owned(app, tracker: OwnedProcesses, native: NativeWindows, window: d
 
 
 def validate_runner_environment(environment: dict) -> dict:
-    observed = {key: environment.get(key) for key in
+    # dict(os.environ) on Windows has uppercase keys, unlike os.environ's
+    # case-insensitive lookup. Preserve values, fold only the key lookup.
+    folded = {key.upper(): value for key, value in environment.items()}
+    observed = {key: folded.get(key.upper()) for key in
                 ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "ImageOS")}
     # runner-images maps Windows2025 and Windows2025_vs2026 to these exact IDs.
     if (observed["GITHUB_ACTIONS"] != "true" or observed["RUNNER_ENVIRONMENT"] != "github-hosted"

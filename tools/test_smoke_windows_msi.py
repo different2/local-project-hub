@@ -161,6 +161,7 @@ class HostedRunnerPolicyTests(unittest.TestCase):
         for image in ("win25", "win25-vs2026"):
             good = dict(base, ImageOS=image)
             self.assertEqual(smoke.validate_runner_environment(good), good)
+            self.assertEqual(smoke.validate_runner_environment({k.upper(): v for k, v in good.items()}), good)
         for delta in (dict(GITHUB_ACTIONS="false"), dict(RUNNER_ENVIRONMENT="self-hosted"),
                       dict(RUNNER_OS="Linux"), dict(ImageOS="win22"), dict(ImageOS="win25-other")):
             with self.subTest(delta=delta), self.assertRaises(smoke.SmokeError):
