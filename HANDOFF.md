@@ -63,6 +63,14 @@ No real bots as fixtures; no paid/hosted-Mac CI; renderer sandbox and all pins s
   cases (including called main/group positives), and old-guard mutant actual1.
   The final correction is directly tested, NOT independently re-reviewed; keep
   both prior concerns_found verdicts. Do not schedule another reviewer.
+- First expanded full native69a9798 run completed419PASS/3platformSKIP with
+  140actual child exits0, but final acceptance correctly REJECTED five window
+  teardown QProcess-lifetime warnings. Keep that raw failure, not a green label.
+  A controlled unchanged-runtime child proved stop() is asynchronous. Test-only
+  cleanup now pumps Qt to actual NotRunning at52finally-close sites; real Close
+  actions inside test bodies are untouched. Six calibrated native controls pass,
+  no-wait cleanup mutant fails1, and the new guard passes3.11/3.9. Product runtime
+  hashes are unchanged; the corrected full native/source gate must still run.
 - Full frozen native suite, fresh actual Windows/Linux source/packages and
   rebuilt Mac package remain required. Any skip-CI development checkpoint is
   not a release-tag target; publication authorization is still held.

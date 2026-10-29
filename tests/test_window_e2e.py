@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QEventLoop, QTimer, QUrl, Qt  # noqa: E402
+from PySide6.QtCore import QEventLoop, QProcess, QTimer, QUrl, Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QAbstractItemView,
     QApplication,
@@ -69,6 +69,20 @@ def _wait_for(pred, timeout_s=20.0):
             return True
         _spin(100)
     return pred()
+
+
+def _close_test_window(window: HubWindow) -> None:
+    """Keep Qt alive until every owned fixture QProcess is actually reaped."""
+    processes = list(window.procs.values())
+    for proc in processes:
+        proc.stop()
+    window.close()
+    assert _wait_for(lambda: all(proc.proc is None or proc.proc.state() == QProcess.NotRunning
+                                 for proc in processes), 25.0), (
+        "test cleanup returned before owned QProcess exit",
+        [(proc.rec.get("name"), proc.state,
+          str(proc.proc.state()) if proc.proc is not None else "no handle") for proc in processes]
+    )
 
 
 def _wait_for_port_free(port: int, timeout_s: float = 15.0) -> None:
@@ -209,7 +223,7 @@ def test_check_for_updates_always_reports(tmp: Path) -> None:
         assert "reach the update server" in dlg.detail.text()
     finally:
         wm.fetch_latest_release = original_fetch
-        w.close()
+        _close_test_window(w)
 
 
 def test_update_dialog_presents_every_state(tmp: Path) -> None:
@@ -306,7 +320,7 @@ def test_download_update_shows_progress_and_verifies(tmp: Path) -> None:
         assert not launched, "the installer was launched for a corrupt download"
     finally:
         w._launch_installer = original_launch
-        w.close()
+        _close_test_window(w)
 
 
 def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
@@ -329,7 +343,7 @@ def test_selecting_project_opens_a_tab_with_its_url(tmp: Path) -> None:
             f"  proc state = {proc.state}"
         )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def _wait_for_page_text(view, needle: str, timeout_s: float = 10.0) -> bool:
@@ -412,7 +426,7 @@ def test_selecting_a_project_shows_a_start_page_and_runs_nothing(tmp: Path) -> N
                 p.stop()
             except Exception:
                 pass
-        w.close()
+        _close_test_window(w)
 
 
 def test_pressing_start_on_the_page_runs_the_project(tmp: Path) -> None:
@@ -457,7 +471,7 @@ def test_pressing_start_on_the_page_runs_the_project(tmp: Path) -> None:
                 p.stop()
             except Exception:
                 pass
-        w.close()
+        _close_test_window(w)
 
 
 def test_a_project_without_a_dashboard_says_it_is_running(tmp: Path) -> None:
@@ -495,7 +509,7 @@ def test_a_project_without_a_dashboard_says_it_is_running(tmp: Path) -> None:
                 p.stop()
             except Exception:
                 pass
-        w.close()
+        _close_test_window(w)
 
 
 def test_two_projects_get_two_tabs(tmp: Path) -> None:
@@ -566,7 +580,7 @@ def test_two_projects_get_two_tabs(tmp: Path) -> None:
                 urls.add(v.url().toString())
         assert urls == set(dashboards), urls
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_stopping_a_project_closes_its_tabs(tmp: Path) -> None:
@@ -580,7 +594,7 @@ def test_stopping_a_project_closes_its_tabs(tmp: Path) -> None:
         assert ok, f"tab was not closed on stop: {w.tabs.count()}"
         assert w.tabs.currentIndex() == w.dashboard_tab_index, "did not fall back to the starter tab"
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_load_finishes_ok(tmp: Path) -> None:
@@ -615,7 +629,7 @@ def test_load_finishes_ok(tmp: Path) -> None:
             f"loadFinished={done['ok']} url={w.web.url().toString()!r}"
         )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_restart_reloads_dashboard(tmp: Path) -> None:
@@ -661,7 +675,7 @@ def test_restart_reloads_dashboard(tmp: Path) -> None:
     finally:
         proc.stop()
         assert _wait_for(lambda: proc.proc.state() == QProcess.NotRunning), "fixture child leaked"
-        w.close()
+        _close_test_window(w)
 
 
 def test_restart_replacement_startup_failure_still_reports_error(tmp: Path) -> None:
@@ -711,7 +725,7 @@ def test_restart_replacement_startup_failure_still_reports_error(tmp: Path) -> N
     finally:
         proc.stop()
         assert _wait_for(lambda: proc.proc.state() == QProcess.NotRunning), "fixture child leaked"
-        w.close()
+        _close_test_window(w)
 
 
 def test_unrequested_termination_still_logs_error(tmp: Path) -> None:
@@ -747,7 +761,7 @@ def test_unrequested_termination_still_logs_error(tmp: Path) -> None:
     finally:
         proc.stop()
         assert _wait_for(lambda: proc.proc.state() == QProcess.NotRunning), "fixture child leaked"
-        w.close()
+        _close_test_window(w)
 
 
 def test_log_drawer_can_be_resized_and_collapsed(tmp: Path) -> None:
@@ -797,7 +811,7 @@ def test_log_drawer_can_be_resized_and_collapsed(tmp: Path) -> None:
         _spin(200)
         assert 350 <= _drawer_h() <= 450, f"drawer did not accept a dragged size: {_drawer_h()}"
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_erroring_project_logs_the_error(tmp: Path) -> None:
@@ -826,7 +840,7 @@ def test_erroring_project_logs_the_error(tmp: Path) -> None:
         log_text = w.log_view.toPlainText()
         assert "exited with an error" in log_text, log_text[-300:]
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_starter_tab_shows_welcome_not_an_empty_box(tmp: Path) -> None:
@@ -853,7 +867,7 @@ def test_starter_tab_shows_welcome_not_an_empty_box(tmp: Path) -> None:
         assert "Add Project" in labels, labels
         assert __version__ in labels, f"version {__version__} missing from the pane"
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_welcome_counts_projects(tmp: Path) -> None:
@@ -873,7 +887,7 @@ def test_welcome_counts_projects(tmp: Path) -> None:
         w._refresh_welcome()
         assert "2 projects registered" in w.welcome_count.text(), w.welcome_count.text()
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_reselecting_a_project_does_not_open_a_second_tab(tmp: Path) -> None:
@@ -901,7 +915,7 @@ def test_reselecting_a_project_does_not_open_a_second_tab(tmp: Path) -> None:
         # padding is not carried into the tab strip.
         assert labels.count("Solo") == 1, labels
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_project_tab_close_button_exists_and_starter_has_none(tmp: Path) -> None:
@@ -922,7 +936,7 @@ def test_project_tab_close_button_exists_and_starter_has_none(tmp: Path) -> None
             "project tab has no close button"
         )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
@@ -980,7 +994,7 @@ def test_closing_a_running_projects_tab_actually_closes_it(tmp: Path) -> None:
                 p.stop()
             except Exception:
                 pass
-        w.close()
+        _close_test_window(w)
 
 
 def test_closing_the_starter_tab_leaves_project_tabs_working(tmp: Path) -> None:
@@ -1016,7 +1030,7 @@ def test_closing_the_starter_tab_leaves_project_tabs_working(tmp: Path) -> None:
         assert w.tabs.count() == 2, w.tabs.count()
         assert w.welcome.isVisible(), "welcome pane did not come back"
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_each_project_has_its_own_terminal(tmp: Path) -> None:
@@ -1077,7 +1091,7 @@ def test_each_project_has_its_own_terminal(tmp: Path) -> None:
                 p.stop()
             except Exception:
                 pass
-        w.close()
+        _close_test_window(w)
 
 
 def _announcing_src(port: int) -> str:
@@ -1183,7 +1197,7 @@ def test_background_project_url_is_saved_to_its_own_record(tmp: Path) -> None:
                 pass
         for proc in list(w.procs.values()):
             _wait_for(lambda p=proc: p.state == "stopped", timeout_s=20)
-        w.close()
+        _close_test_window(w)
 
 
 def test_no_tab_dashboard_does_not_navigate_the_active_tab(tmp: Path) -> None:
@@ -1237,7 +1251,7 @@ def test_no_tab_dashboard_does_not_navigate_the_active_tab(tmp: Path) -> None:
             "a no-tab project redirected the active project's dashboard"
         )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_window_registers_context_for_crash_reports(tmp: Path) -> None:
@@ -1264,7 +1278,7 @@ def test_window_registers_context_for_crash_reports(tmp: Path) -> None:
         assert "RuntimeError" in text, text
         assert re.search(r"(?<!\w)Q(?!\w)", text) is None, text
     finally:
-        w.close()
+        _close_test_window(w)
         diagnostics.clear_project_context()
 
 
@@ -1334,7 +1348,7 @@ def test_report_problem_exports_no_project_data(tmp: Path) -> None:
                     f"{label} leaked into the prefilled issue URL"
                 )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_renaming_a_project_in_the_sidebar_sticks(tmp: Path) -> None:
@@ -1376,7 +1390,7 @@ def test_renaming_a_project_in_the_sidebar_sticks(tmp: Path) -> None:
         assert st.get(pid)["name"] == "New Name", "a blank rename was saved"
         assert "New Name" in item.text(), item.text()
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_rename_opens_an_editor_and_saves_the_new_name(tmp: Path) -> None:
@@ -1424,7 +1438,7 @@ def test_rename_opens_an_editor_and_saves_the_new_name(tmp: Path) -> None:
         assert (st.get(rec["id"]) or {}).get("name") == "Renamed In Place", st.get(rec["id"])
         assert "Renamed In Place" in w.list.item(0).text(), w.list.item(0).text()
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_a_macos_update_is_staged_and_installing_it_just_restarts(tmp: Path) -> None:
@@ -1493,7 +1507,7 @@ def test_a_macos_update_is_staged_and_installing_it_just_restarts(tmp: Path) -> 
             su.bundle_path,
             su.schedule_install,
         ) = originals
-        w.close()
+        _close_test_window(w)
 
 
 def test_a_detected_url_is_saved_to_the_project_that_printed_it(tmp: Path) -> None:
@@ -1541,7 +1555,7 @@ def test_a_detected_url_is_saved_to_the_project_that_printed_it(tmp: Path) -> No
             f"the URL was saved to the ACTIVE project instead: {alpha_after}"
         )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_sidebar_internal_move_saves_order_and_keeps_project_identity(tmp: Path) -> None:
@@ -1589,7 +1603,7 @@ def test_sidebar_internal_move_saves_order_and_keeps_project_identity(tmp: Path)
         w._reload_list()
         assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == wanted
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_sidebar_restores_custom_order_on_startup(tmp: Path) -> None:
@@ -1608,7 +1622,7 @@ def test_sidebar_restores_custom_order_on_startup(tmp: Path) -> None:
         assert w.list.currentItem().data(Qt.UserRole) == wanted[0]
         assert all(p.state == "stopped" for p in w.procs.values())
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_sidebar_failed_order_save_restores_rows_and_reports_error(tmp: Path) -> None:
@@ -1646,7 +1660,7 @@ def test_sidebar_failed_order_save_restores_rows_and_reports_error(tmp: Path) ->
         assert all(p.state == "stopped" for p in w.procs.values())
     finally:
         st.save = save
-        w.close()
+        _close_test_window(w)
 
 
 def test_sidebar_reorder_keeps_a_running_project_running(tmp: Path) -> None:
@@ -1681,7 +1695,7 @@ def test_sidebar_reorder_keeps_a_running_project_running(tmp: Path) -> None:
         with urlopen(f"http://127.0.0.1:{port}/", timeout=2) as response:
             assert response.read() == b"HUB-WINDOW-TEST"
     finally:
-        w.close()
+        _close_test_window(w)
         if proc is not None:
             assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning), (
                 "the isolated test server was not cleaned up"
@@ -1712,7 +1726,7 @@ def test_sidebar_rename_keeps_the_saved_custom_position(tmp: Path) -> None:
         assert [w.list.item(i).data(Qt.UserRole) for i in range(w.list.count())] == wanted
         assert [r["id"] for r in sm.Store(st.path).ordered()] == wanted
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def _uploaded_image_window(tmp: Path):
@@ -1814,7 +1828,7 @@ def test_sidebar_reselect_preserves_uploaded_image_and_backend(tmp: Path) -> Non
             "sidebar navigation restarted the backend"
         )
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
 
 
@@ -1870,7 +1884,7 @@ def test_adding_a_project_preserves_the_current_tab_and_upload(tmp: Path) -> Non
         assert proc.state == "running", "adding a record stopped the current backend"
     finally:
         wm.ProjectDialog = original_dialog
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
 
 
@@ -1912,7 +1926,7 @@ def test_tab_navigation_selects_project_and_stop_targets_visible_tab(tmp: Path) 
             "toolbar Stop affected the other project's live process"
         )
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: all(p.state == "stopped" for p in w.procs.values()), 8), (
             "isolated bot fixture survived window quit"
         )
@@ -1984,7 +1998,7 @@ def test_clear_log_removes_only_visible_history_and_keeps_project_running(tmp: P
             "clearing logs disturbed the running dashboard"
         )
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
 
 
@@ -2022,7 +2036,7 @@ def test_close_press_log_uses_the_clicked_projects_registry_identity(tmp: Path) 
             "a page caption was mistaken for the stopped project's identity"
         )
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: all(p.state == "stopped" for p in w.procs.values()), 8)
 
 
@@ -2047,7 +2061,7 @@ def test_popup_tab_keeps_its_project_owner_without_stopping_the_backend(tmp: Pat
         )
         assert _wait_for_page_text(dashboard, "UPLOADED_IMAGE", 2)
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8)
 
 
@@ -2080,7 +2094,7 @@ def test_popup_title_updates_follow_its_widget_after_tabs_move(tmp: Path) -> Non
             "popup title callback renamed another project's tab"
         )
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_stopping_the_last_project_reopens_overview_without_a_stale_target(tmp: Path) -> None:
@@ -2102,7 +2116,7 @@ def test_stopping_the_last_project_reopens_overview_without_a_stale_target(tmp: 
         )
         assert w.welcome.isVisible()
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8)
 
 
@@ -2131,7 +2145,7 @@ def test_nested_popups_are_registered_once_and_log_to_their_owner(tmp: Path) -> 
         )
         assert "owned-popup" not in w.log_view._edit_for(second).toPlainText()
     finally:
-        w.close()
+        _close_test_window(w)
 
 
 def test_close_and_reopen_still_reaps_an_owned_bot_ignoring_termination(tmp: Path) -> None:
@@ -2185,7 +2199,7 @@ def test_close_and_reopen_still_reaps_an_owned_bot_ignoring_termination(tmp: Pat
         if qproc is not None and qproc.state() != QProcess.NotRunning:
             qproc.kill()
             assert _wait_for(lambda: qproc.state() == QProcess.NotRunning, 8)
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8)
 
 
@@ -2214,7 +2228,7 @@ def test_removing_a_project_keeps_remaining_tab_actions_synchronized(tmp: Path) 
         assert w.act_start.isEnabled() and w.log_view.header.text() == "Logs — Beta"
     finally:
         wm.QMessageBox.question = original_question
-        w.close()
+        _close_test_window(w)
 
 
 def test_upload_fixture_cleans_up_if_initial_render_setup_fails(tmp: Path) -> None:
@@ -2248,7 +2262,7 @@ def test_upload_fixture_cleans_up_if_initial_render_setup_fails(tmp: Path) -> No
         globals()["HubWindow"] = original_window
         globals()["_wait_for_page_text"] = original_wait
         for window in windows:
-            window.close()
+            _close_test_window(window)
             assert _wait_for(lambda: all(p.state == "stopped" for p in window.procs.values()), 8)
 
 
@@ -2302,7 +2316,7 @@ def test_surviving_nested_popup_can_open_tabs_after_its_opener_is_deleted(tmp: P
             if isValid(view) and w.tabs.indexOf(view) < 0:
                 view.close()
                 view.deleteLater()
-        w.close()
+        _close_test_window(w)
 
 
 def test_editing_a_never_started_project_refreshes_its_rendered_start_page(tmp: Path) -> None:
@@ -2354,7 +2368,7 @@ def test_editing_a_never_started_project_refreshes_its_rendered_start_page(tmp: 
         assert not any(marker.exists() for marker in markers), "Edit implicitly started a project"
     finally:
         wm.ProjectDialog = original_dialog
-        w.close()
+        _close_test_window(w)
 
 
 def test_picked_html_entry_survives_save_with_multiple_pages(tmp: Path) -> None:
@@ -2404,7 +2418,7 @@ def test_picked_html_entry_survives_save_with_multiple_pages(tmp: Path) -> None:
         assert view.url().path() == "/chosen review #1.html", view.url().toString()
         assert chosen.read_bytes() == original, "Hub changed the selected source file"
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8)
 
 
@@ -2465,7 +2479,7 @@ def test_static_single_html_opens_page_not_directory_listing(tmp: Path) -> None:
     finally:
         wm.ReadinessWaiter = original_waiter
         wm.QDesktopServices.openUrl = original_browser
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8), "owned fixture server did not stop"
 
 
@@ -2520,7 +2534,7 @@ def test_static_html_private_storage_survives_reload_and_isolates_projects(tmp: 
         assert _wait_for_page_text(other_view, "OUTSIDE_SCOPE_OK", 5), "storage compatibility leaked to an unrelated origin"
         assert page.read_bytes() == source, "compatibility rewrote the source HTML"
     finally:
-        w.close()
+        _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8)
 
 
@@ -2590,7 +2604,7 @@ def _assert_legacy_selected_python_html_storage(tmp: Path, explicit_route: bool)
         assert saved["url"] == raw["url"]
         assert page.read_bytes() == source and wrong.read_bytes() == b"<main>WRONG_LEGACY_DEFAULT</main>"
     finally:
-        window.close()
+        _close_test_window(window)
         assert _wait_for(lambda: proc.state == "stopped", 8), "owned legacy fixture did not stop"
 
 
@@ -2600,6 +2614,32 @@ def test_legacy_selected_python_opens_picked_html_with_private_storage(tmp: Path
 
 def test_legacy_selected_python_explicit_html_keeps_private_storage(tmp: Path) -> None:
     _assert_legacy_selected_python_html_storage(tmp, True)
+
+
+def test_teardown_waits_for_actual_owned_process_exit(tmp: Path) -> None:
+    import shlex
+
+    script = tmp / "owned_delayed_exit.py"
+    script.write_text("import signal,time\ndef finish(*args):\n    time.sleep(0.35)\n    raise SystemExit(0)\nsignal.signal(signal.SIGTERM,finish)\nprint('TEARDOWN_READY',flush=True)\nwhile True: time.sleep(0.05)\n")
+    store = sm.Store(tmp / "registry.json")
+    rec = store.add({"name": "Teardown proof", "command": shlex.quote(script.name),
+                     "interpreter": sys.executable, "working_dir": str(tmp), "env": {}})
+    window = HubWindow(store)
+    window.show()
+    proc = window._proc_for(rec)
+    try:
+        proc.start()
+        assert _wait_for(lambda: "TEARDOWN_READY" in "".join(proc.history), 8), list(proc.history)
+        handle = proc.proc
+        assert handle is not None and handle.state() == QProcess.Running
+        _close_test_window(window)
+        assert handle.state() == QProcess.NotRunning and proc.state == "stopped", (
+            "cleanup did not wait for actual owned QProcess exit", proc.state, str(handle.state())
+        )
+    finally:
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning, 8)
+        window.close()
 
 
 if __name__ == "__main__":
