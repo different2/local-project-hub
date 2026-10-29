@@ -5,11 +5,13 @@ import importlib.util
 import os
 from pathlib import Path
 import json
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("smoke_windows_msi", HERE / "smoke_windows_msi.py")
@@ -124,6 +126,107 @@ class PayloadTests(unittest.TestCase):
                 with smoke.hidden_source(source, {}):
                     self.fail("a missing source entry must not reach native launch")
             self.assertTrue((source / "hub/__init__.py").is_file())
+
+
+class ExactReferenceTests(unittest.TestCase):
+    SOURCE_SHA = "77aaa1877c3c586634f572ede63f9bf7095abb08"
+    MSI_SHA = "ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d"
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="msi-reference-")
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name).resolve()
+        self.source, self.expected = self.base / "source", self.base / "expected"
+        # The TEMP QA checkout may be shallow; its separately pinned sibling
+        # source checkout contains the exact object on the actual Windows job.
+        candidates = (HERE.parent, HERE.parent.parent / "source")
+        repository = next((p for p in candidates if subprocess.run(
+            ["git", "-C", str(p), "cat-file", "-e", self.SOURCE_SHA + "^{commit}"],
+            capture_output=True).returncode == 0), None)
+        self.assertIsNotNone(repository, "immutable source object is required; no network or current-source fallback")
+        subprocess.run(["git", "clone", "--shared", "--no-checkout", str(repository), str(self.source)],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.source), "-c", "core.autocrlf=false", "checkout", "--detach", self.SOURCE_SHA],
+                       check=True, capture_output=True)
+
+    def derive(self):
+        self.assertTrue(hasattr(smoke, "derive_payload_reference"), "exact pinned CRLF reference derivation is missing")
+        return smoke.derive_payload_reference(self.source, self.expected, source_sha=self.SOURCE_SHA, msi_sha256=self.MSI_SHA)
+
+    def test_derived_reference_is_exact_crlf_from_immutable_blobs_without_source_writes(self):
+        before = smoke.source_manifest(self.source)
+        result = self.derive()
+        self.assertEqual(result["canonical_hashes"], before)
+        self.assertEqual(result["expected_hashes"], smoke.source_manifest(self.expected))
+        for name in before:
+            canonical = subprocess.check_output(["git", "-C", str(self.source), "show", self.SOURCE_SHA + ":" + name])
+            self.assertNotIn(b"\r", canonical)
+            self.assertEqual((self.source / name).read_bytes(), canonical)
+            self.assertEqual((self.expected / name).read_bytes(), canonical.replace(b"\n", b"\r\n"))
+        self.assertEqual(smoke.source_manifest(self.source), before)
+        self.assertEqual(subprocess.check_output(["git", "-C", str(self.source), "status", "--porcelain"]), b"")
+        installed = self.base / "installed"
+        shutil.copytree(self.expected, installed)
+        self.assertEqual(smoke.compare_payload(self.expected, installed), result["expected_hashes"])
+        with self.assertRaises(smoke.SmokeError):
+            smoke.compare_payload(self.source, installed)
+
+    def test_dirty_source_including_unknown_and_ignored_non_python_files_fails_closed(self):
+        controls = (("README.md", b"changed tracked source\n"), ("untracked.txt", b"unknown\n"),
+                    ("hub/unknown.bin", b"unknown\n"), ("build/owned.txt", b"ignored but dirty\n"))
+        for name, data in controls:
+            with self.subTest(name=name):
+                path = self.source / name
+                before = path.read_bytes() if path.exists() else None
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                try:
+                    with self.assertRaisesRegex(smoke.SmokeError, "dirty|canonical|membership"):
+                        self.derive()
+                    self.assertFalse(self.expected.exists(), "refusal must precede materialization")
+                finally:
+                    if before is None:
+                        path.unlink()
+                        if name.startswith("build/"):
+                            path.parent.rmdir()
+                    else:
+                        path.write_bytes(before)
+                    if self.expected.exists():
+                        shutil.rmtree(self.expected)
+
+    def test_checkout_head_must_be_the_pinned_immutable_commit(self):
+        subprocess.run(["git", "-C", str(self.source), "-c", "user.name=different", "-c", "user.email=isamud@hotmail.com",
+                        "commit", "--allow-empty", "-m", "Owned reference identity control"], check=True, capture_output=True)
+        with self.assertRaisesRegex(smoke.SmokeError, "HEAD|identity"):
+            self.derive()
+        self.assertFalse(self.expected.exists())
+
+    def test_payload_observation_retains_all_raw_manifests_before_strict_refusal(self):
+        self.derive()
+        installed = self.base / "installed"
+        shutil.copytree(self.expected, installed)
+        output = self.base / "evidence"
+        output.mkdir()
+        self.assertTrue(hasattr(smoke, "observe_payload_parity"), "raw payload observation is not wired before strict comparison")
+        report = {"passed": False}
+        smoke.observe_payload_parity(self.source, self.expected, installed, report, output)
+        self.assertTrue(report["payload_parity"]["matched"])
+        for label in ("canonical", "expected", "installed"):
+            self.assertEqual(len(report["payload_parity"][label]["hashes"]), 22)
+        file = installed / "hub/__init__.py"
+        original = file.read_bytes()
+        file.write_bytes(original.replace(b"\r\n", b"\n", 1))
+        try:
+            with self.assertRaises(smoke.SmokeError):
+                smoke.observe_payload_parity(self.source, self.expected, installed, report, output)
+            retained = json.loads((output / "report.json").read_text(encoding="utf-8"))
+            parity = retained["payload_parity"]
+            self.assertFalse(parity["matched"])
+            self.assertNotEqual(parity["expected"]["hashes"], parity["installed"]["hashes"])
+            self.assertEqual(parity["installed"]["files"]["hub/__init__.py"]["bare_lf"], 1)
+            self.assertEqual(file.read_bytes(), original.replace(b"\r\n", b"\n", 1), "observer normalized installed bytes")
+        finally:
+            file.write_bytes(original)
 
 
 class ArtifactGuardTests(unittest.TestCase):

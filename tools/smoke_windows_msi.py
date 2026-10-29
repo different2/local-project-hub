@@ -41,6 +41,13 @@ class SmokeError(RuntimeError):
 
 EXPECTED_UPGRADE_CODE = "{25F599D7-F44F-5B9D-8CC0-FC312B836125}"
 EXPECTED_QT = "6.12.0"
+# TEMP: this is one demonstrated MSI/source byte vector, not a general EOL policy.
+PINNED_SOURCE_SHA = "77aaa1877c3c586634f572ede63f9bf7095abb08"
+PINNED_MSI_SHA256 = "ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d"
+PINNED_MSI_BYTES = 108763314
+PINNED_PRODUCT_CODE = "{35C7E600-5AEC-45FE-A34E-4120096933B4}"
+REFERENCE_SHA256 = "adf5732cbfd1d40180782d2581cfdb5cba1c6a446403aa204a0fcc844638f8f3"
+REFERENCE_PATH = Path(__file__).with_name("windows_msi_77aaa18_reference.json")
 BYPASS_FLAGS = {
     "--no-sandbox", "--disable-sandbox", "--disable-setuid-sandbox",
     "--disable-seccomp-filter-sandbox", "--disable-namespace-sandbox",
@@ -169,6 +176,93 @@ def compare_payload(source: Path, installed: Path) -> dict:
     if expected != actual:
         different = sorted(k for k in expected.keys() | actual.keys() if expected.get(k) != actual.get(k))
         raise SmokeError(f"installed Python source membership/hash differs from checkout: {different}")
+    return actual
+
+
+def load_payload_reference() -> dict:
+    raw = REFERENCE_PATH.read_bytes()
+    if REFERENCE_PATH.is_symlink() or hashlib.sha256(raw).hexdigest() != REFERENCE_SHA256:
+        raise SmokeError("pinned canonical/expected reference manifest changed")
+    return json.loads(raw)
+
+
+def git_blob(root: Path, object_id: str) -> bytes:
+    result = subprocess.run(["git", "-C", str(root), "cat-file", "blob", object_id],
+                            capture_output=True, timeout=15, check=False)
+    if result.returncode != 0:
+        raise SmokeError(f"immutable source Git blob unavailable: {object_id}")
+    return result.stdout  # No text=True, checkout filter or universal-newline decoding.
+
+
+def validate_canonical_checkout(root: Path, pin: dict) -> dict:
+    if git_read(root, "rev-parse", "--verify", "HEAD") != PINNED_SOURCE_SHA:
+        raise SmokeError("source checkout HEAD identity differs from pinned 77aaa18")
+    # Include untracked AND ignored entries throughout this isolated source clone.
+    # No index refresh, checkout normalization or source write is permitted here.
+    if git_read(root, "status", "--porcelain", "--untracked-files=all", "--ignored"):
+        raise SmokeError("dirty source checkout (tracked, untracked or ignored entries)")
+    tree = git_read(root, "ls-tree", "-r", PINNED_SOURCE_SHA, "--", "hub", "main.py")
+    entries = {}
+    for line in tree.splitlines():
+        identity, name = line.split("\t", 1)
+        entries[name] = identity
+    if entries != {name: "100644 blob " + row["git_blob"] for name, row in pin["files"].items()}:
+        raise SmokeError("immutable Git runtime membership/modes/blob identity differs")
+    hashes = source_manifest(root)
+    if hashes != {name: row["canonical_sha256"] for name, row in pin["files"].items()}:
+        raise SmokeError("checkout is not the exact canonical LF reference")
+    return hashes
+
+
+def derive_payload_reference(root: Path, destination: Path, *, source_sha: str, msi_sha256: str) -> dict:
+    pin = load_payload_reference()
+    if source_sha != PINNED_SOURCE_SHA or msi_sha256 != PINNED_MSI_SHA256:
+        raise SmokeError("TEMP reference is restricted to the pinned 77aaa18/MSI vector")
+    canonical_hashes = validate_canonical_checkout(root, pin)
+    blobs = {}
+    for name, row in pin["files"].items():
+        raw = git_blob(root, row["git_blob"])
+        if b"\r" in raw or len(raw) != row["canonical_bytes"] or hashlib.sha256(raw).hexdigest() != row["canonical_sha256"]:
+            raise SmokeError(f"noncanonical immutable source blob: {name}")
+        expanded = raw.replace(b"\n", b"\r\n")
+        if len(expanded) != row["expected_bytes"] or hashlib.sha256(expanded).hexdigest() != row["expected_sha256"]:
+            raise SmokeError(f"derived bytes differ from demonstrated MSI vector: {name}")
+        blobs[name] = expanded
+    if destination.exists() or destination.is_symlink() or destination.resolve().is_relative_to(root.resolve()):
+        raise SmokeError("derived reference must be a new directory outside the source checkout")
+    destination.mkdir(parents=True, exist_ok=False)
+    for name, data in blobs.items():
+        path = destination / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("xb") as stream:
+            stream.write(data)
+    return dict(source_sha=source_sha, msi_sha256=msi_sha256, reference_sha256=REFERENCE_SHA256,
+                policy=pin["policy"], canonical_hashes=canonical_hashes, expected_hashes=source_manifest(destination))
+
+
+def observe_payload_parity(canonical: Path, expected: Path, installed: Path, report: dict, output: Path) -> dict:
+    """Persist raw hashes/EOL counts before the unchanged byte gate can raise."""
+    parity = report["payload_parity"] = {"matched": False, "comparison": "strict raw SHA-256 and exact Python membership"}
+    errors = []
+    for label, root in (("canonical", canonical), ("expected", expected), ("installed", installed)):
+        try:
+            hashes = source_manifest(root)
+            files = {}
+            for name in hashes:
+                raw = (root / name).read_bytes()
+                crlf = raw.count(b"\r\n")
+                files[name] = dict(sha256=hashes[name], bytes=len(raw), crlf=crlf,
+                                   bare_lf=raw.count(b"\n") - crlf, lone_cr=raw.count(b"\r") - crlf)
+            parity[label] = dict(root=str(root), hashes=hashes, files=files)
+        except (SmokeError, OSError) as exc:
+            parity[label] = dict(root=str(root), error=str(exc))
+            errors.append(f"{label}: {exc}")
+    checkpoint(output, report)
+    if errors:
+        raise SmokeError("payload inventory failed: " + "; ".join(errors))
+    actual = compare_payload(expected, installed)
+    parity["matched"] = True
+    checkpoint(output, report)
     return actual
 
 
@@ -827,9 +921,14 @@ def run_smoke(args, report: dict) -> None:
     with msi.open("rb") as stream:
         if stream.read(8) != bytes.fromhex("d0cf11e0a1b11ae1"):
             raise SmokeError("--msi is not an MSI compound-file container")
+    msi_hash = sha256_file(msi)
+    if msi_hash != PINNED_MSI_SHA256 or msi.stat().st_size != PINNED_MSI_BYTES:
+        raise SmokeError("TEMP smoke requires the exact demonstrated MSI bytes")
     api, native = MsiApi(), NativeWindows()
     properties = dict(api.rows(msi, "SELECT `Property`, `Value` FROM `Property`", 2))
     product = validate_msi_properties(properties, args.expected_version)
+    if product != PINNED_PRODUCT_CODE:
+        raise SmokeError("TEMP smoke requires the exact demonstrated ProductCode")
     files = api.rows(msi, "SELECT `File`.`File`, `File`.`FileName`, `Component`.`ComponentId`, `Component`.`KeyPath`, `Component`.`Attributes` FROM `File`, `Component` WHERE `File`.`Component_` = `Component`.`Component`", 5)
     report["msi"] = dict(path=str(msi), sha256=sha256_file(msi), bytes=msi.stat().st_size,
                          properties={k: properties[k] for k in ("ProductCode", "UpgradeCode", "ProductName", "ProductVersion")})
@@ -840,6 +939,10 @@ def run_smoke(args, report: dict) -> None:
         raise SmokeError("refusing pre-existing exact/related/name-matching installation; nothing installed or uninstalled")
     work = output / "_runtime"
     work.mkdir()
+    expected_source = work / "exact-msi-source-reference"
+    report["source_reference"] = derive_payload_reference(
+        root, expected_source, source_sha=args.source_sha, msi_sha256=msi_hash)
+    checkpoint(output, report)
     fixture = seed_fixture(root, work)
     report["fixture"] = fixture
     with socket.socket() as listener:
@@ -867,7 +970,8 @@ def run_smoke(args, report: dict) -> None:
         if launcher.is_relative_to(root) or launcher.is_relative_to(output):
             raise SmokeError("MSI resolved executable is not an independent installed application")
         report["installed_component"] = component
-        inventory = installed_payload(root, launcher, args.expected_version)
+        observe_payload_parity(root, expected_source, launcher.parent / "app", report, output)
+        inventory = installed_payload(expected_source, launcher, args.expected_version)
         report["installed"] = inventory
         argv = [str(launcher)]  # Actual installed PE only, never source '-m' or an injected Python hook.
         validate_no_bypass(environment, argv)
