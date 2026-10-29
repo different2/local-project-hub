@@ -2616,6 +2616,57 @@ def test_legacy_selected_python_explicit_html_keeps_private_storage(tmp: Path) -
     _assert_legacy_selected_python_html_storage(tmp, True)
 
 
+def test_popup_title_callback_is_safe_after_native_window_deletion(tmp: Path) -> None:
+    """A scheduled native-page completion must not touch a deleted Hub widget."""
+    from unittest.mock import patch
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWebEngineCore import QWebEnginePage
+    from shiboken6 import isValid
+
+    store = sm.Store(tmp / "registry.json")
+    rec = store.add({"name": "Popup lifecycle", "command": "echo unused"})
+    window = HubWindow(store)
+    window.show()
+    callbacks = []
+
+    def postpone(page, script, world, callback):
+        assert script == "document.title" and world == 0
+        callbacks.append(callback)
+
+    try:
+        window._select_id(rec["id"], start=False)
+        main = window._view_for(rec["id"])
+        assert main is not None
+        popup = main.createWindow(QWebEnginePage.WebBrowserTab)
+        # Capture the callback supplied by the actual Hub handler, not a fake
+        # tab widget. Its eventual delivery is controlled to remove timing races.
+        with patch.object(QWebEnginePage, "runJavaScript", postpone):
+            popup.urlChanged.emit(QUrl("https://example.invalid/popup"))
+        assert len(callbacks) == 1, "actual popup handler did not schedule a title read"
+        index = window.tabs.indexOf(popup)
+        callbacks[0]("Named popup")
+        assert window.tabs.tabText(index) == "Named popup"
+        callbacks[0]("")
+        assert window.tabs.tabToolTip(index) == "https://example.invalid/popup"
+        assert window.tabs.tabText(index) != "Named popup", "ordinary empty titles lost their URL fallback"
+        tabs = window.tabs
+        _close_test_window(window)
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert not isValid(window) and not isValid(tabs), "native widget deletion was not exercised"
+        # Qt invokes pending JavaScript callbacks with an invalid QVariant on
+        # page destruction; PySide delivers that as None.
+        try:
+            callbacks[0](None)
+        except RuntimeError as exc:
+            raise AssertionError("pending popup title touched a deleted native Hub: " + str(exc)) from exc
+    finally:
+        if isValid(window):
+            _close_test_window(window)
+            window.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
 def test_teardown_waits_for_actual_owned_process_exit(tmp: Path) -> None:
     import shlex
 

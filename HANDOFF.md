@@ -28,7 +28,33 @@ No real bots as fixtures; no paid/hosted-Mac CI; renderer sandbox and all pins s
   Edit/restart/Stop retire old observers and ignore late superseded callbacks.
 - The test cleanup helper pumps Qt so the owned process is actually reaped.
 
-### Latest acceptance checkpoint — CI follow-up not yet fully accepted
+### Latest acceptance checkpoint — invalid popup completion guard under verification
+- Prior source **27d728be08cb1d2d14729b0abeffdd78adbf3691** passed Mac SOURCE:
+  424identities/421PASS/3platformSKIP/141actual exits0, plus ten3.9native cases.
+  Its fresh copied DMG's original-HTML save/cold-restore passed with two actual
+  app exits0 and inspected native screenshots. Windows2022/2025 each reconciled
+  424identities/417PASS/7platformSKIP/141actual exits0; real MSI metadata/upgrade
+  identity and installed DEB smoke/source parity passed separately.
+- That source's Linux full run is still FAILED for one nested-popup child-11
+  afterPASS. Bounded diagnostic40841731178 on temporary6b240e1 did NOT reproduce
+  the segfault: bareQt/current/baseline/drain/GDB exits were0, so no crash stack
+  was captured. Explicit deletion did expose three reproducible late-title
+  callbacks using a deleted QTabWidget. The diagnostic is not product signoff.
+- Current Hub-only correction skips runJavaScript's invalid None completion
+  during page destruction, before accessing the popup/view/tab widget. It does
+  not change valid title updates or the empty-title URL fallback. No new
+  dependency, sandbox bypass, managed-source edit or UI lifecycle rewrite.
+- Deterministic real-widget regression reproduced actualRED1 on3.11/3.9, then
+  passed under both. All six native popup/new-guard/surviving-opener controls pass;
+  removing only the None guard in an owned child fails the exact deleted-widget
+  assertion1. Fresh affectedv8 also passes all8suite children on both Pythons.
+- Freeze a new source candidate and rerun strict native/actual-platform/package
+  gates. Older source receipts do NOT accept this changed window.py. Preserve
+  Linux's failed raw run and do not claim its -11 cause fixed without evidence.
+  No more review rounds per owner. Never merge the TEMP diagnostic workflow.
+- **Publication remains ON HOLD; no tag/draft/release/install/update/restart.**
+
+### Earlier checkpoint — Windows CI follow-up, superseded by the callback correction
 - Test-only source **9e21c2d6c6a3b4a551f76f3b0578061e6285a02c** has a clean
   frozen native Cocoa run: **423 exact identities,420PASS/3platformSKIP/0FAIL,
   141actual children exit0**, no profile/QProcess lifetime warnings. Its runtime

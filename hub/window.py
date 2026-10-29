@@ -1701,9 +1701,11 @@ class HubWindow(QMainWindow):
             # (script, worldId, callback). The newer two-argument form raised
             # TypeError inside a Qt slot on 6.7.3, so the title callback
             # silently never ran and popup tabs kept their placeholder label.
+            # Qt also completes this callback with None during page deletion.
+            # Do not enter widget APIs from that invalid-result completion.
             view.page().runJavaScript(
                 "document.title", 0,
-                lambda t, v=view: self._label_tab(self.tabs.indexOf(v), t or s)
+                lambda t, v=view: self._label_tab(self.tabs.indexOf(v), t or s) if t is not None else None
             )
             self._append_log(f"[hub] new tab: {s}", owner)
             if self.tabs.currentWidget() is view:
