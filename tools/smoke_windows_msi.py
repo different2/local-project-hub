@@ -746,14 +746,23 @@ def cleanup_owned(app, tracker: OwnedProcesses, native: NativeWindows, window: d
     return result
 
 
+def validate_runner_environment(environment: dict) -> dict:
+    observed = {key: environment.get(key) for key in
+                ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "ImageOS")}
+    # runner-images maps Windows2025 and Windows2025_vs2026 to these exact IDs.
+    if (observed["GITHUB_ACTIONS"] != "true" or observed["RUNNER_ENVIRONMENT"] != "github-hosted"
+            or observed["RUNNER_OS"] != "Windows"
+            or str(observed["ImageOS"] or "").lower() not in {"win25", "win25-vs2026"}):
+        raise SmokeError("refusing non-ephemeral/non-Windows-2025 runner: " + json.dumps(observed, sort_keys=True))
+    return observed
+
+
 def native_preflight() -> dict:
     if sys.platform != "win32":
         raise SmokeError("requires actual native Windows-2025 on an ephemeral GitHub-hosted runner; no Windows acceptance on this host")
     if ctypes.sizeof(ctypes.c_void_p) != 8 or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise SmokeError("requires an AMD64 observer on Windows-2025")
-    if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
-            or os.environ.get("RUNNER_OS") != "Windows" or os.environ.get("ImageOS", "").lower() != "win25"):
-        raise SmokeError("refusing non-ephemeral/non-Windows-2025 runner; require GitHub-hosted ImageOS=win25")
+    validate_runner_environment(dict(os.environ))
     import psutil
     import websocket
     validate_no_bypass(dict(os.environ), [])

@@ -152,6 +152,21 @@ class ArtifactGuardTests(unittest.TestCase):
                     smoke.check_pe(path)
 
 
+class HostedRunnerPolicyTests(unittest.TestCase):
+    def test_genuine_windows_2025_image_variants_and_host_isolation(self):
+        if smoke is None:
+            raise AssertionError("MSI harness implementation is missing")
+        self.assertTrue(hasattr(smoke, "validate_runner_environment"), "native host policy helper is missing")
+        base = dict(GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", RUNNER_OS="Windows", ImageOS="win25")
+        for image in ("win25", "win25-vs2026"):
+            good = dict(base, ImageOS=image)
+            self.assertEqual(smoke.validate_runner_environment(good), good)
+        for delta in (dict(GITHUB_ACTIONS="false"), dict(RUNNER_ENVIRONMENT="self-hosted"),
+                      dict(RUNNER_OS="Linux"), dict(ImageOS="win22"), dict(ImageOS="win25-other")):
+            with self.subTest(delta=delta), self.assertRaises(smoke.SmokeError):
+                smoke.validate_runner_environment(dict(base, **delta))
+
+
 class NativeEntryTests(unittest.TestCase):
     @unittest.skipIf(sys.platform == "win32", "Mac/non-Windows refusal probe only; never installs in pure tests")
     def test_cli_refuses_non_windows_and_never_clobbers_evidence(self):
