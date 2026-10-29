@@ -81,7 +81,7 @@ def _windows_argv(command: str) -> list[str]:
                 token.append(char)
             i += 1
             continue
-        if char == "'" and not quote and (not started or legacy_single):
+        if char == "'" and not quote and (not started or legacy_single or (token and token[-1] == "=")):
             quote = "'"
             started = legacy_single = True
             i += 1

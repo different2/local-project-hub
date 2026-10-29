@@ -1,6 +1,6 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT — v0.7.4 publication HELD; expanded host compatibility candidate (2026-10-28)
+## CURRENT — v0.7.4 publication HELD; compatibility acceptance (2026-10-29)
 
 **This checkpoint overrides the historical release instructions below.** After
 finding more opening failures, the owner selected: **"Hold publication, fix these
@@ -28,7 +28,41 @@ No real bots as fixtures; no paid/hosted-Mac CI; renderer sandbox and all pins s
   Edit/restart/Stop retire old observers and ignore late superseded callbacks.
 - The test cleanup helper pumps Qt so the owned process is actually reaped.
 
-### Current evidence and remaining gate
+### Latest acceptance checkpoint — CI follow-up not yet fully accepted
+- Test-only source **9e21c2d6c6a3b4a551f76f3b0578061e6285a02c** has a clean
+  frozen native Cocoa run: **423 exact identities,420PASS/3platformSKIP/0FAIL,
+  141actual children exit0**, no profile/QProcess lifetime warnings. Its runtime
+  is byte-identical to69a9798; that acceptance does not cover later source changes.
+  All221original entries/full membership, live registry and installed metadata
+  matched afterward; no owned fixture survivor was found.
+- GitHub run **40819575900** on69a9798 completed FAILURE. Ubuntu retained one
+  nested-popup child exit-11 after printedPASS plus the known five teardown
+  warning cases. Windows2022/2025 each failed a case-only Python.EXE observer,
+  the locale-dependent synthetic banner and a real legacy option-quote parser
+  case. MSI and DEB build/install smoke jobs succeeded; that is not source-matrix
+  acceptance. Preserve every failed raw child, including retry attempts.
+- The follow-up's only product delta is `hub/platform.py`: legacy single quotes
+  can begin after `=`, so `--directory='served pages'` remains one option value.
+  Six parser controls preserve native quotes and literal apostrophes. The original
+  static served-directory assertion passes under Windows parsing on Mac; removing
+  this exact correction makes that assertion fail again. NativeWindows is pending.
+- Test-only corrections compare lexical executable paths using OS normcase, while
+  retaining actual environment-import markers; they do not resolve venv symlinks.
+  The handshake child now deliberately emits its asserted UTF-8/LF protocol.
+  Forcedcp1252 reproduced the old native failure1; corrected native3.11/3.9 each
+  exited0. No production decoder or test assertion was weakened for this fixture.
+- Fresh `affected-pre-freeze-v7/acceptance.json`: **129exact identities perPython
+  3.11/3.9**,21platform/44command/26type/38process, all8suite child exits0.
+  Managed originals/live registry/installed metadata still match. These targeted
+  results are not final source/platform/installer acceptance.
+- NEXT: freeze a new exact-source candidate, push once, execute one fresh actual
+  Ubuntu/Windows matrix plus local full native/floor and rebuilt DMG acceptance.
+  Keep Linux's old crash as failed evidence; a clean rerun is not proof of a causal
+  fix. Do not dispatch further reviewers or relax any sandbox/raw-exit/lifetime gate.
+- Publication stays **ON HOLD**: no tag, draft, release, installed update or restart.
+  The current progress ledger and frozen receipts live outside the tested worktree.
+
+### Earlier implementation evidence (not final follow-up acceptance)
 - Historical frozen d391c85832e4e273f9a7c3a82f367e356c7b7cc3 was accepted on
   Mac/Ubuntu/Windows2022/Windows2025:391identities/129actual child exits0 each;
   its copied DMG original-HTML save/cold-restart passed. **Those artifacts do

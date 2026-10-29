@@ -2386,7 +2386,10 @@ def test_split_banner_is_persisted_only_when_the_actual_url_is_complete(tmp: Pat
     title = "HUB_FRAMED_URL_READY"
     body = ("<title>" + title + "</title><h1>" + title + "</h1>").encode()
     script, marker, ack = tmp / "framed.py", tmp / "bound.json", tmp / "ack.txt"
+    # Emit the UTF-8/LF framing contract deliberately on every OS; redirected
+    # Windows Python otherwise emits its locale's cp1252 and CRLF by default.
     source = ("import json, os, sys, time\nfrom pathlib import Path\n"
+              "sys.stdout.reconfigure(encoding='utf-8', newline='\\n')\n"
               "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
               + "BODY = " + repr(body) + "\n"
               "class H(BaseHTTPRequestHandler):\n"

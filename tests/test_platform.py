@@ -43,6 +43,21 @@ def test_prepend_interpreter_preserves_tokens_and_shared_legacy_semantics():
         assert argv == original, "composition mutated parsed/saved tokens"
 
 
+def test_windows_legacy_single_quoted_option_values_after_equals():
+    from unittest.mock import patch
+    cases = [
+        ("tool --directory='served pages'", ["tool", "--directory=served pages"]),
+        ("tool --label='owner'\"'\"'s notes'", ["tool", "--label=owner's notes"]),
+        ('tool --label="owner\'s notes"', ["tool", "--label=owner's notes"]),
+        ("tool --name=owner's", ["tool", "--name=owner's"]),
+        (r"tool C:\owner's\app.py", ["tool", r"C:\owner's\app.py"]),
+        ('tool "--literal=\'native quotes\'"', ["tool", "--literal='native quotes'"]),
+    ]
+    with patch.object(pf, "IS_WINDOWS", True):
+        for command, expected in cases:
+            assert pf.split_command(command) == expected, (command, pf.split_command(command), expected)
+
+
 def test_split_command_empty():
     assert pf.split_command("") == []
     assert pf.split_command("   ") == []

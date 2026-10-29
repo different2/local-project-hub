@@ -1021,7 +1021,10 @@ def test_project_path_selects_its_python_and_explicit_interpreter_still_wins(tmp
                 launched = handle.program()
                 if pm.POSIX_SETSID and launched == pm.POSIX_SETSID:
                     launched = handle.arguments()[0]  # actual Linux launch wrapper
-                assert launched == str(expected), (
+                # Windows resolves PATHEXT spelling (python.EXE) without
+                # changing the selected environment. Keep lexical venv paths:
+                # resolving symlinks would conflate distinct POSIX environments.
+                assert os.path.normcase(launched) == os.path.normcase(str(expected)), (
                     f"project {path_key} chose {project_python}, explicit={explicit!r}, "
                     f"but Hub launched {launched}; output={logs}"
                 )
