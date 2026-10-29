@@ -1,0 +1,3 @@
+Resume /Users/iff/Documents/Programming/local-project-hub.
+Read HANDOFF.md first, not its historical archive or this old conversation.
+Next task: investigate the installed MSI/source hash mismatch in actual Windows run 40888996043 (QA head 90bee40510edad12cf71b8fb5ed629c0d1436158, runtime 77aaa1877c3c586634f572ede63f9bf7095abb08). Installation and uninstall passed, but the app was not launched. Read ~/.local/share/local-project-hub/acceptance/windows-msi-77aaa18-incomplete/attempt-3/report.json; investigate CRLF/LF first without assuming it. Do not redispatch unchanged QA or repeat accepted full suites. Publication remains ON HOLD. Preserve original projects, live registry, installed Mac app, services and sandboxing. No more independent review rounds.
