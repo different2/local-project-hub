@@ -125,6 +125,14 @@ inside your project. Browser storage quotas still apply; shared/cloud storage
 is not provided. This compatibility does not extend to an external browser.
 These changes are not yet in the published installers.
 
+### Browser controls — 0.7.4 development candidate
+
+**Back**, **Forward**, and **Reload** act on the selected browser tab. Reload
+does not restart its backend; links keep the same-tab/new-tab behavior chosen
+by the page. Downloads, including generated raw-text exports, offer a native
+Save dialog and show completion or failure without opening the saved file.
+These changes are **not yet in published installers**.
+
 ## Updating
 
 **Help → Check for Updates…** shows the newest release; **Download and

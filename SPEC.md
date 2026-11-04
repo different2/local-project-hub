@@ -32,6 +32,12 @@ KNOWN LIMITS OF v0.1 (deferred, not hidden):
 
 CURRENT COMPATIBILITY LIMITS (0.7.4 candidate, not yet published):
   - Managed project sources, dependencies and virtual environments stay read-only.
+  - Back/Forward/Reload follow the selected browser tab; page-defined same-tab
+    links are not rewritten. Reload does not restart a backend.
+  - Browser downloads, including blob/raw-text exports, require a chosen save
+    destination and show progress/completion/failure. Files are not auto-opened;
+    no page-accessible Python filesystem bridge, persistent download history,
+    or download-resume manager is provided.
   - Commands do not run through an implicit shell. Explicitly invoke a shell for
     operators, activation or variable expansion.
   - Custom Python CLI browser flags are inferred only from an unambiguous

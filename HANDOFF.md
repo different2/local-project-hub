@@ -1,160 +1,149 @@
 # HANDOFF — Local Project Hub
 
-## Read this checkpoint first; do not ingest the historical archive by default
+## Read this checkpoint first; not the historical archive
 
-**Publication is ON HOLD.** Do not create a v0.7.4 tag/draft/release, install an
-update, or restart the user's app without new authorization. Public/installed
-latest remains 0.7.3. The owner authorized fixing the Hub, not changing managed
-projects. Preserve original HTML/scripts/venvs, live registry, unrelated services,
-human attribution, renderer sandboxing and immutable published installers.
+**Publication and installed-app changes are ON HOLD.** Do not tag, draft or
+publish0.7.4, install over or restart the user's app, or restart managed services
+without new authorization. Public latest is still **v0.7.3** (rechecked Nov4).
+The owner authorized fixing the Hub, not editing managed HTML/scripts/venvs.
+Preserve the live registry, unrelated services, human attribution, renderer
+sandboxing and immutable published installers. No further independent review
+rounds were requested; direct regression checks are not an independent review.
 
-- Repo: `/Users/iff/Documents/Programming/local-project-hub`
-- GitHub: https://github.com/different2/local-project-hub
-- Tested runtime: **`77aaa1877c3c586634f572ede63f9bf7095abb08`**, version 0.7.4.
-- Subsequent main changes are handoff documentation only, not new tested runtime.
-- Canonical application source is unchanged by the current TEMP Windows QA work.
-- The complete previous handoff is preserved verbatim in
-  [docs/HANDOFF_HISTORY_2026-10-29.md](docs/HANDOFF_HISTORY_2026-10-29.md).
-  Read it only for a specific historical question. This checkpoint wins.
+Repo: `/Users/iff/Documents/Programming/local-project-hub`
+GitHub: https://github.com/different2/local-project-hub
 
-## Verified acceptance — do not rerun these unchanged source gates
+- **Current targeted-tested source: `276a26176e38679a356eb8238e022ab1947883b4`.**
+  `2d91841` adds browser history/downloads; `276a261` fixes Windows packaging.
+  Subsequent documentation-only commits do not change that tested source.
+- **Previous full-platform-tested runtime: `77aaa1877c3c586634f572ede63f9bf7095abb08`.**
+  Its installers do NOT contain the new browser fixes or Windows dependency fix.
+  Do not transfer its full-suite/package acceptance to the newer source.
+- Provider interruption left the changes uncommitted and the root handoff stale.
+  Recovery finished Nov4. Old Oct29 scratch environments/evidence have expired;
+  recovered and fresh evidence now lives outside pruneable scratch storage.
+- [docs/HANDOFF_HISTORY_2026-10-29.md](docs/HANDOFF_HISTORY_2026-10-29.md)
+  preserves older history. Read it only for a specific historical question.
 
-| Environment | Exact identities | PASS | Platform SKIP | Raw child exits |
-|---|---:|---:|---:|---|
-| Native macOS / Qt 6.9.3 | 425 | 422 | 3 | 142, all zero |
-| Ubuntu 24.04 / Qt 6.7.3 | 425 | 422 | 3 | 142, all zero |
-| Windows 2022 / Qt 6.12.0 | 425 | 418 | 7 | 142, all zero |
-| Windows 2025 / Qt 6.12.0 | 425 | 418 | 7 | 142, all zero |
+## Current verified work
 
-Registry/raw-verdict equality and both profile/QProcess lifetime-warning gates
-were independently checked. Actual full CI **40845715963** succeeded; publication
-was skipped. There are also 129 affected identities per Python 3.11/3.9, eleven
-separate native Python 3.9 floor cases, and targeted RED/GREEN/mutant controls.
-These floor cases are not a complete Python 3.9 suite.
+### Browser navigation and downloads — fixed in source, not installed
 
-- **Mac package accepted:** current DMG inspected for source/runtime/signature/
-  deployment floor; copied app saved and cold-restored the owner's original,
-  unchanged trading HTML. Two actual app exits zero, no forced cleanup/survivors;
-  fresh native screenshots show 1 reviewed / 0 queued. Installed app untouched.
-  Fresh pre-handoff protection check again matched all 221 original entries,
-  complete membership, live registry and installed metadata.
-- **Linux package accepted:** actual APT-installed current DEB, matching source,
-  source checkout hidden, visible nonce/native screenshot, wrong-DOM rejection,
-  normal exit/owned cleanup, no sandbox bypass.
-- **MSI metadata accepted; installed-runtime acceptance is still OPEN.**
+- Back/Forward/Reload are visible toolbar/menu actions for the selected browser
+  tab, including popups/private profiles. Starter/nonbrowser controls disable.
+  Page-defined same-tab links remain same-tab. Reload never restarts a backend.
+- `hub/browser_downloads.py` handles actual WebEngine downloads, including blob
+  raw-text exports, with native Save choice, progress/completion/failure,
+  owning-project logging, and cancellation/lifetime handling. Files are never
+  auto-opened; no page-accessible Python filesystem bridge was added.
+- Fresh native Cocoa targeted verification against source276a261:
 
-Current installer SHA-256 values:
+  | Interpreter / Qt | PASS identities | Raw child processes | Exits |
+  |---|---:|---:|---|
+  | Python3.11 / Qt6.9.3 | 40 | 20 | all0 |
+  | Python3.9.6 / Qt6.9.3 | 33 | 13 | all0 |
 
-| Asset | SHA-256 |
-|---|---|
-| `Local.Project.Hub.dmg` | `6619c046a7bc1c8f65041decd8b4d66cc23ab93a2fa385a499da0b573ed448cd` |
-| `Local.Project.Hub.msi` | `ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d` |
-| `Local.Project.Hub.Ubuntu-24.04-amd64.deb` | `d56a9c1c3cb956f99bf4bf20b67ff87cc99a1be2f718dc8fd3ed3400ea3f9211` |
+  Both include all9 browser cases and all21 workflow guards;3.11 also covers
+  popup ownership/nesting/deletion. The3.9 run is targeted floor coverage, not
+  a complete3.9 suite. Exact planned identities/verdicts, callback errors and
+  profile/QProcess lifetime warnings were checked, not just headline totals.
+- Fresh original-source controls reproduce both reports on77aaa18: missing Back
+  and a real blob request without a Save offer. Both exit1 with the exact expected
+  assertion; their failed observations are retained separately from green tests.
+- Actual native Save picker was driven,52 exact UTF-8 bytes saved, fresh native
+  screenshot shows **Download saved** and the full destination, Close worked,
+  normal fixture teardown and actual OS exit0. No owned test service was left.
 
-## Immediate next action — diagnose MSI payload/source parity before native launch
+### Windows MSI source parity — settled; real packaging defect remains
 
-TEMP branch **`diagnose/windows-msi-native`** must NEVER merge into main. It
-contains only the dispatch-only workflow and observer tooling. Actual app input
-is the immutable MSI from run 40845715963 and a separate checkout of exact 77aaa18.
-Only free public Windows-2025 runners are authorized; no Windows binary on Mac.
+TEMP branch **`diagnose/windows-msi-native` must NEVER merge into main**.
+QA-only head is **`6f036c126a7149eac48a78651ce30960ff2802a7`**.
+Actual original-MSI attempt **40931912478** completed FAILURE:
+https://github.com/different2/local-project-hub/actions/runs/40931912478
 
-Latest QA-only head: **`90bee40510edad12cf71b8fb5ed629c0d1436158`**.
-Latest actual native attempt **40888996043** COMPLETED FAILURE:
-https://github.com/different2/local-project-hub/actions/runs/40888996043
+- All22 installed runtime files match an explicit immutable expected reference.
+  The only canonical-source/payload difference is LF→CRLF:8,795 inserted CR
+  bytes, no other byte changes. Raw canonical/expected/installed manifests were
+  retained. Comparison still enforces exact bytes and Python-file membership;
+  installed files were NOT normalized and arbitrary EOL variants are not accepted.
+- Real `msiexec /i` and exact-ProductCode `/x` both exited0. Original source and
+  MSI preservation passed; no remaining related product/launcher was reported.
+- The app was **NOT LAUNCHED**. After parity passed, the gate correctly stopped:
+  `SmokeError: installed WebEngine helper missing/ambiguous: []`.
+- This is a real bundle-dependency omission, not another reason to relax the
+  observer. Qt6.12 splits WebEngine into **`PySide6-WebEngine==6.12.0.140`**.
+  `PySide6==6.12.0` installs it transitively in CI; Essentials+Addons alone in the
+  old Briefcase package did not. Original read-only MSI inventory also lacked
+  WebEngine modules/helper/resource packs. Official package metadata is retained.
+- Repository package requirements and Windows test/build install commands now
+  explicitly pin that split wheel. Mac/Linux requirements/support floors stay
+  unchanged.21 workflow tests per interpreter and6 isolated config controls pass;
+  all12 immutable-reference observer helper tests pass in their proper Git layout.
+  A failed helper replay from a plain file copy is retained as a harness-layout
+  failure, not a new product failure or accepted helper result.
 
-- Real Windows2025-vs2026 host and expected MSI bytes/identity were verified.
-- `msiexec /i` actually succeeded, exit 0; authoritative component lookup found
-  the installed AMD64 PE. `msiexec /x` of its exact ProductCode also succeeded,
-  exit 0, with no reboot, remaining related product or remaining launcher.
-- The installed app was **NOT LAUNCHED**: strict payload comparison first rejected
-  hashes for all 22 runtime source paths. Source/artifact preservation passed.
-- Check Windows checkout CRLF versus the QA workflow's forced LF FIRST, but this
-  is an unproved hypothesis. Inspect actual bytes/hashes; do not normalize away
-  a discrepancy or assume all mismatches are harmless. Keep the parity gate.
-- Mac read-only CAB inspection was attempted: embedded cabinet extracted to
-  `windows-msi-native/actual-payload.cab`; `/usr/bin/tar -tf` failed with
-  `Invalid CAB header`. No byte/line-ending conclusion was obtained. Do not
-  repeat that unchanged decoder attempt. Use another read-only decoder or
-  collect narrowly scoped payload bytes/hash/EOL diagnostics on the owned VM.
+**Next Windows gate:** build a replacement MSI bound to the corrected source,
+then inspect the actual package and repeat native installed-runtime acceptance.
+The old MSI is immutable and rejected; do not redispatch it unchanged. A new
+candidate needs a newly bound exact payload reference, not the hard-pinned77aaa18
+vector or a normalization fallback. Check the split distribution's exact
+6.12.0.140 version separately from Qt6.12.0. Require actual installed WebEngine,
+source/Qt parity, nonce DOM/native pixels, wrong-DOM rejection, sandbox evidence,
+normal WM_CLOSE/zero exit, no forced cleanup/survivors and exact uninstall.
+Only free public Windows2025 runners are authorized; never run Windows binaries
+on this Mac. No replacement build, new full matrix or publication has run yet.
 
-Private durable attempt evidence is already retained at:
-`~/.local/share/local-project-hub/acceptance/windows-msi-77aaa18-incomplete/`.
-Read `attempt-3/report.json` there first; its manifest explicitly leaves native
-runtime verification false. It also preserves earlier failures and a verified
-QA-source Git bundle. Scratch copies remain in
-`~/.hermes/cache/scratch/lph-release-0.7.4/candidate-v6/windows-msi-native/run-v3/`.
-No QA worker or CI watcher remains pending. Do not redispatch the same source.
-After a demonstrated observer correction, run only this installer gate, requiring
-installed source/Qt parity, nonce DOM/native pixels, normal WM_CLOSE/zero exit,
-no forced cleanup/survivors, source restoration and exact-ProductCode uninstall.
+### Unexpected observability backend exit — cause still OPEN
 
-Earlier native attempts **40866713835** and **40888259985** FAILED BEFORE MSI
-installation. Their concrete QA problems were corrected, not application bugs:
-1. Old guard rejected the real Windows-2025-vs2026 runner image.
-2. A follow-up copied Windows `os.environ` into a case-sensitive dict and lost
-   lookup of `ImageOS` because the actual copied key was uppercase `IMAGEOS`.
-Current eight helper tests pass, including both real image variants, uppercase
-keys and self-hosted/wrong-OS rejection; the uppercase case was RED first.
+Recovered installed-terminal evidence confirms two unrequested code15 exits on
+Oct28 at21:47:54 and22:30:44, without a preceding Hub terminating line. A deliberate
+stop at22:19:57 has that line and is correctly not classified as an error.
+Sender/cause is unknown; do not equate a currently live server with refuting the
+report, or claim a selection regression explains the historical terminations.
 
-Retain failed and accepted observations separately. On eventual completion,
-remove owned TEMP refs only after verified evidence + a private Git bundle;
-keep worktree files. Do not rebuild the MSI or rerun the full source matrix
-merely to repair this observer. Runtime acceptance remains OPEN.
+The strengthened real sidebar select-away/back test preserves uploaded DOM,
+manager/QProcess/PID, no finished event, and an independent fresh HTTP200 response.
+The unrequested-termination positive control still reports genuine failure.
+Both pass on3.11 and3.9. Managed sources/services were not changed or restarted.
 
-## Important limits and owner decisions
+**Test-runner safety:** `tests/run_all.py` still has an unrelated-port killer:
+its source-literal inventory can include8787 and cleanup lacks fixture ownership.
+This is a demonstrated hazard, NOT proof it caused those historical exits. Do
+not run its top-level main on this Mac. Scoped checks used only `run_one`, isolated
+homes/state/temp, serial native children and strict raw exits; no port cleanup.
 
-- The owner explicitly chose direct regression verification and **no further
-  independent review rounds**. Both earlier concerns-found review verdicts remain
-  failed; later direct tests must not be relabelled an independently clear review.
-- Historical Linux nested-popup child -11 failures remain failed. The bounded
-  diagnostic did not reproduce the segfault or capture a fault stack. A separate,
-  deterministic deleted-widget title callback was corrected by guarding invalid
-  JavaScript `None`; ordinary/empty-title behavior and a removed-guard mutant were
-  tested. The clean current full run does not establish the old segfault's cause.
-- Old Linux diagnostic refs are deleted, never merged. Its worktree, all tracked
-  bytes, raw evidence and verified private complete-history bundle are preserved.
-- Qt on macOS can normalize Unicode argv canonically; do not promise byte-exact
-  Unicode arguments or modify user scripts to hide this upstream limitation.
-- Source credit is human-only; preserve Tahir's acknowledgement and `.githooks`.
-  GitHub's contributor sidebar still cached CommandCodeBot at the last read-only
-  check. No further history rewrite, watcher or support request was authorized.
-- A future release needs explicit owner approval and deliberate eligible source/
-  artifact binding; do not tag this skip-CI development checkpoint automatically.
+## Durable evidence and recovery tools
 
-## Evidence and tools — load details only when needed
+Current private evidence root (owner-only; never add its contents to public Git):
+`~/.local/share/local-project-hub/acceptance/browser-followup-2026-11-03/`
 
-Private durable accepted evidence (not public repo content):
-- `~/.local/share/local-project-hub/acceptance/platforms-77aaa18/` — verified
-  631-file manifest, all source raw logs, current three installers, Mac/Linux QA.
-- `~/.local/share/local-project-hub/acceptance/callback-77aaa18-targeted/` — direct
-  proof, real failed prior results, owner decision and diagnostic limitations.
-- `~/.local/share/local-project-hub/acceptance/linux-popup-diagnostic-6b240e1/`
+- `native-py311-final/`, `native-py39-final/`: plans, raw logs/exits/source hashes.
+- `negative-baseline/`: actual original-source failures, separate from green tests.
+- `native-ui/`: observations, exact saved export, native screenshots and normal exit.
+- `msi-attempt-4/`: recovered actual run40931912478 report/install/uninstall logs.
+- `qa-source/` and verified `qa-source-6f036c1.bundle`: exact QA tooling/history.
+- `windows-proof-v2/`: raw installed parity,12 helper checks, official PyPI metadata
+  and6 isolated dependency controls. `windows-proof/` retains the failed replay.
+- `historical-observability-terminal.txt`: original installed-app exit evidence.
+- `CHECKPOINT.md`, verification summary and file manifest: current acceptance scope.
 
-Scratch current root: `~/.hermes/cache/scratch/lph-release-0.7.4/candidate-v6/`.
-The detailed live ledger is `../compatibility-pass/STATUS.md`; read its CURRENT
-block only, not all historical checkpoints. Native MSI results live under
-`windows-msi-native/` (first attempt), `run-v2/`, and current `run-v3/`.
+Previous durable evidence remains under `acceptance/platforms-77aaa18/`,
+`callback-77aaa18-targeted/` and `windows-msi-77aaa18-incomplete/`.
+Prior full-source CI40845715963 accepted425 identities per platform: Mac/Linux
+422PASS+3SKIP, each Windows418PASS+7SKIP,142 actual children/all0 per platform.
+Mac/Linux installed-package acceptance belongs to that old source only.
+The original MSI SHA256 remains
+`ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d`.
 
-`gh`: `/Users/iff/.local/bin/gh` (different2). Packaging/observer Python:
-`~/.hermes/cache/scratch/lph-release-0.7.2/qt693-buildenv/bin/python`.
-Existing `tests/run_all.py` can kill unrelated port holders; do not run it on
-this Mac. Accepted QA used a disclosed scratch safety transport instead.
-Never restart the gateway or user services to work around provider limits.
+Fresh test envs are scratch-only under `~/.hermes/cache/scratch/lph-resume-ywdcm4ch/`
+(`py311/bin/python`, `py39/bin/python`), both Qt6.9.3. They may expire. Reproduction
+transport sources are preserved with evidence; no browser profiles/venvs were
+archived. Existing repo `.hubenv`/`.buildenv` still contain Qt6.7.3 and were NOT
+updated: default `run.sh` is not the fresh verified runtime. `gh` is
+`/Users/iff/.local/bin/gh`; installed Hub PID14530 still dates from Oct27.
 
-## Graphify — available and actually queried now
-
-Existing untracked `graphify-out/graph.json` belongs to this repo; preserve it.
-It contains 1,928 nodes / 4,864 edges, valid unique IDs/endpoints, and all 22
-runtime-file manifest hashes matched current code. Actual CLI query and reverse
-`calls` traversal identified `prepend_interpreter` consumers at
-`hub/process_manager.py:394`, `hub/static_site.py:24`, and its platform test.
-Source checks confirmed the two runtime consumers. This is useful architecture
-navigation, not runtime proof; it did not diagnose the Windows environment bug.
-
-Use only for relationship/navigation work, not every small edit. Keep
-`GRAPHIFY_NO_AUTO_REFRESH=1` so the CLI preserves the owner's updated skill.
-A focused command (no rebuild/model extraction needed):
-
-```sh
-GRAPHIFY_NO_AUTO_REFRESH=1 graphify affected hub_platform_prepend_interpreter --relation calls --depth 1 --graph graphify-out/graph.json
-```
+Keep Tahir's human acknowledgement and `.githooks`. No history rewrite or extra
+review is authorized. Earlier Linux nested-popup -11 failures remain failures:
+later clean runs do not explain their cause. Preserve `graphify-out/`; it is
+untracked and predates these changes, so it is navigation data, not current
+runtime acceptance. Do not auto-refresh its models or ingest old history to resume.
