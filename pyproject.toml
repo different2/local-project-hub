@@ -14,9 +14,8 @@ license-files = ["LICENSE"]
 author = "Local Project Hub contributors"
 author_email = "9109630+different2@users.noreply.github.com"
 
-# macOS: the app icon and the runtime it ships with. QtWebEngine is required
-# (the dashboard panes are real embedded browsers), so PySide6-Addons must be
-# in the requires list or the packaged app cannot import QWebEngineView.
+# QtWebEngine is required for dashboard panes. Addons supplies it on Mac/Linux;
+# Qt6.12 on Windows splits it into the separately pinned WebEngine package.
 # Briefcase appends the extension itself, so the value must NOT include it.
 icon = "assets/icon"
 
@@ -31,6 +30,7 @@ requires = [
     "PySide6-Addons==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'",
     "PySide6-Essentials==6.12.0; sys_platform == 'win32'",
     "PySide6-Addons==6.12.0; sys_platform == 'win32'",
+    "PySide6-WebEngine==6.12.0.140; sys_platform == 'win32'",
     # The app's own HTTPS (update check + download) verifies against a CA
     # bundle that always exists. The bundle's Python has NO default trust
     # store — its compiled-in paths point at the python.org framework

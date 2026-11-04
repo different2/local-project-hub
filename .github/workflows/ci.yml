@@ -69,9 +69,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Addons contains QtWebEngineWidgets/the renderer helper; the PySide6
-          # metapackage resolves the matching pair. Pin the complete trio and
-          # assert the real WebEngine import below, not only import PySide6.
+          # Addons supplies WebEngine before Qt6.12. Windows6.12 uses the
+          # separate WebEngine wheel; pin it explicitly just as the bundle does,
+          # rather than relying on the PySide6 metapackage to hide an omission.
           #
           # PyYAML is needed by tests/test_workflow_yaml.py, which guards this
           # very file. Without it that guard dies with ModuleNotFoundError on
@@ -86,7 +86,7 @@ jobs:
           # the Linux and Windows runners from installing it) is the AppKit
           # piece of the About-box fix, pinned to what the shipped bundles
           # contain.
-          python -m pip install "PySide6-Essentials==6.9.3; sys_platform == 'darwin'" "PySide6-Addons==6.9.3; sys_platform == 'darwin'" "PySide6==6.9.3; sys_platform == 'darwin'" "PySide6-Essentials==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6-Addons==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6-Essentials==6.12.0; sys_platform == 'win32'" "PySide6-Addons==6.12.0; sys_platform == 'win32'" "PySide6==6.12.0; sys_platform == 'win32'" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
+          python -m pip install "PySide6-Essentials==6.9.3; sys_platform == 'darwin'" "PySide6-Addons==6.9.3; sys_platform == 'darwin'" "PySide6==6.9.3; sys_platform == 'darwin'" "PySide6-Essentials==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6-Addons==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6==6.7.3; sys_platform != 'win32' and sys_platform != 'darwin'" "PySide6-Essentials==6.12.0; sys_platform == 'win32'" "PySide6-Addons==6.12.0; sys_platform == 'win32'" "PySide6==6.12.0; sys_platform == 'win32'" "PySide6-WebEngine==6.12.0.140; sys_platform == 'win32'" "Pillow==11.3.0" "certifi==2026.10.18" "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"
           python -m pip install pytest PyYAML
 
       # Must come BEFORE the import check below: the check needs libEGL and
@@ -104,7 +104,8 @@ jobs:
       - name: Verify QtWebEngine is importable
         shell: bash
         run: |
-          # QtWebEngineWidgets ships in the Addons wheel. Assert it imports
+          # Assert the actual WebEngine module imports, including the Windows
+          # Qt6.12 split wheel, not merely the core PySide6 version.
           # so a resolution problem names itself here instead of surfacing later
           # as a bare "Run the test suite" failure with no output to read.
           python -c "import PySide6, os; d=os.path.dirname(PySide6.__file__); print('PySide6', PySide6.__version__, 'at', d)"
@@ -162,8 +163,8 @@ jobs:
           # tests/test_workflow_yaml.py fails if it goes unpinned again.
           python -m pip install "briefcase==0.4.6"
           # Match Windows tests and the platform-marked package dependencies.
-          # macOS deliberately retains 6.7.3 and its existing support floor.
-          python -m pip install "PySide6==6.12.0" "PySide6-Addons==6.12.0" "PySide6-Essentials==6.12.0" "Pillow==11.3.0"
+          # macOS deliberately retains 6.9.3 and its existing support floor.
+          python -m pip install "PySide6==6.12.0" "PySide6-Addons==6.12.0" "PySide6-Essentials==6.12.0" "PySide6-WebEngine==6.12.0.140" "Pillow==11.3.0"
       - name: Build the MSI installer
         # `--msi` was never a valid flag — this job is tag-gated and the repo had
         # no tags until v0.3.7, so the command had never once been executed and

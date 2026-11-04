@@ -48,7 +48,7 @@ Windows uses Python 3.11 and the separately validated Windows Qt version:
 
 ```powershell
 py -3.11 -m venv .hubenv
-.\.hubenv\Scripts\python.exe -m pip install "PySide6==6.12.0" "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0" "Pillow==11.3.0" "certifi==2026.10.18"
+.\.hubenv\Scripts\python.exe -m pip install "PySide6==6.12.0" "PySide6-Essentials==6.12.0" "PySide6-Addons==6.12.0" "PySide6-WebEngine==6.12.0.140" "Pillow==11.3.0" "certifi==2026.10.18"
 $env:LOCAL_PROJECT_HUB_HOME = Join-Path $PWD '.hubstate'
 .\.hubenv\Scripts\python.exe main.py
 ```
@@ -73,11 +73,12 @@ PySide6 distributions.
 | Dependency | macOS | Windows | Ubuntu 24.04 amd64 |
 |---|---|---|---|
 | PySide6, PySide6-Essentials, PySide6-Addons | 6.9.3 | 6.12.0 | 6.7.3 |
+| PySide6-WebEngine (separate Qt6.12 distribution) | supplied by Addons | 6.12.0.140 | supplied by Addons |
 | Pillow (build/test tool) | 11.3.0 | 11.3.0 | 11.3.0 |
 | certifi | 2026.10.18 | 2026.10.18 | 2026.10.18 |
 | pyobjc-framework-Cocoa | 12.2.2 (Python 3.10+; see dev exception below) | not installed | not installed |
 
-The `sys_platform` markers in `pyproject.toml` select the platform's pair.
+The `sys_platform` markers in `pyproject.toml` select the platform's dependencies.
 Windows CI/build use 6.12.0; macOS uses 6.9.3; Linux retains 6.7.3. The test
 install evaluates the same platform markers. Linux source development uses the
 same venv recipe above with all three PySide6 versions set to 6.7.3.
@@ -87,7 +88,7 @@ Where the pins live (they move together):
 | File | Pins |
 |---|---|
 | `.github/workflows/ci.yml` | the coordinated test set and Windows/Linux builders; the local Mac helper checks package pins |
-| `pyproject.toml` → `requires` | the PySide6 pair, certifi and pyobjc — what briefcase bundles into the app |
+| `pyproject.toml` → `requires` | Essentials/Addons, Windows' separate WebEngine, certifi and pyobjc — what Briefcase actually bundles |
 | local venvs (`.hubenv`, `.buildenv`) | the whole set, installed by hand |
 
 **Why 6.9.3 on macOS:** Qt6.7.3 can crash after an accessibility client has
@@ -118,6 +119,17 @@ version failed those same cases on the newer host. Deliberately wrong-title
 controls remained red, so successful observation collection was not confused
 with successful rendering. This is a platform-specific dependency correction,
 not a sandbox bypass or an increase in the macOS 12.0 support floor.
+
+**Windows Qt6.12 packaging needs the separate WebEngine wheel.** Official
+`PySide6==6.12.0` metadata depends on `PySide6_WebEngine==6.12.0.140`; Addons
+alone no longer supplies the browser. CI's umbrella package previously masked
+an incomplete explicit Briefcase dependency list: the original0.7.4 MSI had
+neither WebEngine modules, renderer executable nor resource packs. Its exact
+installed-source parity passed, but the native gate correctly refused to launch
+it. Package, source CI and Windows builder now explicitly pin the split wheel;
+Mac/Linux dependencies are unchanged. This corrects repository configuration,
+not the immutable old MSI; replacement-installer/native acceptance is still
+required. See HANDOFF.md for the exact original evidence and current gate.
 
 **Why certifi:** the packaged app's Python has no default CA store — its
 compiled-in paths point at the python.org framework location, which is not

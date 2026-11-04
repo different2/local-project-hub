@@ -261,6 +261,45 @@ def test_gui_dependency_pins_are_coordinated() -> None:
         assert not re.search(r"(?<![\w-])Pillow(?!==)", commands), f"unpinned Pillow in {job}"
 
 
+def test_windows_split_webengine_is_explicitly_pinned_in_package_and_ci() -> None:
+    """Qt6.12 Addons no longer contains the browser; the metapackage hid this."""
+    import ast
+    import re
+    import shlex
+    import yaml
+    from packaging.requirements import Requirement
+
+    text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    common = re.split(r"(?m)^\[tool\.briefcase\.app\.", text, maxsplit=1)[0]
+    match = re.search(r"(?ms)^requires\s*=\s*(\[.*?^\])", common)
+    assert match, "missing actual Briefcase dependency array"
+    requirements = [Requirement(raw) for raw in ast.literal_eval(match.group(1))]
+    for platform in ("win32", "darwin", "linux"):
+        engine = [req for req in requirements
+                  if req.name.lower().replace("_", "-") == "pyside6-webengine"
+                  and (req.marker is None or req.marker.evaluate({"sys_platform": platform}))]
+        if platform == "win32":
+            assert len(engine) == 1 and str(engine[0].specifier) == "==6.12.0.140", (
+                "Windows MSI omits the separate Qt6.12 WebEngine package or has an unverified version", engine)
+        else:
+            assert not engine, "Windows WebEngine split must not alter Mac/Linux dependencies"
+
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    for job in ("test", "build-windows"):
+        engine = []
+        for step in jobs[job]["steps"]:
+            for line in step.get("run", "").splitlines():
+                if line.lstrip().startswith("#"):
+                    continue
+                for token in shlex.split(line):
+                    if token.startswith("PySide6-WebEngine"):
+                        req = Requirement(token)
+                        if req.marker is None or req.marker.evaluate({"sys_platform": "win32"}):
+                            engine.append(req)
+        assert len(engine) == 1 and str(engine[0].specifier) == "==6.12.0.140", (
+            job, "CI must pin the same split WebEngine version rather than hide it behind the umbrella package", engine)
+
+
 def test_runtime_qt_matches_packaged_platform_pin() -> None:
     """Verify the actual interpreter, not merely the workflow's pip strings."""
     import PySide6
