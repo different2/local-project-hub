@@ -62,7 +62,7 @@ a3.12.16 regression or a product fix. A green diagnostic means collection finish
 A **strict full unchanged052033e source** run has now been dispatched from temporary
 `diagnose/linux-input` workflow **`af3fdb7b697776a4e4a5a321033919742a6373f0`**:
 Ubuntu24.04/Python3.12.16/Qt6.7.3, explicit `QT_QPA_PLATFORM=xcb` under Xvfb.
-Recover that new run ID, watch once, then download `full-source-linux-xcb` and
+Run **41883712775**, notified waiter `proc_32fb052f93ba`; download `full-source-linux-xcb` and
 reconcile every identity/raw exit before accepting it. No assertion, sandbox,
 source or exit-policy changes. Never merge the temporary transport into main.
 
@@ -76,7 +76,7 @@ Read-only mount/copy, bundle source/membership/dependency/helper inspection pass
 The owned DMG-derived app painted its initial nonce fixture. CDP trusted pointer
 observed Replay navigation, but native background pixels stayed stale; native
 Back/Forward/Reload, download Save/exact bytes/result/Close are not accepted yet.
-The foreground tool session expired. **One permission question timed out**; do not
+The foreground tool session expired. **One permission question is unanswered**; do not
 bypass the session grant or re-ask automatically. This is an unverified interaction,
 not a confirmed application painting defect. Needs owner permission/help for a brief
 isolated-package foreground check. Never activate or replace the installed Hub.
