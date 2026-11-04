@@ -1,47 +1,42 @@
-# TEMP diagnostic only: never merge into main; no build/publication/install.
-name: TEMP Linux Qt input calibration
+# TEMP verification transport only: never merge into main; no build/publication.
+name: TEMP full Linux native-display source verification
 'on':
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  input-probe:
+  full-source:
     if: github.repository == 'different2/local-project-hub' && github.event.repository.private == false && github.ref == 'refs/heads/diagnose/linux-input'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ['3.12.15', '3.12.16']
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v5
         with:
-          path: qa
-          persist-credentials: false
-      - uses: actions/checkout@v5
-        with:
           ref: 052033e46ed014482b3ecf7c0fee337beb9b91cd
-          path: source
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python }}
-      - name: Install exact Qt and complete declared native dependencies
+          python-version: '3.12.16'
+      - name: Install pinned source stack and complete native dependencies
         run: |
           sudo apt-get update
-          packages=$(python -c "import tomllib; c=tomllib.load(open('source/pyproject.toml','rb')); print(' '.join(c['tool']['briefcase']['app']['hub']['linux']['system']['ubuntu']['noble']['system_runtime_requires']))")
-          sudo apt-get install -y --no-install-recommends $packages xvfb xauth
-          python -m pip install PySide6==6.7.3 certifi==2026.10.18
-      - name: Collect unchanged case evidence under both display backends
+          packages=$(python -c "import tomllib; c=tomllib.load(open('pyproject.toml','rb')); print(' '.join(c['tool']['briefcase']['app']['hub']['linux']['system']['ubuntu']['noble']['system_runtime_requires']))")
+          sudo apt-get install -y --no-install-recommends $packages xvfb xauth dbus-daemon libgl1-mesa-dri fonts-dejavu-core
+          python -m pip install PySide6==6.7.3 PySide6-Essentials==6.7.3 PySide6-Addons==6.7.3 Pillow==11.3.0 certifi==2026.10.18 pytest PyYAML
+          python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('QtWebEngine OK', __import__('PySide6').__version__)"
+      - name: Strict full immutable source under native X11 backend
+        shell: bash
         run: |
-          QT_QPA_PLATFORM=offscreen python -B qa/tools/temp_linux_input_probe.py --source source --output "$RUNNER_TEMP/input-offscreen"
-          xvfb-run -a env QT_QPA_PLATFORM=xcb python -B qa/tools/temp_linux_input_probe.py --source source --output "$RUNNER_TEMP/input-xcb"
+          # The ordinary workflow starts Xvfb but leaves Qt on its offscreen default.
+          # Here only the explicit backend differs: no source/assertion/raw-exit edits.
+          xvfb-run -a env QT_QPA_PLATFORM=xcb python -B tools/run_regression_strict.py --output "$RUNNER_TEMP/source-xcb" 2>&1 | tee "$RUNNER_TEMP/source-xcb-output.log"
+          exit "${PIPESTATUS[0]}"
       - uses: actions/upload-artifact@v5
         if: always()
         with:
-          name: linux-input-${{ matrix.python }}
+          name: full-source-linux-xcb
           path: |
-            ${{ runner.temp }}/input-offscreen/
-            ${{ runner.temp }}/input-xcb/
+            ${{ runner.temp }}/source-xcb/
+            ${{ runner.temp }}/source-xcb-output.log
           if-no-files-found: error
           retention-days: 7
