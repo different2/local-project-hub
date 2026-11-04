@@ -41,7 +41,9 @@ class SmokeError(RuntimeError):
 
 EXPECTED_UPGRADE_CODE = "{25F599D7-F44F-5B9D-8CC0-FC312B836125}"
 EXPECTED_QT = "6.12.0"
-# TEMP: this is one demonstrated MSI/source byte vector, not a general EOL policy.
+EXPECTED_WEBENGINE = "6.12.0.140"
+# Historical known-good/negative controls ONLY. Native entry requires a new
+# explicitly pinned candidate reference; it cannot fall back to this old vector.
 PINNED_SOURCE_SHA = "77aaa1877c3c586634f572ede63f9bf7095abb08"
 PINNED_MSI_SHA256 = "ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d"
 PINNED_MSI_BYTES = 108763314
@@ -443,7 +445,8 @@ def installed_payload(source: Path, launcher: Path, expected_version: str) -> di
     hashes = compare_payload(source, app)
     metadata = {}
     for folder, names in ((app, {"hub": expected_version}), (packages, {
-        "pyside6-essentials": EXPECTED_QT, "pyside6-addons": EXPECTED_QT, "shiboken6": EXPECTED_QT})):
+        "pyside6-essentials": EXPECTED_QT, "pyside6-addons": EXPECTED_QT,
+        "shiboken6": EXPECTED_QT, "pyside6-webengine": EXPECTED_WEBENGINE})):
         found = {}
         for path in folder.glob("*.dist-info/METADATA"):
             parsed = BytesParser().parsebytes(path.read_bytes())
@@ -462,6 +465,20 @@ def installed_payload(source: Path, launcher: Path, expected_version: str) -> di
             qt_version = ast.literal_eval(node.value)
     if qt_version != EXPECTED_QT:
         raise SmokeError(f"bundled PySide6 literal version differs: {qt_version}")
+    modules, libraries, resources = {}, {}, {}
+    for target, names in ((modules, ("QtWebEngineCore.pyd", "QtWebEngineWidgets.pyd")),
+                          (libraries, ("Qt6Core.dll", "Qt6WebEngineCore.dll", "Qt6WebEngineWidgets.dll")),
+                          (resources, ("qtwebengine_resources.pak", "qtwebengine_resources_100p.pak",
+                                       "qtwebengine_resources_200p.pak", "qtwebengine_locales/en-US.pak"))):
+        for name in names:
+            paths = list(pyside.rglob(name))
+            if (len(paths) != 1 or paths[0].is_symlink() or not paths[0].is_file()
+                    or not paths[0].resolve().is_relative_to(pyside.resolve()) or paths[0].stat().st_size == 0):
+                raise SmokeError(f"installed WebEngine module/library/resource missing/ambiguous: {name}")
+            path = paths[0]
+            if target is not resources:
+                check_pe(path)
+            target[name] = dict(path=str(path), bytes=path.stat().st_size, sha256=sha256_file(path))
     helpers = list(pyside.rglob("QtWebEngineProcess.exe"))
     if len(helpers) != 1:
         raise SmokeError(f"installed WebEngine helper missing/ambiguous: {helpers}")
@@ -471,7 +488,8 @@ def installed_payload(source: Path, launcher: Path, expected_version: str) -> di
         raise SmokeError("installed QtWebEngine resources/locales missing")
     return dict(launcher=str(launcher), launcher_sha256=sha256_file(launcher), app=str(app),
                 app_version=metadata["hub"]["version"], qt_version=qt_version,
-                helper=str(helper), distributions=metadata, source_hashes=hashes)
+                helper=str(helper), helper_sha256=sha256_file(helper), distributions=metadata,
+                webengine_modules=modules, qt_libraries=libraries, webengine_resources=resources, source_hashes=hashes)
 
 
 # Only this synthetic, stdlib-only project is ever registered or executed.
@@ -899,6 +917,24 @@ def installer_run(argv: list[str], environment: dict, timeout: float) -> dict:
                     error="msiexec client timed out; service completion is unproven")
 
 
+def preinstall_candidate_binding(args, root: Path, msi: Path, report: dict) -> dict:
+    import windows_msi_candidate as candidate
+    required = ("reference", "reference_sha256", "build_run_json", "build_jobs_json", "build_artifact_json")
+    if any(not getattr(args, key, None) for key in required):
+        raise SmokeError("native candidate inspection requires explicit reference digest and actual run/job/artifact metadata")
+    reference = candidate.load_reference(args.reference, args.reference_sha256)
+    if args.source_sha != reference["source_sha"] or args.expected_version != reference["version"]:
+        raise SmokeError("native source SHA/version differs from exact candidate reference")
+    report["artifact_binding"] = candidate.verify_build_binding(reference,
+        candidate.read_json(args.build_run_json), candidate.read_json(args.build_jobs_json), candidate.read_json(args.build_artifact_json))
+    candidate.verify_msi(msi, reference)
+    if candidate.canonical_vector(root, source_sha=reference["source_sha"]) != reference["files"]:
+        raise SmokeError("candidate reference differs from immutable source bytes/membership")
+    report["candidate_reference"] = dict(path=str(args.reference), sha256=args.reference_sha256,
+                                          source_sha=reference["source_sha"], msi=reference["msi"])
+    return reference
+
+
 def run_smoke(args, report: dict) -> None:
     report["host"] = native_preflight()  # Before touching source, installer, state or Win32 APIs.
     import psutil
@@ -922,15 +958,15 @@ def run_smoke(args, report: dict) -> None:
         if stream.read(8) != bytes.fromhex("d0cf11e0a1b11ae1"):
             raise SmokeError("--msi is not an MSI compound-file container")
     msi_hash = sha256_file(msi)
-    if msi_hash != PINNED_MSI_SHA256 or msi.stat().st_size != PINNED_MSI_BYTES:
-        raise SmokeError("TEMP smoke requires the exact demonstrated MSI bytes")
+    reference = preinstall_candidate_binding(args, root, msi, report)
+    checkpoint(output, report)
     api, native = MsiApi(), NativeWindows()
     properties = dict(api.rows(msi, "SELECT `Property`, `Value` FROM `Property`", 2))
     product = validate_msi_properties(properties, args.expected_version)
-    if product != PINNED_PRODUCT_CODE:
-        raise SmokeError("TEMP smoke requires the exact demonstrated ProductCode")
+    # ProductCode comes from this exact hash-pinned MSI's read-only database.
+    # It is never guessed from a name/registry entry and is the only uninstall target.
     files = api.rows(msi, "SELECT `File`.`File`, `File`.`FileName`, `Component`.`ComponentId`, `Component`.`KeyPath`, `Component`.`Attributes` FROM `File`, `Component` WHERE `File`.`Component_` = `Component`.`Component`", 5)
-    report["msi"] = dict(path=str(msi), sha256=sha256_file(msi), bytes=msi.stat().st_size,
+    report["msi"] = dict(path=str(msi), sha256=msi_hash, bytes=msi.stat().st_size,
                          properties={k: properties[k] for k in ("ProductCode", "UpgradeCode", "ProductName", "ProductVersion")})
     baseline = dict(product_state=api.state(product), related=api.related(properties["UpgradeCode"]), names=preexisting_names())
     report["preinstall"] = baseline
@@ -940,8 +976,9 @@ def run_smoke(args, report: dict) -> None:
     work = output / "_runtime"
     work.mkdir()
     expected_source = work / "exact-msi-source-reference"
-    report["source_reference"] = derive_payload_reference(
-        root, expected_source, source_sha=args.source_sha, msi_sha256=msi_hash)
+    import windows_msi_candidate as candidate
+    report["source_reference"] = candidate.derive_candidate_reference(root, expected_source, reference)
+    report["source_reference"]["reference_sha256"] = args.reference_sha256
     checkpoint(output, report)
     fixture = seed_fixture(root, work)
     report["fixture"] = fixture
@@ -1090,6 +1127,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1], help="checkout at the exact source SHA, not the TEMP workflow commit")
     parser.add_argument("--expected-text", help="optional deliberate wrong-body full-run failure control")
+    parser.add_argument("--reference", type=Path, help="actual source/run/artifact/MSI-bound candidate manifest (required on Windows)")
+    parser.add_argument("--reference-sha256", help="explicit SHA-256 pin for the candidate manifest")
+    parser.add_argument("--build-run-json", type=Path)
+    parser.add_argument("--build-jobs-json", type=Path)
+    parser.add_argument("--build-artifact-json", type=Path)
     args = parser.parse_args(argv)
     if args.output.exists() or args.output.is_symlink():
         print("refusing to clobber existing --output", file=sys.stderr)

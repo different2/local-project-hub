@@ -1,77 +1,119 @@
-# TEMP: native installed-MSI acceptance only; never merge this workflow into main.
+# TEMP: early native installed-MSI QA only. NEVER merge this branch into main.
+# Intentionally unbound until the parent adds a freshly generated real reference.
 name: TEMP installed Windows MSI acceptance
 'on':
   workflow_dispatch:
+    inputs:
+      reference_sha256:
+        description: SHA-256 of the real source/run/job/artifact/MSI-bound reference
+        type: string
+        required: true
 permissions:
   contents: read
   actions: read
 jobs:
   msi-native:
     name: Install, render, close and uninstall exact MSI (Windows 2025)
+    # Public standard hosted runner only; the diagnostic branch is never main.
+    if: github.repository == 'different2/local-project-hub' && github.event.repository.private == false && github.ref == 'refs/heads/diagnose/windows-msi-native'
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      EXPECTED_REFERENCE_SHA256: ${{ inputs.reference_sha256 }}
     defaults:
       run:
         shell: pwsh
     steps:
-      - name: Preserve exact source checkout line endings
+      - name: Preserve exact source and reference line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
         with:
           path: qa
-          persist-credentials: false
-      - uses: actions/checkout@v5
-        with:
-          ref: 77aaa1877c3c586634f572ede63f9bf7095abb08
-          path: source
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           architecture: x64
-      - name: Verify actual source build run before downloading
+      - name: Require the parent-bound reference before selecting source
+        id: binding
+        env:
+          EXPECTED_REFERENCE_SHA256: ${{ inputs.reference_sha256 }}
+        run: |
+          $json = python -B qa/tools/windows_msi_candidate.py check --reference qa/tools/windows_msi_candidate_reference.json --reference-sha256 $env:EXPECTED_REFERENCE_SHA256
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ref = $json | ConvertFrom-Json
+          "source_sha=$($ref.source_sha)" | Add-Content -Encoding utf8 $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'lph-msi-binding') -ErrorAction Stop | Out-Null
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.binding.outputs.source_sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact successful native builder and current artifact metadata
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $run = gh api repos/different2/local-project-hub/actions/runs/40845715963 | ConvertFrom-Json
+          $ref = Get-Content -Raw qa/tools/windows_msi_candidate_reference.json | ConvertFrom-Json
+          $dir = Join-Path $env:RUNNER_TEMP 'lph-msi-binding'
+          $repo = 'repos/different2/local-project-hub'
+          gh api "$repo/actions/runs/$($ref.build.source_run_id)" | Set-Content -Encoding utf8 (Join-Path $dir 'run.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($run.head_sha -ne '77aaa1877c3c586634f572ede63f9bf7095abb08' -or $run.status -ne 'completed' -or $run.conclusion -ne 'success') { throw 'Wrong or incomplete source build run' }
-          @{ source_run_id=40845715963; source_sha=$run.head_sha; artifact='LocalProjectHub-Windows'; expected_msi_sha256='ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d' } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $env:RUNNER_TEMP 'msi-artifact-binding.json')
-      - uses: actions/download-artifact@v5
-        with:
-          name: LocalProjectHub-Windows
-          run-id: 40845715963
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/lph-msi-artifact
-      - name: Verify exact downloaded MSI bytes
+          gh api "$repo/actions/runs/$($ref.build.source_run_id)/attempts/$($ref.build.source_run_attempt)/jobs?per_page=100" | Set-Content -Encoding utf8 (Join-Path $dir 'jobs.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh api "$repo/actions/artifacts/$($ref.build.artifact_id)" | Set-Content -Encoding utf8 (Join-Path $dir 'artifact.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B qa/tools/windows_msi_candidate.py verify-build --reference qa/tools/windows_msi_candidate_reference.json --reference-sha256 $env:EXPECTED_REFERENCE_SHA256 --run-json (Join-Path $dir 'run.json') --jobs-json (Join-Path $dir 'jobs.json') --artifact-json (Join-Path $dir 'artifact.json') > (Join-Path $dir 'verified.json')
+          exit $LASTEXITCODE
+      - name: Download only the exact bound artifact and verify ZIP and MSI bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $msi = Join-Path $env:RUNNER_TEMP 'lph-msi-artifact/Local.Project.Hub.msi'
-          if ((Get-Item $msi).Length -ne 108763314 -or (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower() -ne 'ae539e3596f391b5f7dd272b024610ad7b4abf2c5b4c601aaa743ffa894eea2d') { throw 'Downloaded MSI is not the accepted build artifact' }
+          $dir = Join-Path $env:RUNNER_TEMP 'lph-msi-binding'
+          python -B qa/tools/windows_msi_candidate.py download --reference qa/tools/windows_msi_candidate_reference.json --reference-sha256 $env:EXPECTED_REFERENCE_SHA256 --run-json (Join-Path $dir 'run.json') --jobs-json (Join-Path $dir 'jobs.json') --artifact-json (Join-Path $dir 'artifact.json') --output-dir (Join-Path $env:RUNNER_TEMP 'lph-msi-artifact')
+          exit $LASTEXITCODE
       - name: Prepare isolated observer only
         run: |
           python -m venv (Join-Path $env:RUNNER_TEMP 'lph-msi-observer')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & (Join-Path $env:RUNNER_TEMP 'lph-msi-observer/Scripts/python.exe') -m pip install psutil==7.0.0 websocket-client==1.8.0 Pillow==11.3.0
+          & (Join-Path $env:RUNNER_TEMP 'lph-msi-observer/Scripts/python.exe') -m pip install psutil==7.0.0 websocket-client==1.8.0 Pillow==11.3.0 PyYAML==6.0.3
           exit $LASTEXITCODE
-      - name: Calibrate pure helper and blank-image rejection
+      - name: Calibrate pure helpers, prior vector, rebinding and blank-image rejection
         run: |
           $py = Join-Path $env:RUNNER_TEMP 'lph-msi-observer/Scripts/python.exe'
-          & $py -B qa/tools/test_smoke_windows_msi.py
+          $dir = Join-Path $env:RUNNER_TEMP 'lph-msi-binding'
+          & $py -B qa/tools/test_smoke_windows_msi.py *> (Join-Path $dir 'historical-controls.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $py -B qa/tools/temp_capture_windows_msi.py --self-test
+          & $py -B qa/tools/test_windows_msi_candidate.py *> (Join-Path $dir 'candidate-controls.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py -B qa/tools/test_windows_msi_workflow.py *> (Join-Path $dir 'workflow-controls.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py -B qa/tools/temp_capture_windows_msi.py --self-test *> (Join-Path $dir 'pixel-controls.log')
           exit $LASTEXITCODE
       - name: Exercise actual installed MSI with native pixels and normal exit
         run: |
           $py = Join-Path $env:RUNNER_TEMP 'lph-msi-observer/Scripts/python.exe'
-          & $py -B qa/tools/temp_capture_windows_msi.py --msi (Join-Path $env:RUNNER_TEMP 'lph-msi-artifact/Local.Project.Hub.msi') --output (Join-Path $env:RUNNER_TEMP 'lph-msi-native-positive') --expected-version 0.7.4 --source-sha 77aaa1877c3c586634f572ede63f9bf7095abb08 --source-root (Join-Path $env:GITHUB_WORKSPACE 'source')
+          $dir = Join-Path $env:RUNNER_TEMP 'lph-msi-binding'
+          $ref = Get-Content -Raw qa/tools/windows_msi_candidate_reference.json | ConvertFrom-Json
+          & $py -B qa/tools/temp_capture_windows_msi.py --msi (Join-Path $env:RUNNER_TEMP 'lph-msi-artifact/files/Local.Project.Hub.msi') --output (Join-Path $env:RUNNER_TEMP 'lph-msi-native-positive') --expected-version 0.7.4 --source-sha $ref.source_sha --source-root (Join-Path $env:GITHUB_WORKSPACE 'source') --reference qa/tools/windows_msi_candidate_reference.json --reference-sha256 $env:EXPECTED_REFERENCE_SHA256 --build-run-json (Join-Path $dir 'run.json') --build-jobs-json (Join-Path $dir 'jobs.json') --build-artifact-json (Join-Path $dir 'artifact.json')
           exit $LASTEXITCODE
       - name: Upload only owned acceptance evidence, never browser profiles
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: windows-msi-native-77aaa18-${{ github.run_id }}
+          name: windows-msi-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/msi-artifact-binding.json
+            qa/tools/windows_msi_candidate_reference.json
+            ${{ runner.temp }}/lph-msi-binding/run.json
+            ${{ runner.temp }}/lph-msi-binding/jobs.json
+            ${{ runner.temp }}/lph-msi-binding/artifact.json
+            ${{ runner.temp }}/lph-msi-binding/verified.json
+            ${{ runner.temp }}/lph-msi-binding/historical-controls.log
+            ${{ runner.temp }}/lph-msi-binding/candidate-controls.log
+            ${{ runner.temp }}/lph-msi-binding/workflow-controls.log
+            ${{ runner.temp }}/lph-msi-binding/pixel-controls.log
+            ${{ runner.temp }}/lph-msi-artifact/binding-receipt.json
             ${{ runner.temp }}/lph-msi-native-positive/report.json
             ${{ runner.temp }}/lph-msi-native-positive/install.log
             ${{ runner.temp }}/lph-msi-native-positive/uninstall.log
