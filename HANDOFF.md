@@ -45,9 +45,7 @@ GitHub: https://github.com/different2/local-project-hub
   Private verified `windows-qa-083f71f.bundle` preserves observer source/history.
   Calibration:30 helper/workflow tests plus pixel controls, all raw0. No review.
 
-## Open gates, in priority order
-
-### 1. Linux full source under an actually selected native display backend
+## Accepted Linux source and installed package
 
 Actual052033e APT-installed DEB smoke passed: source hidden, nonce/native X11 pixels,
 sandbox evidence, normal close0/no survivors/source restored; wrong-text control
@@ -59,14 +57,24 @@ app cases on Python3.12.15/16 and offscreen/xcb. The retained observations show 
 app input failure on3.12.15/offscreen; both xcb groups passed. This does not establish
 a3.12.16 regression or a product fix. A green diagnostic means collection finished.
 
-A **strict full unchanged052033e source** run has now been dispatched from temporary
-`diagnose/linux-input` workflow **`af3fdb7b697776a4e4a5a321033919742a6373f0`**:
-Ubuntu24.04/Python3.12.16/Qt6.7.3, explicit `QT_QPA_PLATFORM=xcb` under Xvfb.
-Run **41883712775**, notified waiter `proc_32fb052f93ba`; download `full-source-linux-xcb` and
-reconcile every identity/raw exit before accepting it. No assertion, sandbox,
-source or exit-policy changes. Never merge the temporary transport into main.
+A **strict full unchanged052033e source** run **41883712775** is now accepted:
+**437 unique identities=434PASS+3SKIP;152 actual children/all0/clean**. Parent
+downloaded `full-source-linux-xcb` and independently reconciled every identity/count.
+The audit confirms unchanged052033e HEAD, `qt_platform=xcb` and `strict_exit=0`.
+Ubuntu24.04/Python3.12.16/Qt6.7.3, explicit `QT_QPA_PLATFORM=xcb` under Xvfb;
+no assertion, sandbox, source or exit-policy changes. This is native-display source
+verification, not an offscreen product fix. Ordinary41869103664 stays failed.
+Temporary QA workflow `af3fdb7b697776a4e4a5a321033919742a6373f0` must never merge.
 
-### 2. Mac actual-package interaction still needs a usable approved input route
+Actual DEB retained:172587392 bytes, SHA-256
+`ed5e8733d2c107f6de393f4ed081d9267e1fb3493a4b93c43e7449bab4bf5ccd`.
+Artifact13344670313 from41869103664 is the same path APT installed before its
+source-hidden positive/wrong-text native smoke. Parent independently viewed its
+native screenshot; fixture nonce and controls visibly rendered.
+
+## Open gates, in priority order
+
+### 1. Mac actual-package interaction needs a usable approved input route
 
 Full native Cocoa **c37** source accepted:437 identities=434PASS+3SKIP;152 actual
 children/all0/clean, unchanged source. Actual DMG263983761 bytes, SHA-256
@@ -86,7 +94,7 @@ used invalid `NSRunningApplication.terminate_`; the correct no-argument selector
 `terminate()`, which requested normal quit successfully. Its failed report is not
 native package acceptance; keep failed/invalid attempts separate from green results.
 
-### 3. Publish only after all acceptance gates
+### 2. Publish only after all acceptance gates
 
 Publish the immutable accepted installers, validate the actual private draft before
 promotion, then read back public metadata, anonymous downloads/digests/links and a
@@ -113,7 +121,8 @@ Private root (never upload wholesale):
 Read **CURRENT.json** for current exact handles; prior ledger retained separately.
 - `candidate3/windows-{binding,native}/`, `windows-independent-acceptance.json`.
 - `candidate3/windows-source-reconciliation.json`, separate per-host raw audits.
-- `candidate3/linux-runtime/`, `source-ubuntu/`, `linux-input-calibration/`.
+- `candidate3/linux-source-xcb/`, `linux-installer/`, `linux-runtime/`;
+  historical `source-ubuntu/`, `linux-input-calibration/` remain separate.
 - `candidate2/macos-source/`, `macos-stages.json`, `installers/`, native failed attempts.
 - `candidate3/protected-after-native.json` equals the protected pre-native baseline
   for installed app Info.plist/executable and the user's registry.
