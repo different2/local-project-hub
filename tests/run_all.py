@@ -110,6 +110,7 @@ SUITES = [
     ("test_process_e2e.py", True),
     ("test_window_e2e.py", True),
     ("test_popup_bridge.py", True),
+    ("test_browser_controls.py", True),
     ("test_urldetect.py", True),
     ("test_detect_type.py", False),
     ("test_detect_command.py", False),
@@ -138,6 +139,7 @@ ISOLATE_TESTS = {
     "test_window_e2e.py",
     "test_urldetect.py",
     "test_popup_bridge.py",
+    "test_browser_controls.py",
 }
 
 # `--test NAME` runs a single test in this process (used by ISOLATE_TESTS).

@@ -58,6 +58,7 @@ from . import __version__
 from . import diagnostics as diagnostics_mod
 from . import launch_at_login, startpage, store as store_mod, urldetect
 from .diagnostics import build_report, format_report, save_report
+from .browser_downloads import BrowserDownloads
 from .html_storage import HtmlStorageProfiles
 from .platform import IS_MACOS, IS_WINDOWS
 from .process_manager import ProjectProcess
@@ -155,19 +156,23 @@ class HubWebView(QWebEngineView):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        page = _HubPage(self)
+        self._install_page(_HubPage(self))
+
+    navigation_changed = Signal()
+
+    def _install_page(self, page: _HubPage) -> None:
         page.start_requested.connect(self.start_requested)
         page.stop_requested.connect(self.stop_requested)
+        for action in (QWebEnginePage.Back, QWebEnginePage.Forward, QWebEnginePage.Reload):
+            page.action(action).changed.connect(self.navigation_changed)
         self.setPage(page)
+        self.navigation_changed.emit()
 
     def use_profile(self, profile: QWebEngineProfile) -> None:
         """Install a project's profile only when it actually changes."""
         if self.page().profile() is profile:
             return
-        page = _HubPage(profile, self)
-        page.start_requested.connect(self.start_requested)
-        page.stop_requested.connect(self.stop_requested)
-        self.setPage(page)
+        self._install_page(_HubPage(profile, self))
 
     def createWindow(self, window_type):
         # NOTE: PySide6 expects the QWebEngineView itself here, not .page() —
@@ -336,6 +341,7 @@ class HubWindow(QMainWindow):
         self._loading_list = False
 
         self._build_ui()
+        self._browser_downloads = BrowserDownloads(self)
         self._reload_list()
         self._refresh_welcome()
         # The starter tab is already current when the window is built, so
@@ -882,6 +888,21 @@ class HubWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
+        self.act_back = QAction("← Back", self)
+        self.act_back.setShortcut(QKeySequence.Back)
+        self.act_back.setToolTip("Go back in the selected browser tab")
+        self.act_back.triggered.connect(lambda: self._navigate(QWebEnginePage.Back))
+        self.act_forward = QAction("Forward →", self)
+        self.act_forward.setShortcut(QKeySequence.Forward)
+        self.act_forward.setToolTip("Go forward in the selected browser tab")
+        self.act_forward.triggered.connect(lambda: self._navigate(QWebEnginePage.Forward))
+        self.act_reload = QAction("Reload", self)
+        self.act_reload.setShortcut(QKeySequence.Refresh)
+        self.act_reload.setToolTip("Reload the selected page without restarting its backend")
+        self.act_reload.triggered.connect(lambda: self._navigate(QWebEnginePage.Reload))
+        navigation = self.menuBar().addMenu("Navigation")
+        navigation.addActions([self.act_back, self.act_forward, self.act_reload])
+
         self.act_start = QAction("▶︎ Start", self)
         self.act_start.triggered.connect(self._start_active)
         self.act_stop = QAction("■ Stop", self)
@@ -901,6 +922,10 @@ class HubWindow(QMainWindow):
         self.act_logs.setChecked(True)
         self.act_logs.triggered.connect(self._toggle_logs)
         for a in (
+            self.act_back,
+            self.act_forward,
+            self.act_reload,
+            None,
             self.act_start,
             self.act_stop,
             self.act_restart,
@@ -1018,6 +1043,20 @@ class HubWindow(QMainWindow):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self._set_controls_enabled(False)
+        self._refresh_browser_controls()
+
+    def _navigate(self, action: QWebEnginePage.WebAction) -> None:
+        """Browser history belongs to the displayed tab, never the sidebar."""
+        view = self.web
+        if view is not None:
+            view.triggerPageAction(action)
+
+    def _refresh_browser_controls(self) -> None:
+        view = self.web
+        for action, web_action in ((self.act_back, QWebEnginePage.Back),
+                                   (self.act_forward, QWebEnginePage.Forward),
+                                   (self.act_reload, QWebEnginePage.Reload)):
+            action.setEnabled(view is not None and view.pageAction(web_action).isEnabled())
 
     # ---------- list ----------
 
@@ -1376,6 +1415,7 @@ class HubWindow(QMainWindow):
         view.use_profile(self._profile_for(rec))
         view.setProperty("hub_project_id", rec["id"])
         view.popup_opened.connect(self._on_popup_opened)
+        view.navigation_changed.connect(self._refresh_browser_controls)
         view.loadFinished.connect(self._on_load_finished)
         view.start_requested.connect(self._on_start_requested)
         view.stop_requested.connect(self._on_stop_requested)
@@ -1678,6 +1718,7 @@ class HubWindow(QMainWindow):
         window. createWindow fires BEFORE QtWebEngine navigates, so the URL is
         empty here; the tab label is set from urlChanged once it is real.
         """
+        self._browser_downloads.watch(view.page().profile())
         idx = self.tabs.addTab(view, "New tab")
         self.tabs.setCurrentIndex(idx)
         owner = view.property("hub_owner_project_id")
@@ -1712,6 +1753,7 @@ class HubWindow(QMainWindow):
                 self.status.showMessage(f"New tab: {s}", 6000)
 
         view.urlChanged.connect(_update)
+        view.navigation_changed.connect(self._refresh_browser_controls)
         view.titleChanged.connect(lambda t, v=view: self._label_tab(self.tabs.indexOf(v), t))
 
     def _label_tab(self, index: int, text: str) -> None:
@@ -1782,6 +1824,7 @@ class HubWindow(QMainWindow):
                 w.deleteLater()
 
     def _on_tab_changed(self, index: int) -> None:
+        self._refresh_browser_controls()
         on_starter = index >= 0 and self._is_starter_index(index)
         widget = self.tabs.widget(index) if index >= 0 else None
         pid = (widget.property("hub_project_id") or widget.property("hub_owner_project_id")) \
@@ -1888,7 +1931,9 @@ class HubWindow(QMainWindow):
             self._append_log(f"[hub] HTML autosave storage unavailable: {exc}", rec["id"])
             self.status.showMessage("HTML autosave storage is unavailable; see this project's log", 8000)
             profile = None
-        return profile if profile is not None else QWebEngineProfile.defaultProfile()
+        profile = profile if profile is not None else QWebEngineProfile.defaultProfile()
+        self._browser_downloads.watch(profile)
+        return profile
 
     def _show_dashboard(self, rec: dict) -> None:
         """Point this project's OWN tab at its URL (not the active tab's).
@@ -2323,6 +2368,7 @@ class HubWindow(QMainWindow):
     # ---------- shutdown ----------
 
     def closeEvent(self, event) -> None:
+        self._browser_downloads.shutdown()
         try:
             p = self._settings_path()
             p.parent.mkdir(parents=True, exist_ok=True)

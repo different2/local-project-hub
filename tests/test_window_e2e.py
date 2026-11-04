@@ -1811,6 +1811,8 @@ def test_sidebar_reselect_preserves_uploaded_image_and_backend(tmp: Path) -> Non
         assert qproc is not None, "fixture has no actual QProcess"
         original_pid = int(qproc.processId())
         assert original_pid > 0 and proc.state == "running"
+        finishes = []
+        qproc.finished.connect(lambda *result: finishes.append(result))
         loads = []
         view.loadStarted.connect(lambda: loads.append("navigation"))
         # These are the sidebar's real selection signals, not a direct refresh.
@@ -1827,6 +1829,13 @@ def test_sidebar_reselect_preserves_uploaded_image_and_backend(tmp: Path) -> Non
         assert proc.proc is qproc and int(qproc.processId()) == original_pid and proc.state == "running", (
             "sidebar navigation restarted the backend"
         )
+        # A live manager flag is not proof that its port still serves. Use a
+        # fresh independent HTTP request, not Chromium's cached document.
+        import uuid
+        from urllib.request import urlopen
+        with urlopen(rec["url"] + "/?selection-check=" + uuid.uuid4().hex, timeout=2) as response:
+            assert response.status == 200 and b"NO_IMAGE" in response.read(), "backend stopped serving after sidebar selection"
+        assert finishes == [], "sidebar selection caused an actual child exit"
     finally:
         _close_test_window(w)
         assert _wait_for(lambda: proc.state == "stopped", 8), "fixture backend survived quit"
