@@ -93,13 +93,13 @@ Worth knowing:
 - The Hub's own tab is a short getting-started page; reopen it via the app
   menu's **Show Overview** if you close it.
 
-### Project opening — 0.7.4 release candidate
+### Project opening
 
-The candidate also corrects project-specific PATH/interpreter selection, Windows
-command quoting and Python aliases, old saved Python commands, actual startup
-error reporting, safe automatic browser flags, silent-server discovery and stale
-readiness checks after Edit/Restart. Split stdout deliveries no longer save a
-partial dashboard address. These changes are **not yet in published installers**.
+Project launching respects each project's PATH/interpreter selection, Windows
+command quoting and Python aliases, and older saved Python commands. It reports
+actual startup failures, adds only supported automatic browser flags, and discovers
+silent servers. Stale readiness checks are retired after Edit/Restart, and split
+stdout deliveries do not save a partial dashboard address.
 
 For custom Python scripts, automatic browser flags are skipped when multiple
 parsers, subcommands or cross-scope declarations make the option's applicability
@@ -112,7 +112,7 @@ discovered. On macOS, the bundled Qt runtime may normalize Unicode command-line
 arguments to a canonically equivalent form; exact Unicode code-point preservation
 is not guaranteed. Hub does not rewrite the saved values or the project's files.
 
-### Standalone HTML — 0.7.4 release candidate
+### Standalone HTML
 
 **File…** remembers the HTML page you picked, including folders with several
 pages. For older Python `http.server` registrations, a sole HTML page opens
@@ -123,15 +123,13 @@ Inside Hub, local Python static sites also get private, persistent
 Each project has its own browser storage under Hub's settings directory, not
 inside your project. Browser storage quotas still apply; shared/cloud storage
 is not provided. This compatibility does not extend to an external browser.
-These changes are not yet in the published installers.
 
-### Browser controls — 0.7.4 development candidate
+### Browser controls
 
 **Back**, **Forward**, and **Reload** act on the selected browser tab. Reload
 does not restart its backend; links keep the same-tab/new-tab behavior chosen
 by the page. Downloads, including generated raw-text exports, offer a native
 Save dialog and show completion or failure without opening the saved file.
-These changes are **not yet in published installers**.
 
 ## Updating
 

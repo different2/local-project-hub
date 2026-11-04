@@ -1,135 +1,126 @@
 # HANDOFF — Local Project Hub
 
-## Read this checkpoint first, not the historical archive
+## Current checkpoint: v0.7.4 is published and downloads are verified
 
-The owner authorized rebuilding and publishing the downloadable **0.7.4** releases.
-This does **not** authorize installing/restarting the user's Hub, managed services,
-or changing managed sources, dependencies, registry or virtual environments.
-No further independent review. Preserve human attribution and sandbox/raw-exit gates.
+Read this file first, not the historical archive. The authorized rebuild/publication
+is complete. **No user installation or restart was performed.** Managed sources,
+dependencies, virtual environments, registry and running services were not changed.
+No independent review was requested or run. Preserve human attribution and sandboxing.
 
 Repo: `/Users/iff/Documents/Programming/local-project-hub`
-GitHub: https://github.com/different2/local-project-hub
+Release: https://github.com/different2/local-project-hub/releases/tag/v0.7.4
+GitHub release ID: **434329137**, public/non-prerelease, explicitly marked latest.
+Published timestamp: **2026-11-04T19:10:58Z**.
 
-## Frozen identities — don't replace these with a later docs-only HEAD
+## Immutable identities and actual downloadable bytes
 
-- Release source **`052033e46ed014482b3ecf7c0fee337beb9b91cd`**, pushed/read back.
-- Runtime/build settings are byte-identical to **`c37f9d573a1d5a044248d3fe67143681110889f8`**.
-  Independent `git diff --name-only c37f9d5 052033e` contains only `HANDOFF.md` and
-  `tests/test_browser_controls.py`. The latter waits for the real Reload-ready state
-  after Forward; title arrival precedes load completion. Its changed case passed
-  on native Mac Python3.11 and3.9.6. Do not imply the full Mac suite ran on052033e.
-- Full source/build run **41869103664** is **failed overall** (Ubuntu input cases).
-  Both Windows full source matrices and both native builders succeeded. A successful
-  build or scoped QA job is not whole-release acceptance.
-- Public latest was **v0.7.3** at the Nov4 10:04PST check. No0.7.4 tag/release has
-  been published and the user's app has not been installed/restarted.
+Annotated **v0.7.4** targets **`052033e46ed014482b3ecf7c0fee337beb9b91cd`**.
+Later README/handoff/development-doc commits are not the release source.
+Mac actual build/runtime: **`c37f9d573a1d5a044248d3fe67143681110889f8`**.
+Every packaged source byte and all version/package inputs are identical to052033e;
+the only Git differences are HANDOFF.md and a browser test's Reload-readiness wait.
+That changed test separately passed on native Mac Python3.11 and3.9.6.
 
-## Accepted Windows replacement — finished, do not rerun the old rejected MSI
+| Stable filename | Bytes | SHA-256 |
+|---|---:|---|
+| Local.Project.Hub.dmg | 263983761 | `24f0f49fbdcfc57d3fb9e95501ac72e0a4bdc749ec17fadd45471a0fb5704281` |
+| Local.Project.Hub.msi | 218460768 | `de6c3d2a5040b84d377cd0335c3e79a65cb938c70b90cefbea663521907b89eb` |
+| Local.Project.Hub.Ubuntu-24.04-amd64.deb | 172587392 | `ed5e8733d2c107f6de393f4ed081d9267e1fb3493a4b93c43e7449bab4bf5ccd` |
 
-- Source run41869103664: Windows2022 and2025 **each437 unique identities =430PASS +
-  7SKIP;152 actual children/all0/clean**. Parent independently reconciled the full
-  source registry against each raw artifact (no missing/duplicate verdicts).
-- Actual MSI:218460768 bytes, SHA-256
-  **`de6c3d2a5040b84d377cd0335c3e79a65cb938c70b90cefbea663521907b89eb`**.
-  Build job126710974806; artifact13343587457. Raw ZIP/API metadata retained.
-- Native acceptance **41880047847**, QA commit
-  `083f71f7b8710af6a6499cabf4260016eba19985`, reference digest
-  `a9a88442c3aff9efee5287a1c8e72972dc282449a5961798e874b2ec38ba66b6`.
-- Parent re-derived **all23 exact installed CRLF hashes from immutable Git blobs**
-  and matched membership; no normalized or arbitrary EOL variants. Actual separate
-  WebEngine6.12.0.140, Qt modules/helper/resources, source-hidden installed launch,
-  nonce DOM/native pixels, wrong-DOM refusal and renderer sandbox guards passed.
-  Screenshot independently viewed. Install/normal WM_CLOSE/reaped exit/uninstall all0;
-  no forced cleanup/survivors/errors; source and MSI preserved.
-- **Never merge `diagnose/windows-msi-native` or `diagnose/linux-input` into main.**
-  Private verified `windows-qa-083f71f.bundle` preserves observer source/history.
-  Calibration:30 helper/workflow tests plus pixel controls, all raw0. No review.
+The front-page URLs are `/releases/latest/download/<stable-filename>`. All three
+were downloaded **anonymously in full** after publication:HTTP200 and exact sizes/
+hashes above. Anonymous latest metadata names0.7.4/434329137. Do not rebuild,
+replace or clobber published0.7.4 assets; fixes need a new release/version.
 
-## Accepted Linux source and installed package
+## Accepted gates — do not rerun because delayed notifications arrive
 
-Actual052033e APT-installed DEB smoke passed: source hidden, nonce/native X11 pixels,
-sandbox evidence, normal close0/no survivors/source restored; wrong-text control
-rejected. Its ordinary full source job failed raw GUI input cases, not packaging.
-The workflow starts Xvfb, but Qt still inherits its **offscreen** default.
+- **Windows source**, run41869103664: Windows2022 and2025 each437 unique identities
+  =430PASS+7SKIP;152 actual children/all0/clean, independently reconciled.
+- **Actual MSI native**, run41880047847, QA083f71f7b8710af6a6499cabf4260016eba19985:
+  all23 exact immutable-source→CRLF-installed byte hashes and membership matched;
+  separate WebEngine6.12.0.140/modules/helper/resources present; source-hidden
+  installed nonce/native rendering, wrong-DOM refusal and sandbox guards passed.
+  Actual screenshot inspected; install/normal WM_CLOSE/reaped exit/uninstall all0,
+  no forced cleanup/survivors/errors; source/MSI preserved. Builder job126710974806,
+  artifact13343587457; all identity/API/ZIP/MSI receipts retained.
+- **Linux full native-display source**, run41883712775: immutable052033e,
+  Ubuntu24.04/Python3.12.16/Qt6.7.3, actual `qt_platform=xcb`, unchanged source,
+  437 identities=434PASS+3SKIP;152 actual children/all0/clean/strict_exit0,
+  independently reconciled. No source/assertion/sandbox/exit-policy changes.
+- **Actual installed Linux DEB**, run41869103664: APT-installed source-hidden launch,
+  nonce/native X11 pixels, sandbox, wrong-text refusal and normal close0/no survivors/
+  source restoration. Screenshot independently inspected. Artifact13344670313 is
+  the same file installed before upload.
+- **Mac full native Cocoa c37 source**:437 identities=434PASS+3SKIP;152 actual
+  children/all0/clean, unchanged source; safety adapter replaces unrelated-port
+  housekeeping only. Actual DMG read-only mount/copy, signature,23-source membership,
+  dependency/renderer-helper/deployment checks passed.
+- **Actual Mac package attempt3**: freshly activated native Replay/Back/Spheres/
+  Forward/Replay/Reload screenshots inspected, matching nonce, real Reload timeOrigin
+  change with unchanged owned backend PID/creation identity. Owner explicitly
+  confirmed **native Save and Close** (human-assisted, not fully automated);42 UTF-8
+  export bytes matched independently. Correct `NSRunningApplication.terminate()`
+  requested normal quit; parent reaped0, no survivors/callback/lifetime errors or
+  forced cleanup. Installed executable/Info.plist/registry hashes unchanged against
+  fresh pre-attempt3 baseline. All owned native fixtures exited.
 
-Bounded unchanged-case calibration **41881546465** compared bare Qt and the exact
-app cases on Python3.12.15/16 and offscreen/xcb. The retained observations show an
-app input failure on3.12.15/offscreen; both xcb groups passed. This does not establish
-a3.12.16 regression or a product fix. A green diagnostic means collection finished.
+## Publication scope and historical failures — keep the distinction honest
 
-A **strict full unchanged052033e source** run **41883712775** is now accepted:
-**437 unique identities=434PASS+3SKIP;152 actual children/all0/clean**. Parent
-downloaded `full-source-linux-xcb` and independently reconciled every identity/count.
-The audit confirms unchanged052033e HEAD, `qt_platform=xcb` and `strict_exit=0`.
-Ubuntu24.04/Python3.12.16/Qt6.7.3, explicit `QT_QPA_PLATFORM=xcb` under Xvfb;
-no assertion, sandbox, source or exit-policy changes. This is native-display source
-verification, not an offscreen product fix. Ordinary41869103664 stays failed.
-Temporary QA workflow `af3fdb7b697776a4e4a5a321033919742a6373f0` must never merge.
+Original full run **41869103664 remains failed overall**: offscreen Ubuntu input.
+Both Windows source hosts/builders succeeded. A32-child unchanged bare-Qt/app input
+comparison41881546465 found one3.12.15/offscreen failure, all16 xcb children0; it was
+not a3.12.16-only regression or product fix. The full native X11 run above supplied
+Linux source acceptance. The ordinary workflow still defaults Qt to offscreen even
+when Xvfb is started; explicit native backend is a future CI-maintenance option.
+Never describe the failed ordinary run or a diagnostic-collection job as green app CI.
 
-Actual DEB retained:172587392 bytes, SHA-256
-`ed5e8733d2c107f6de393f4ed081d9267e1fb3493a4b93c43e7449bab4bf5ccd`.
-Artifact13344670313 from41869103664 is the same path APT installed before its
-source-hidden positive/wrong-text native smoke. Parent independently viewed its
-native screenshot; fixture nonce and controls visibly rendered.
+Publication was a deliberate **maintainer promotion of the retained accepted files**,
+not a fresh tag build. The tested commit carries `[skip ci]`; the annotated tag is
+immutable and no tag workflow appeared. No manual dispatch was made publish-capable.
+The exact private draft/Mac input was read by release ID, Mac uploaded and redownloaded
+and validated with source-equivalence proof, then all three assets/digests/notes were
+validated before promotion. The same public release ID/assets were read back and
+validated afterward. No public asset was overwritten. DEVELOPMENT.md documents this
+maintainer recovery path separately from normal automated tag publication.
 
-## Open gates, in priority order
+Earlier failed native attempts (WebSocket context-manager misuse, invalid
+`terminate_` selector, stale inactive-window captures) remain failed evidence, not
+app regressions or acceptance. The owner helped with native Save/Close. Do not
+continue asking for the old foreground permission or rerun completed Windows/Linux
+checks. Preserve original superseded6b88eff/c37 build failures and original MSI
+missing-WebEngine rejection; never redispatch those as the published candidate.
 
-### 1. Mac actual-package interaction needs a usable approved input route
+## Installed update offer and limits
 
-Full native Cocoa **c37** source accepted:437 identities=434PASS+3SKIP;152 actual
-children/all0/clean, unchanged source. Actual DMG263983761 bytes, SHA-256
-`24f0f49fbdcfc57d3fb9e95501ac72e0a4bdc749ec17fadd45471a0fb5704281`.
-Read-only mount/copy, bundle source/membership/dependency/helper inspection passed.
+The user's installed bundle is still **0.7.3**. A fresh process outside the checkout
+imported its actual hub/updater modules and fetched public0.7.4, selected the Mac
+DMG and saw a strictly newer, digest-verifiable update. That installed verifier
+accepted the anonymously downloaded real DMG and rejected a deliberately wrong hash.
+This was **read-only**, not a GUI click, download/install or restart of the user app.
+The user may update via Help → Check for Updates or the public Mac download.
 
-The owned DMG-derived app painted its initial nonce fixture. CDP trusted pointer
-observed Replay navigation, but native background pixels stayed stale; native
-Back/Forward/Reload, download Save/exact bytes/result/Close are not accepted yet.
-The foreground tool session expired. **One permission question is unanswered**; do not
-bypass the session grant or re-ask automatically. This is an unverified interaction,
-not a confirmed application painting defect. Needs owner permission/help for a brief
-isolated-package foreground check. Never activate or replace the installed Hub.
+Mac target remains Apple silicon/macOS12+; Windows x86-64; Linux Ubuntu24.04 amd64
+only. Paid trusted signing/notarization is not present; README trust prompts remain.
+The owner corrected historical observability attribution: those fixed project-side
+errors were not Hub defects. No managed-project source edits were used here.
 
-All owned attempt2 app/backend/renderer/harness processes exited. The scratch harness
-used invalid `NSRunningApplication.terminate_`; the correct no-argument selector is
-`terminate()`, which requested normal quit successfully. Its failed report is not
-native package acceptance; keep failed/invalid attempts separate from green results.
+## Durable private evidence and continuing protections
 
-### 2. Publish only after all acceptance gates
-
-Publish the immutable accepted installers, validate the actual private draft before
-promotion, then read back public metadata, anonymous downloads/digests/links and a
-read-only updater offer. Never overwrite published assets. No install/restart.
-Use explicit source identity; `[skip ci]` can suppress tag-triggered builds, so do
-not assume tagging rebuilt anything. Build/test dispatches must not publish.
-
-## What changed in the app / attribution correction
-
-Selected-tab Back/Forward/Reload preserve project navigation/popup semantics.
-Generic native browser downloads handle blob/raw text, progress, results and close
-cancellation. Windows explicitly includes split WebEngine6.12.0.140. c37 guards Qt-
-deleted watched download profiles with destruction tracking/isValid. Retained
-RED/GREEN controls cover lifetime, actual load readiness and PASS+raw-exit7 refusal.
-
-The owner fixed observability-project errors and said those were that project's
-fault, not Hub's. Do not revive that report as an outstanding Hub defect. The
-independently reproduced browser defects remain valid fixes. No managed-source edits.
-
-## Durable evidence and protections
-
-Private root (never upload wholesale):
+Root (never upload wholesale):
 `~/.local/share/local-project-hub/acceptance/release-0.7.4-2026-11-04/`
-Read **CURRENT.json** for current exact handles; prior ledger retained separately.
-- `candidate3/windows-{binding,native}/`, `windows-independent-acceptance.json`.
-- `candidate3/windows-source-reconciliation.json`, separate per-host raw audits.
-- `candidate3/linux-source-xcb/`, `linux-installer/`, `linux-runtime/`;
-  historical `source-ubuntu/`, `linux-input-calibration/` remain separate.
-- `candidate2/macos-source/`, `macos-stages.json`, `installers/`, native failed attempts.
-- `candidate3/protected-after-native.json` equals the protected pre-native baseline
-  for installed app Info.plist/executable and the user's registry.
+Read CURRENT.json, then `publication/{frozen-artifacts,pre-promotion-acceptance,
+published-release-by-id,anonymous-verification,installed-updater-offer}.json`.
+Mac: `candidate2/mac-native-attempt3/{report,interaction-verification,
+independent-acceptance}.json`; source/build evidence in candidate2/.
+Windows/Linux full raw manifests and independent reconciliations are in candidate3/.
+A verified `windows-qa-083f71f.bundle` preserves Windows QA source/history.
+An unrelated composited capture was excluded and moved to private Trash.
 
-**Never run `tests/run_all.py` top-level on this Mac**: unrelated-port cleanup has no
-ownership. Full Mac transport changes unsafe housekeeping only, retaining all real
-assertions/child exits. Existing `.hubenv`/`.buildenv` remain untouched Qt6.7.3;
-release Qt6.9.3 envs are owned scratch builds. Preserve untracked `graphify-out/`,
-`.githooks`, human acknowledgements, failed artifacts and source provenance.
-Previous checkpoint: `git show 052033e:HANDOFF.md`; historical archive is reference only.
+**Never merge `diagnose/windows-msi-native` or `diagnose/linux-input` into main.**
+**Never run tests/run_all.py top-level on this Mac**: its unrelated-port cleanup
+still lacks fixture ownership. Keep installed Hub/services untouched unless newly
+authorized. Preserve untracked graphify-out/, .githooks, human acknowledgements,
+failed evidence and provenance. Existing .hubenv/.buildenv were not upgraded.
+
+No outstanding release/publication gate remains. Any future CI-backend maintenance
+is separate from this completed release. Prior checkpoint: `git show d5ca73a:HANDOFF.md`.

@@ -320,12 +320,31 @@ built, source-bound DMG into the complete release artifact set.
    upload states, URLs, sizes and SHA-256 digests must validate before the
    release is made public and explicitly marked latest; the same release ID
    is read back and revalidated afterward. Only an actual tag **push** may
-   publish; manual dispatches, even of a tag ref, cannot.
+   automatically publish through CI; manual dispatches, even of a tag ref, cannot.
 7. Read back the final title/notes/assets and verify every latest-download URL
    anonymously. URLs use `/releases/latest/download/<stable-name>` and match
    `tools/release_artifacts.py::ASSET_NAMES`; never add a hardcoded version
    label to the front page. Confirm the installed version is offered the new
    release through the updater, without installing it unless authorized.
+
+### Maintainer recovery with already-accepted immutable installers
+
+An explicitly authorized maintainer may publish retained, already-exercised
+installers without rebuilding them. This is a deliberate release action, not a
+publishing capability for `workflow_dispatch`. Retain the exact source/build/native
+receipts and every failed historical run; do not call a failed overall CI run green.
+If a native-display source check replaces an unreliable offscreen transport, require
+the complete unchanged-source registry and every raw child exit, not a diagnostic
+collection result. When a Mac build predates documentation/test-only commits, prove
+every packaged source byte and all version/package inputs identical to the tag source.
+
+Use a new immutable annotated source tag. If `[skip ci]` intentionally prevents
+automatic tag builds, record that no tag workflow ran rather than assuming a build.
+Upload only to a checked private draft, redownload and validate the source-bound Mac
+input, then apply the complete three-asset metadata/size/digest gate. Promote that
+same release ID only after all source and native gates; read it back and download
+every stable latest URL anonymously to verify the actual bytes. Never replace
+published assets, force/retag, or skip a pending platform/native acceptance gate.
 
 The release is the macOS/Windows in-app update channel. Ubuntu currently uses
 manual download and APT, not one-click in-app installation. Workflow tag
