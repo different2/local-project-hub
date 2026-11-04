@@ -45,7 +45,7 @@ def _wait_for(predicate, seconds=10):
 
 
 @contextmanager
-def _browser(tmp: Path, private=False):
+def _browser(tmp: Path, private=False, popup_gate=None):
     counts = {}
     release = threading.Event()
 
@@ -85,11 +85,25 @@ def _browser(tmp: Path, private=False):
                 'document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }</script>'
                 '</body></html>'
             ).encode("utf-8")
+            head = body_rest = b""
+            delayed_popup = popup_gate is not None and path == "/spheres" and counts[path] > 1
+            if delayed_popup:
+                head, body_rest = body.split(b"<body>", 1)
+                head += b"<!--" + b" " * 4096 + b"-->"
+                body = head + b"<body>" + body_rest
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if delayed_popup and popup_gate is not None:
+                self.wfile.write(head)
+                self.wfile.flush()
+                counts["popup_gate_waiting"] = True
+                popup_gate.wait(4)
+                counts["popup_gate_waiting"] = False
+                self.wfile.write(b"<body>" + body_rest)
+            else:
+                self.wfile.write(body)
 
         def log_message(self, format, *args):
             pass
@@ -115,6 +129,8 @@ def _browser(tmp: Path, private=False):
         yield window, view, base, counts
     finally:
         release.set()
+        if popup_gate is not None:
+            popup_gate.set()
         window.close()
         window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -222,15 +238,22 @@ def test_closing_in_progress_download_cancels_without_deleted_widget_callback(tm
 
 
 def test_popup_history_and_starter_controls_follow_selected_tab(tmp):
-    with _browser(tmp, private=True) as (window, main, base, counts):
+    popup_gate = threading.Event()
+    with _browser(tmp, private=True, popup_gate=popup_gate) as (window, main, base, counts):
         from PySide6.QtWebEngineCore import QWebEngineProfile
         assert main.page().profile() is not QWebEngineProfile.defaultProfile(), "private profile fixture was not exercised"
+        loaded = []
+        main.popup_opened.connect(lambda child: child.loadFinished.connect(loaded.append))
         main.page().runJavaScript("document.getElementById('popup').click()")
         assert _wait_for(lambda: window.web is not main and window.web is not None and window.web.title() == "Spheres")
         popup = window.web
         assert popup.page().profile() is main.page().profile()
+        assert counts.get("popup_gate_waiting") and popup.page().isLoading(), "delayed popup fixture did not hold its body"
+        QTimer.singleShot(200, popup_gate.set)
+        assert _wait_for(lambda: loaded and loaded[-1] and not popup.page().isLoading()), "popup body never finished loading"
         QTest.mouseClick(popup.focusProxy(), Qt.LeftButton, pos=QPoint(80, 116))
-        assert _wait_for(lambda: popup.title() == "Replay" and window.act_back.isEnabled())
+        assert _wait_for(lambda: popup.title() == "Replay" and window.act_back.isEnabled()), (
+            "popup raw link did not navigate", popup.url().toString(), popup.page().isLoading(), counts)
         _toolbar_button(window, "act_back").click()
         assert _wait_for(lambda: popup.title() == "Spheres" and window.act_forward.isEnabled())
         window.tabs.setCurrentWidget(main)
@@ -250,9 +273,12 @@ def test_private_popup_download_has_one_chooser_and_owning_log(tmp):
         record = window.store.get(window.active_id)
         for _ in range(3):
             assert window._profile_for(record) is main.page().profile()
+        loaded = []
+        main.popup_opened.connect(lambda child: child.loadFinished.connect(loaded.append))
         main.page().runJavaScript("document.getElementById('popup').click()")
         assert _wait_for(lambda: window.web is not main and window.web is not None and window.web.title() == "Spheres")
         popup = window.web
+        assert _wait_for(lambda: loaded and loaded[-1] and not popup.page().isLoading()), "popup body never finished loading"
         destination = tmp / "private popup export.txt"
         with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=(str(destination), "")) as chooser:
             QTest.mouseClick(popup.focusProxy(), Qt.LeftButton, pos=QPoint(90, 184))
@@ -303,6 +329,28 @@ def test_unwritable_download_has_visible_failure_not_success(tmp):
             dialogs = list(window._browser_downloads._dialogs)
             assert dialogs and any(d.isVisible() and d.message.text().startswith("Download failed:") and d.button.text() == "Close" for d in dialogs)
             assert "Download saved:" not in window.log_view.toPlainText()
+
+
+def test_download_shutdown_tolerates_a_profile_deleted_by_qt(tmp):
+    """The shutdown seam must tolerate Qt deleting a watched native object."""
+    from PySide6.QtCore import QObject, Signal
+    from shiboken6 import delete, isValid
+    from hub.browser_downloads import BrowserDownloads
+    class ProfileLifetime(QObject):
+        downloadRequested = Signal(object)
+    # Exercise real QObject/signal deletion directly. Forcing a live Chromium
+    # context to die inside a QWidget callback can crash Cocoa before an assertion.
+    owner = QObject()
+    controller = BrowserDownloads(owner)
+    profile = ProfileLifetime(owner)
+    controller.watch(profile)
+    delete(profile)
+    assert not isValid(profile)
+    try:
+        controller.shutdown()
+        controller.shutdown()  # Repeated close must be harmless too.
+    finally:
+        delete(owner)
 
 
 def test_hub_close_cancels_in_progress_download(tmp):

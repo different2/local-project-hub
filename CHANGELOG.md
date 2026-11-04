@@ -2,6 +2,9 @@
 
 ## 0.7.4
 
+- Add Back, Forward and Reload for the selected browser tab without restarting its backend or rewriting page-defined link behavior.
+- Save browser downloads, including generated raw-text/blob exports, through a native picker with progress, completion/error feedback and safe cancellation/close handling.
+- Include the separate Qt6.12 WebEngine package in Windows installers; safely forget browser profiles that Qt destroys before Hub shutdown.
 - Open the actual standalone HTML page instead of a Python static server's directory listing. Preserve explicit routes and uncertain server configurations.
 - Remember the HTML file selected through File… across saving, editing and reopening, including folders containing multiple pages.
 - Provide private, persistent window.storage get/set compatibility inside Hub for local Python static sites. Keep each project's browser data separate and restore saved state after restarting Hub without changing project source files.

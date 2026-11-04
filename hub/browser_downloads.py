@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Qt, QStandardPaths, Signal, Slot
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout
+from shiboken6 import isValid
 
 
 class _DownloadDialog(QDialog):
@@ -71,6 +72,7 @@ class BrowserDownloads(QObject):
         if profile not in self._profiles:
             self._profiles.add(profile)
             profile.downloadRequested.connect(self._requested)
+            profile.destroyed.connect(lambda: self._profiles.discard(profile))
 
     def shutdown(self):
         # Clear ownership before cancelling: late Chromium signals must not
@@ -81,9 +83,11 @@ class BrowserDownloads(QObject):
             dialog.close()
             request.cancel()
             request.deleteLater()
-        for profile in self._profiles:
-            profile.downloadRequested.disconnect(self._requested)
+        profiles = list(self._profiles)
         self._profiles.clear()
+        for profile in profiles:
+            if isValid(profile):
+                profile.downloadRequested.disconnect(self._requested)
 
     def _report(self, message, project_id):
         self.window.status.showMessage(message, 10000)

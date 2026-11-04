@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -23,28 +24,54 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import run_all  # noqa: E402
 
-GUI_ENV = {"QT_QPA_PLATFORM": "offscreen"}
+GUI_ENV = run_all.gui_environment(sys.platform, os.environ)
+
+
+def _run_gui(path: Path, extra: list[str] | None = None) -> tuple[int, str, int]:
+    """Use the real runner's platform backend/PTY and retain its actual PID/exit."""
+    from unittest.mock import patch
+    original_interpreter, original_environment = run_all.interpreter, run_all.GUI_ENV
+    original_popen = subprocess.Popen
+    processes = []
+    def observe(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+    try:
+        run_all.interpreter = lambda: sys.executable
+        run_all.GUI_ENV = GUI_ENV
+        with patch.object(subprocess, "Popen", side_effect=observe):
+            code, out = run_all.run_one(path, needs_gui=True, extra_args=extra)
+    finally:
+        run_all.interpreter, run_all.GUI_ENV = original_interpreter, original_environment
+    assert len(processes) == 1, "selected test did not launch exactly one real child"
+    return code, out, processes[0].pid
 
 
 def _count_tests(
     path: Path, extra: list[str] | None = None
 ) -> tuple[int, int, int]:
     """(passes, failures, skips) reported by running a suite."""
-    import os
-
-    r = subprocess.run(
-        [sys.executable, "-u", str(path)] + (extra or []),
-        capture_output=True,
-        text=True,
-        cwd=str(PROJECT_ROOT),
-        env={**os.environ, **GUI_ENV},
-        timeout=600,
-    )
-    out = r.stdout
+    code, out, _pid = _run_gui(path, extra)
+    assert code == 0, f"{path.name}: raw child exit={code}:\n{out}"
     n_pass = out.count("\nPASS ") + (1 if out.startswith("PASS ") else 0)
     n_fail = out.count("\nFAIL ") + (1 if out.startswith("FAIL ") else 0)
     n_skip = out.count("\nSKIP ") + (1 if out.startswith("SKIP ") else 0)
     return n_pass, n_fail, n_skip
+
+
+def test_contract_rejects_nonzero_child_exit_even_after_pass() -> None:
+    """A child with one PASS line and exit7 is not valid isolation evidence."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as directory:
+        suite = Path(directory) / "bad_exit.py"
+        suite.write_text("print('PASS controlled')\nraise SystemExit(7)\n")
+        try:
+            _count_tests(suite)
+        except AssertionError as exc:
+            assert "7" in str(exc), "nonzero exit diagnostic lost its actual code"
+        else:
+            raise AssertionError("isolation observer accepted PASS with raw child exit7")
 
 
 def test_isolated_suites_honour_the_test_flag() -> None:
@@ -189,21 +216,9 @@ def test_selected_real_test_runs_in_its_own_process_and_alone() -> None:
         names = run_all.discover_tests(path)
         assert names, f"{name} defines no discoverable tests"
         selected = names[0]
-        proc = subprocess.Popen(
-            [sys.executable, "-u", str(path), f"--test={selected}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            cwd=str(PROJECT_ROOT),
-            env={**os.environ, **GUI_ENV},
-        )
-        try:
-            out, _ = proc.communicate(timeout=600)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            raise AssertionError(f"{name}: --test={selected} timed out")
-        assert proc.pid != os.getpid(), f"{name} did not run in a child process"
+        code, out, pid = _run_gui(path, [f"--test={selected}"])
+        assert pid != os.getpid(), f"{name} did not run in a child process"
+        assert code == 0, f"{name}: raw child exit={code}:\n{out}"
 
         results = [
             line for line in out.splitlines()
