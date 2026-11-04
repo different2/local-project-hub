@@ -175,6 +175,11 @@ def test_same_tab_raw_link_has_visible_back_forward_reload(tmp):
         assert window.web is view and view.isVisible()
         forward.click()
         assert _wait_for(lambda: view.title() == "Replay"), "Forward did not restore replay"
+        # Title changes before loading completes; Qt intentionally disables
+        # Reload while a navigation is in flight. Do not click a disabled button.
+        assert _wait_for(lambda: not view.page().isLoading() and reload_button.isEnabled()), (
+            "Replay did not become reload-ready", view.url().toString(),
+            view.page().isLoading(), reload_button.isEnabled(), counts)
         before = counts["/replay"]
         reload_button.click()
         assert _wait_for(lambda: counts.get("/replay", 0) > before), "Reload did not reload the selected page"
