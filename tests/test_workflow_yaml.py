@@ -470,7 +470,7 @@ def test_linux_release_has_real_test_build_and_publish_gates() -> None:
 
 
 def test_frontpage_downloads_are_platform_specific_latest_links() -> None:
-    """No version-pinned front-page downloads or missing Linux download."""
+    """Latest Mac plus explicitly retained installers for deferred platforms."""
     import re
     from urllib.parse import unquote, urlparse
 
@@ -479,13 +479,16 @@ def test_frontpage_downloads_are_platform_specific_latest_links() -> None:
     rows = [line for line in table.splitlines()
             if line.startswith("|") and any(p in line for p in ("macOS", "Windows", "Linux"))]
     assert len(rows) == 3, "front page must provide macOS, Windows and Linux downloads"
+    deferred = re.search(r"Windows and Linux installers remain at \*\*(v[0-9]+\.[0-9]+\.[0-9]+)\*\*", table)
+    assert deferred and "macOS-only" in table, "partial release must explicitly name the retained platform version"
     names = set()
     for row in rows:
         links = re.findall(r"\]\((https://github\.com/[^)]+)\)", row)
         assert len(links) == 1, f"expected one platform download: {row}"
         path = urlparse(links[0]).path
-        prefix = "/different2/local-project-hub/releases/latest/download/"
-        assert path.startswith(prefix), f"front-page download is not latest: {links[0]}"
+        prefix = ("/different2/local-project-hub/releases/latest/download/" if "macOS" in row
+                  else "/different2/local-project-hub/releases/download/" + deferred.group(1) + "/")
+        assert path.startswith(prefix), f"download does not match the advertised platform release: {links[0]}"
         name = unquote(path.removeprefix(prefix))
         assert name and "/" not in name, f"invalid latest asset name: {name}"
         assert not re.search(r"\d+\.\d+\.\d+", name), f"version-pinned filename: {name}"
@@ -504,7 +507,7 @@ def test_stable_download_names_match_packaging_and_frontpage() -> None:
     names = runpy.run_path(str(PROJECT_ROOT / "tools/release_artifacts.py"))["ASSET_NAMES"]
     jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
     readme = (PROJECT_ROOT / "README.md").read_text()
-    linked = set(re.findall(r"releases/latest/download/([^\s)]+)", readme))
+    linked = set(re.findall(r"releases/(?:latest/download|download/v[0-9]+\.[0-9]+\.[0-9]+)/([^\s)]+)", readme))
     assert linked == set(names.values()), "front-page asset names differ from packaging contract"
     for platform, filename in names.items():
         if platform == "macos":

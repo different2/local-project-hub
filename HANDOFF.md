@@ -1,6 +1,20 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT: tested source checkpoint; GitHub commit/push authorized
+## CURRENT: macOS-only 0.7.5 release authorized; packaging in progress
+
+The user explicitly chose 'Build and publish a macOS-only update; I'll install it'.
+Build from the committed bugfix source with version0.7.5, using an isolated fresh
+packaging worktree/environment. Preserve the existing older build environment,
+generated app, old DMG and installed0.7.4 copy. No Linux/Windows builds, broad test
+rerun or additional review; no installation or restart of the user's running app.
+This is an explicit macOS-only exception to the normal all-platform publication
+process: keep the generic three-asset CI gate unchanged, suppress tag CI and
+publish manually only after actual Mac artifact/runtime/digest acceptance.
+README retains Windows/Linux0.7.4 download links so a Mac-only latest release
+cannot break their downloads. Durable progress/evidence is under
+`~/.local/share/local-project-hub/acceptance/macos-0.7.5/`.
+
+## PRIOR SOURCE CHECKPOINT — retained context
 
 The user narrowed the last step to repair/test the IPv6 concern only, without
 cycling through the other tests. That scope is completed. The user subsequently

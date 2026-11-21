@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.5 — macOS only
+
+- Reconnect Restart to the backend's current owned address instead of an old automatically detected port; preserve explicit addresses and legacy routes.
+- Recover an owned IPv4 or IPv6 endpoint without opening another project's listener. Bound URL recovery with one per-run deadline.
+- Preserve captured descendant cleanup across Restart and Stop-to-Start, and use phased Ctrl-C/terminate/kill shutdown on POSIX.
+- Fix observability Sphere inspector exports invalidating browser page/profile wrappers or producing duplicate save handling.
+- This release publishes only the macOS 12+ Apple-silicon installer. Windows/Linux installers remain at 0.7.4; further native verification and Windows graceful console Stop are deferred.
+- Verification: previously completed source checks and focused final IPv6 checks, plus the new packaged-macOS acceptance recorded in the release evidence. No new full cross-platform test cycle or independent review.
+
 ## 0.7.4
 
 - Add Back, Forward and Reload for the selected browser tab without restarting its backend or rewriting page-defined link behavior.

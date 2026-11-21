@@ -36,13 +36,14 @@ projects' source, virtual environments, or dependencies.
 ## Download
 
 [Latest release and release notes](https://github.com/different2/local-project-hub/releases/latest).
-These download links always follow the latest published release.
+The macOS link follows the latest published release. This update is **macOS-only**.
+Windows and Linux installers remain at **v0.7.4** until native platform verification resumes.
 
 | Platform | File | Install |
 |---|---|---|
 | macOS 12+ (Apple silicon) | [Download `.dmg`](https://github.com/different2/local-project-hub/releases/latest/download/Local.Project.Hub.dmg) | Open the disk image, drag the app to Applications |
-| Windows x86-64 | [Download `.msi`](https://github.com/different2/local-project-hub/releases/latest/download/Local.Project.Hub.msi) | Double-click the installer |
-| Linux: Ubuntu 24.04 LTS x86-64 | [Download `.deb`](https://github.com/different2/local-project-hub/releases/latest/download/Local.Project.Hub.Ubuntu-24.04-amd64.deb) | In the download folder: `sudo apt install ./Local.Project.Hub.Ubuntu-24.04-amd64.deb` |
+| Windows x86-64 | [Download `.msi`](https://github.com/different2/local-project-hub/releases/download/v0.7.4/Local.Project.Hub.msi) | Double-click the installer |
+| Linux: Ubuntu 24.04 LTS x86-64 | [Download `.deb`](https://github.com/different2/local-project-hub/releases/download/v0.7.4/Local.Project.Hub.Ubuntu-24.04-amd64.deb) | In the download folder: `sudo apt install ./Local.Project.Hub.Ubuntu-24.04-amd64.deb` |
 
 Older versions: [Releases](https://github.com/different2/local-project-hub/releases).
 
@@ -142,7 +143,11 @@ and reopens by itself — the copy it replaces goes to the Trash, and if anythin
 goes wrong the old copy is put back before you see it. On Windows, the
 installer runs. Your projects and settings are untouched.
 
-**Linux:** download the latest `.deb` above and run the same `sudo apt install`
+The updater checks published installer releases, not source commits on GitHub.
+For a macOS-only release, Windows users should keep the compatible installer linked
+above; a newer Windows installer is not implied by the macOS release version.
+
+**Linux:** download the `.deb` linked above and run the same `sudo apt install`
 command again. Linux updates currently use APT/manual installation, not the
 macOS/Windows in-app installer flow.
 
