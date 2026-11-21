@@ -1,139 +1,95 @@
 # HANDOFF — Local Project Hub
 
-## CURRENT: macOS-only 0.7.5 release authorized; packaging in progress
+## CURRENT: macOS-only 0.7.5 published; owner will install
 
-The user explicitly chose 'Build and publish a macOS-only update; I'll install it'.
-Build from the committed bugfix source with version0.7.5, using an isolated fresh
-packaging worktree/environment. Preserve the existing older build environment,
-generated app, old DMG and installed0.7.4 copy. No Linux/Windows builds, broad test
-rerun or additional review; no installation or restart of the user's running app.
-This is an explicit macOS-only exception to the normal all-platform publication
-process: keep the generic three-asset CI gate unchanged, suppress tag CI and
-publish manually only after actual Mac artifact/runtime/digest acceptance.
-README retains Windows/Linux0.7.4 download links so a Mac-only latest release
-cannot break their downloads. Durable progress/evidence is under
-`~/.local/share/local-project-hub/acceptance/macos-0.7.5/`.
+- Release: https://github.com/different2/local-project-hub/releases/tag/v0.7.5
+  (release ID `453837365`, published `2026-11-21T16:59:47Z`).
+- Frozen release/tag source: `5188888783cf33c580c40f395a30ac359c440864`;
+  bugfix source checkpoint: `38958e28c547185bbdeaeb0385cbe403d3126eef`.
+  A later documentation-only main commit is NOT the tested release target.
+- Only `Local.Project.Hub.dmg` was published, size `264011225` bytes, SHA-256
+  `df841cb9cd0842146606b8de4318e57fa716be173d80fe6d28bc87ec4c24d093`.
+- Mac artifact, real native runtime and anonymous public acceptance passed.
+  Read-only code from the actual installed0.7.4 bundle sees `v0.7.5`, reports a
+  newer compatible installer and downloads the exact tested bytes; correct digest
+  accepted, wrong digest rejected, real downloaded DMG `hdiutil verify` exit0.
+  `installed-updater-after-publication.json` / `proc_5bd8fda5a6b5` raw exit0.
+  All saved release jobs are completed, not pending reruns.
+- Installed Hub **0.7.4** is untouched. The user explicitly chose “Build and
+  publish a macOS-only update; I'll install it.” Do not install or restart the
+  user's app/dashboard. Source, release publication and installation are separate.
+- Windows/Linux installers remain **0.7.4**, with working pinned README links.
+  No new Windows/Linux builds, native QA or implementation were requested.
 
-## PRIOR SOURCE CHECKPOINT — retained context
+## Accepted gates and scope
 
-The user narrowed the last step to repair/test the IPv6 concern only, without
-cycling through the other tests. That scope is completed. The user subsequently
-authorized committing/pushing the changes to GitHub and deferring any additional
-Linux/Windows work. This commit is the source checkpoint; resolve its exact ID
-with `git log -1`. No full-suite rerun or further review was performed for the last
-correction. The installed app is unchanged. Historical review verdicts stay
-preserved rather than being rewritten as clear.
+Private release evidence (never upload wholesale):
+`~/.local/share/local-project-hub/acceptance/macos-0.7.5/`
 
-- Repo: `/Users/iff/Documents/Programming/local-project-hub`
-- Verification baseline HEAD: `a8f057a6375086e8b6342b0432332f932973e634`;
-  this source checkpoint commits the tested working-tree Python bytes.
-- Installed Hub **0.7.4**, live registry, managed sources/environments unchanged.
-- Commit/push to the existing GitHub repository is authorized. No release,
-  installation or deliberate live app/dashboard restart permission.
-- Preserve unrelated untracked `graphify-out/`, sandboxing and human Git attribution.
-- Never run `tests/run_all.py` top-level on this Mac: its unrelated-port cleanup is
-  unsafe. Verification uses isolated `run_case.py` / `run_strict_matrix.py` below.
-- Never merge `diagnose/windows-msi-native` or `diagnose/linux-input` into main.
+- Fresh pinned Python3.11/Qt6.9.3 release environment and detached source worktree;
+  original build environment, old generated app/DMGs and installed copy preserved.
+- Version checks (3) and targeted README/download-contract checks (2) passed.
+  No new full source matrix or further independent review was run.
+- `build-receipt.json`: source-bound DMG, real `hdiutil verify`, macOS12 floor,
+  bundle version0.7.5 and build counter1, all23 application source files matched.
+- `runtime-01/summary.json`: the exact DMG mounted read-only, copied out and
+  detached; actual scratch `.app` executable launched with isolated native home,
+  state/cache/temp and normal renderer sandboxing. Bundled Qt/PySide6 are6.9.3;
+  main/physical WebEngine helpers have arm64, valid signatures and macOS12 floors.
+- Native pixels showed the correct synthetic dashboard nonce and interaction
+  count1. Wrong-content control failed as intended. A background native Stop
+  action delivered Ctrl-C to the owned backend, which recorded/flushed its exit.
+  Real app and supervisor exits0; no owned survivors or protected hash changes.
+  Post-Stop capture predates repaint and is NOT stopped-UI evidence.
+- Bundled Store loaded a copied real registry:11 records ×7 launch fields
+  preserved; no managed command ran and the live registry was not edited.
+- `draft-acceptance.json`: exact private draft/asset/source label and GitHub
+  digest checked against local DMG, including wrong-digest rejection. Exact
+  publication readback is `published-readback.json`.
+- Normal three-platform CI publication gate remains unchanged. This was the
+  user's explicit manual macOS-only exception; branch/tag use `[skip ci]`.
+  No new Linux/Windows CI success is claimed.
 
-## Goal and correct target
+Preparation failures remain evidence, not successes: the old environment failed
+Qt-pin preflight; first packaging wrapper exited1 after `create` regenerated four
+tracked activation/config path fields in the scratch tree. Their exact diff and
+generated copies were preserved, only those files restored, then packaging alone
+resumed successfully. First public-offer probe exited1 because its test expected
+`0.7.5` while installed `parse_release` preserves the literal `v0.7.5`; diagnostic
+showed `is_newer:true`. Only the probe expectation changed; updater code did not.
 
-Fix Restart/new-port reconnection, wrong-project navigation after collisions,
-save crash/duplicate pickers, and Ctrl-C-like Stop. “Sphere view” means
-observability's `modelview.py::exportObject`, NOT the standalone Sphere project.
-Managed projects are read-only. Never independently start/stop/restart
-`obs_live.py`, read/crash-test its active capture, or reopen its closed storage work.
+## Source/review history — retained, not reopened
 
-## Platform scope and DEFERRED work — resume only when the user has budget
+The final IPv6 repair was deliberately focused-tested, not full-suite retested or
+independently re-reviewed. Original/correction review verdicts remain
+`concerns_found`; do not rewrite them as clear. Before that last correction the
+full source matrix passed460+3skip/463 identities and170 raw-zero children.
+Final scoped evidence records7 unique cases/9 positive raw-zero executions plus
+three failing copied-source controls. Earlier native observability Sphere export
+acceptance used the actual `modelview.py::exportObject` on synthetic data, not the
+standalone Sphere project and not captures. Detailed evidence remains in
+`~/.local/share/local-project-hub/acceptance/bugfixes-2026-11-20/`.
 
-- URL provenance/discovery, endpoint ownership, retry budgets, static-entry handling
-  and download-wrapper ownership are shared source, not macOS-only implementations.
-  Their inclusion in Linux/Windows builds is not native verification on those OSes.
-- SIGINT-first Stop is POSIX (macOS/Linux). Windows retains its existing
-  terminate/taskkill console-tree fallback; equivalent graceful Ctrl-C delivery
-  was NOT added.
-- DEFERRED: native Linux/Windows validation of restart/new-port and IPv4/IPv6
-  recovery, captured-child cleanup, selected-tab navigation and single-picker
-  download lifetime behavior with each target's Qt runtime. Fix only platform
-  differences actually reproduced then; do not assume these shared fixes fail.
-- DEFERRED: investigate/implement a safe Windows graceful-console-interrupt path
-  if still wanted. Do not infer it exists from the POSIX implementation.
-- User explicitly requested no extra platform implementation or test cycle now.
-  This push uses `[skip ci]` to avoid starting the existing Linux/Windows matrix;
-  no CI success or new installer acceptance is claimed for this checkpoint.
+The complete preceding handoff is preserved byte-for-byte at
+[the pre-publication context archive](docs/context/handoff-source-fixes-before-macos-0.7.5-publication.md)
+(SHA-256 `b4ea576746878318ee435f4f3335c0241c93d0a4499d27bedf1ded5f23e9d026`).
+The older0.7.4 release handoff remains linked there.
 
-## Accepted execution — do not rerun on delayed notifications
+## Deferred work / safety boundaries
 
-Private evidence root (never upload wholesale):
-`~/.local/share/local-project-hub/acceptance/bugfixes-2026-11-20/`
-
-- **Before the last IPv6 repair**, `regression-review-fixes-01`: 460 PASS + 3 platform
-  SKIP, all 463 registered identities exactly once, 170 children/all raw exits 0.
-  `independent-review-fixes-reconciliation.json` rereads every full child log and
-  receipt; no missing/extra/duplicate identity, source drift or protected drift.
-  All49 Hub/tests hashes stayed unchanged during that run. Its full-suite result
-  is not current-byte coverage for the later scoped repair.
-- Native Cocoa/Python 3.11, installed Qt6.9.3 libraries imported read-only; no retries
-  or unsafe top-level housekeeping. `proc_fa533cdf3d1d` is consumed, not running.
-- Existing Python3.9.6/Qt6.7.3: `review-py39-process-final` passes all 42 process
-  cases; five new URL/ownership cases also passed during the correction phase.
-  Earlier 41-case process coverage is superseded, not additional coverage.
-- Correct native observability inspector baseline: three actual saves plus clean
-  fixture confirmation, one NSSavePanel per export, valid stable profile, UTF-8
-  output, raw exit0. Removing the ownership repair fails profile validity/raw1.
-  Native labels: `native-observability-02`, `native-observability-clean`,
-  `native-observability-mutant`. No captures or live dashboard were used. These are
-  prior native gates on unchanged download/renderer code, not installed-app signoff.
-- Copies of 11 real registrations preserved 77 launch-field comparisons without
-  modifying the live registry or launching managed projects. Existing environments
-  were not upgraded. Failed matrices, fixture diagnostics and wrong-target probes
-  remain preserved; `checkpoint.md` has their clearly superseded history.
-
-## Review history and subsequent targeted repair
-
-Original review: canonical message86518 under `review-source-01/`; its original
-`concerns_found` verdict and exact findings remain unchanged. The user then chose:
-“Fix — reproduce and address all three, test, then run one scoped re-review.”
-
-Correction re-review: `deleg_56872162` / `sa-0-15369dbf`, completed native session
-`20261121_042200_139da9`, canonical message86852. Files under `review-corrections-01/`:
-`final-canonical-verdict.txt`, `final-native-audit.json`, `final-validation.json`.
-Audit: all 4447 actual packet lines covered; only allowed packet/mandatory-skill/
-gate calls; no boundary violations or candidate/protected changes. Native requested
-model/provider/reported endpoint match parent `gpt-6.1-sol` / `openai-codex`; actual
-upstream is not independently disclosed. Isolation was policy-constrained, not
-capability-enforced. No reviewer is running. The one approved re-review is used.
-
-The reviewer marks the original cleanup-loss, rejected-legacy latch and mixed-owner
-acceptance mechanisms **resolved**. Targeted reproductions/positives/controls are
-mapped in `review-fix-progress.json`, including Stop→Start cleanup and its complete
-INT+TERM/reap budget. At that checkpoint it reported this additional defect:
-
-**MEDIUM, confidence 94% — Hostname rejection cannot recover an IPv6-only owned backend.**
-With owned `::1:P` and foreign `127.0.0.1:P`, fallback incorrectly manufactured
-an IPv4 URL after rejecting ambiguous localhost. The user then explicitly asked
-to repair/test this concern only. A focused regression failed with that exact
-wrong-family URL, and now passes after the repair. Discovery verifies each
-loopback literal's owners and emits a bracketed IPv6 URL when appropriate.
-Both rejection consumers share one per-run deadline; a new launch resets it.
-
-`ipv6-focused-final/{manifest.json,summary.json,closeout.json}`: **7 unique focused
-cases, 9 positive executions/all raw exits0**, covering auto/legacy records in both
-family directions, deadline reuse/reset, expiry/cancellation. The two reverse
-cases also pass on existing Python3.9.6/Qt6.7.3. Three copied-source controls
-restore the separate defects and fail the exact intended assertions/raw1.
-All49 source hashes stayed frozen during these focused checks, all16 protected
-hashes match and no matching owned test processes remain. These final bytes are
-targeted-tested, not fully rerun or independently re-reviewed, per user direction.
-
-## Stop here unless the user asks for more
-
-The repair/test and source-checkpoint scope is complete. No reviewer or QA job is
-running. Do not start another review, full suite, platform work, release,
-installation or live dashboard restart merely because old history mentions it.
-
-External `checkpoint.md` CURRENT section controls after interruptions. Preserve
-both frozen review packets and source vectors; do not overwrite accepted evidence.
-The original release handoff is preserved at
-[docs/context/handoff-release-0.7.4-before-bugfixes-2026-11-21.md](docs/context/handoff-release-0.7.4-before-bugfixes-2026-11-21.md).
-The prior longer bugfix handoff is preserved as `handoff-before-correction-review-result.md`
-in the private evidence root (SHA256 `fbf9cd5bc9a240c43a6ca0284b73018ce14ad8387214bf72976fd1e7892fac3d`).
+- Shared URL/discovery/ownership/retry/static-entry/download fixes are not proof
+  of native Linux/Windows compatibility. When the user has budget, validate
+  restart/IPv4+IPv6 recovery, cleanup, navigation and picker lifetime on each
+  runtime; repair reproduced differences only. Windows graceful console Ctrl-C
+  is still deferred; its existing terminate/taskkill path remains.
+- Managed sources, dependencies/environments, live registry and active captures
+  stay read-only. Never independently start/stop/restart `obs_live.py` or reopen
+  completed capture/storage work. Tablet work remains on hold.
+- Never run `tests/run_all.py` top-level on this Mac: its unrelated-port cleanup
+  is unsafe. Do not repeat full regression/review because old history mentions it.
+- Preserve unrelated untracked `graphify-out/`, sandboxing, human attribution and
+  original release tags. Never merge `diagnose/windows-msi-native` or
+  `diagnose/linux-input` into main.
+- Reconcile saved handles with durable receipts before reporting a job as active.
+  Release acceptance is complete. No further work is pending except the owner's
+  installation and explicitly deferred platform follow-up.

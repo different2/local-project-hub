@@ -30,7 +30,7 @@ KNOWN LIMITS OF v0.1 (deferred, not hidden):
   - Env vars are a simple KEY=VALUE text field, not a vault.
   - Windows/Linux untested; macOS only.
 
-CURRENT SOURCE COMPATIBILITY LIMITS (unreleased bugfix work):
+CURRENT SOURCE COMPATIBILITY LIMITS (macOS 0.7.5; Windows/Linux installers 0.7.4):
   - PLATFORM FOLLOW-UP DEFERRED by the user's explicit budget instruction:
     URL/discovery/ownership/retry/download fixes are shared source, but these
     changes were verified on macOS, not natively retested on Linux or Windows.
@@ -66,8 +66,10 @@ CURRENT SOURCE COMPATIBILITY LIMITS (unreleased bugfix work):
     endpoint family and shares one per-run recovery deadline. The final correction
     is targeted-tested, not independently re-reviewed or full-suite retested;
     HANDOFF.md identifies the exact bounded evidence.
-  - Source tests are not an installed update. This bugfix task has not built,
-    pushed, published or installed new application packages.
+  - Source tests are not an installed update. macOS-only 0.7.5 has now been built,
+    checked as an actual packaged app and published from source commit5188888.
+    The installed0.7.4 copy remains unchanged; the owner will install the update.
+    Windows/Linux installers remain0.7.4. HANDOFF.md records public-offer evidence.
   - Pinned macOS Qt6.9.3 QProcess can normalize Unicode argv to a canonically
     equivalent form. Exact Unicode code-point preservation is not guaranteed;
     Hub does not normalize saved commands or alter project source to compensate.
