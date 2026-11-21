@@ -2191,7 +2191,7 @@ def test_delayed_port_discovery_ignores_superseded_owners(tmp: Path) -> None:
         rec = store.add({"id": change, "name": change, "command": "node fixture.js",
                          "working_dir": str(tmp), "url": ""})
         callbacks, calls = [], []
-        proc = SimpleNamespace(_generation=0, state="running",
+        proc = SimpleNamespace(_generation=0, state="running", detected_url=None,
                                detect_url_from_ports=lambda: calls.append("queried"))
         hub = SimpleNamespace(store=store, procs={rec["id"]: proc}, _append_log=lambda *args: None)
         with patch.object(wm.QTimer, "singleShot", side_effect=lambda ms, callback: callbacks.append(callback)):
@@ -2205,7 +2205,7 @@ def test_delayed_port_discovery_ignores_superseded_owners(tmp: Path) -> None:
         elif change == "removed":
             store.remove(rec["id"])
         elif change == "manual":
-            store.update(dict(rec, url=f"http://127.0.0.1:{reserve_port()}/manual"))
+            store.update(dict(rec, url=f"http://127.0.0.1:{reserve_port()}/manual", url_mode="manual"))
         callbacks[0]()
         assert calls == (["queried"] if change == "active" else []), (change, calls)
 
@@ -2318,6 +2318,7 @@ def test_readiness_target_change_retires_only_its_own_observer(tmp: Path) -> Non
     ready, failures = [], []
     pid = "target-owner"
     hub = SimpleNamespace(waiters={}, procs={}, active_id=pid,
+                          _current_dashboard_url=lambda rec, **kwargs: rec["url"],
                           _append_log=lambda *args: None, _view_for=lambda owner: object(),
                           _show_dashboard=lambda rec: ready.append(rec["url"]),
                           _show_start_page=lambda *args, **kwargs: failures.append(kwargs),

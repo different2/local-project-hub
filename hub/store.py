@@ -26,6 +26,8 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
+from ipaddress import ip_address
 
 SCHEMA_VERSION = 2
 
@@ -146,6 +148,11 @@ class Store:
             # honest "unknown" with a blank one.
             if version == 1:
                 rec = migrate_to_v2(rec)
+            if isinstance(rec, dict) and rec.get("url") and "url_mode" not in rec:
+                # Old releases saved detected and typed URLs identically. Mark
+                # the ambiguity; only verified owned loopback endpoints may
+                # refresh these, retaining their route/query/fragment.
+                rec = dict(rec, url_mode="legacy")
             rec = validate(rec)
             self.projects[rec["id"]] = rec
 
@@ -311,6 +318,22 @@ _STR_FIELDS = (
 _BOOL_FIELDS = ("autostart",)
 
 
+def url_is_auto(rec: dict) -> bool:
+    """A detected address is a previous result, not a fixed launch setting."""
+    if not rec.get("url") or rec.get("url_mode") == "auto":
+        return True
+    if rec.get("url_mode") != "legacy":
+        return False
+    try:
+        parsed = urlsplit(rec["url"])
+        host = parsed.hostname or ""
+        return not parsed.username and not parsed.password and (
+            host.lower() == "localhost" or ip_address(host).is_loopback
+        )
+    except ValueError:
+        return False
+
+
 def validate(rec: dict) -> dict:
     """Coerce and check a project record. Raises RegistryError on bad input."""
     if not isinstance(rec, dict):
@@ -320,6 +343,10 @@ def validate(rec: dict) -> dict:
         out[f] = str(rec.get(f) or "")
     for f in _BOOL_FIELDS:
         out[f] = bool(rec.get(f))
+    mode = rec.get("url_mode") or ("manual" if out["url"] else "auto")
+    if mode not in ("auto", "manual", "legacy"):
+        raise RegistryError("dashboard address mode must be auto, manual or legacy")
+    out["url_mode"] = mode
     env = rec.get("env") or {}
     if not isinstance(env, dict):
         raise RegistryError("env must be an object of KEY: VALUE")

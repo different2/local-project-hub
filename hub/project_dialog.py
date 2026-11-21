@@ -468,6 +468,9 @@ class ProjectDialog(QDialog):
             # an unnamed project is named after the folder it runs in.
             folder = self.wd.text().strip()
             name = name_from_folder(folder) if folder else ""
+        url = self.url.text().strip()
+        if url != self._record.get("url", ""):
+            rec["url_mode"] = "manual" if url else "auto"
         rec.update(
             {
                 "name": name,
@@ -477,7 +480,7 @@ class ProjectDialog(QDialog):
                 "interpreter": self.interp.text().strip(),
                 "command": self.command.text().strip(),
                 "args": self.args.text().strip(),
-                "url": self.url.text().strip(),
+                "url": url,
                 "entry_file": self._entry_file,
                 "autostart": self.autostart.isChecked(),
                 "env": self._parse_env(self.env.toPlainText()),

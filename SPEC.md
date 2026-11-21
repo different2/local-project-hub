@@ -30,7 +30,16 @@ KNOWN LIMITS OF v0.1 (deferred, not hidden):
   - Env vars are a simple KEY=VALUE text field, not a vault.
   - Windows/Linux untested; macOS only.
 
-CURRENT COMPATIBILITY LIMITS (0.7.4 candidate, not yet published):
+CURRENT SOURCE COMPATIBILITY LIMITS (unreleased bugfix work):
+  - PLATFORM FOLLOW-UP DEFERRED by the user's explicit budget instruction:
+    URL/discovery/ownership/retry/download fixes are shared source, but these
+    changes were verified on macOS, not natively retested on Linux or Windows.
+    SIGINT-first Stop applies to macOS/Linux only; Windows retains its existing
+    terminate/taskkill path, not equivalent graceful Ctrl-C delivery.
+    When budget is available: validate native restart/IPv4+IPv6 recovery, cleanup,
+    navigation and single-picker download behavior on Linux/Windows; repair only
+    reproduced platform differences and consider Windows graceful console Stop.
+    No extra platform implementation or CI/test cycle is authorized now.
   - Managed project sources, dependencies and virtual environments stay read-only.
   - Back/Forward/Reload follow the selected browser tab; page-defined same-tab
     links are not rewritten. Reload does not restart a backend.
@@ -46,6 +55,19 @@ CURRENT COMPATIBILITY LIMITS (0.7.4 candidate, not yet published):
     explicitly configured extra arguments remain authoritative.
   - Silent-server OS-port discovery is best-effort; an explicit dashboard URL
     remains the supported fallback when a server announces no usable address.
+  - Safe automatic free-port adaptation currently covers the documented Python
+    -m http.server contract. Unknown or hardcoded launcher port arguments are
+    not invented or rewritten; stored command/interpreter settings are preserved.
+  - The original restart-descendant cleanup, rejected legacy URL latch and mixed
+    hostname-ownership mechanisms have targeted corrections and passed regression.
+    The single scoped re-review identified a further IPv6-only recovery defect,
+    subsequently reproduced and repaired with focused tests under the user's
+    explicit no-full-suite/no-further-review instruction. Discovery now verifies
+    endpoint family and shares one per-run recovery deadline. The final correction
+    is targeted-tested, not independently re-reviewed or full-suite retested;
+    HANDOFF.md identifies the exact bounded evidence.
+  - Source tests are not an installed update. This bugfix task has not built,
+    pushed, published or installed new application packages.
   - Pinned macOS Qt6.9.3 QProcess can normalize Unicode argv to a canonically
     equivalent form. Exact Unicode code-point preservation is not guaranteed;
     Hub does not normalize saved commands or alter project source to compensate.

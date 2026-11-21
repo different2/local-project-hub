@@ -12,6 +12,7 @@ import re
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .platform import prepend_interpreter, split_command
+from .store import url_is_auto
 
 
 def _served_directory(record: dict, expected_host: str, expected_port: int) -> Path | None:
@@ -50,7 +51,10 @@ def _served_directory(record: dict, expected_host: str, expected_port: int) -> P
                 port = int(token)
             else:
                 return None  # CGI/TLS/unknown switches are not this static recipe.
-        if port != expected_port:
+        # Automatic URLs describe this run, which may have asked http.server
+        # for port 0 after a conflict. Keep its entry/profile recipe without
+        # rewriting the saved command; manual and untagged mismatches stay closed.
+        if port != expected_port and not url_is_auto(record):
             return None
         if bind not in (None, "::", "0.0.0.0", expected_host):
             return None  # Do not assume two different bind names are equivalent.

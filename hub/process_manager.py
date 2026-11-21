@@ -8,8 +8,8 @@ shell injection surface from the registry file.
 Stdout/stderr are merged into one ring buffer per project (newest 500 lines),
 kept in memory for the log drawer. Signals are emitted on the GUI thread via Qt.
 
-Stopping is deliberately patient: SIGTERM first, then SIGKILL only after a
-generous grace period. Projects that build a large index at startup
+POSIX Stop is deliberately patient: SIGINT first, then SIGTERM with its own
+grace, then SIGKILL only if necessary. Projects that build a large index at startup
 (ai-agent-observability's ~12s _scan_once over a 3.8 GB capture is the
 canonical case) need room to finish; a 3s hard kill destroys them mid-warm-up.
 """
@@ -31,11 +31,12 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from .platform import prepend_interpreter, resolve_interpreter, split_command
 from .readiness import url_host_port
+from .store import url_is_auto
 from . import urldetect
 
 LOG_HISTORY = 500
 
-# Grace given to a project to exit after SIGTERM before we escalate to SIGKILL.
+# Initial POSIX Ctrl-C cleanup grace; TERM then gets a separate bounded grace.
 TERM_GRACE_MS = 20_000
 
 # Windows gets a much shorter leash: terminate() posts WM_CLOSE, which a console
@@ -119,6 +120,40 @@ def _kill_process_tree(pid: int) -> None:
         )
     except (OSError, subprocess.SubprocessError):
         pass
+
+
+def _http_server_port(argv: list[str]) -> tuple[int, int] | None:
+    """The stdlib server's documented positional port, never guessed CLI flags.
+
+    Return its argv index (len(argv) when omitted) and requested/default port.
+    Unknown options or ambiguous invocations deliberately decline adaptation.
+    """
+    if not argv or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", ntpath.basename(argv[0]), re.I):
+        return None
+    try:
+        module = argv.index("-m")
+    except ValueError:
+        return None
+    if (module + 1 >= len(argv) or argv[module + 1] != "http.server"
+            or any(arg not in ("-u", "-B", "-I", "-E", "-s") for arg in argv[1:module])):
+        return None
+    index, found = module + 2, None
+    valued = ("--bind", "-b", "--directory", "-d", "--protocol", "-p")
+    while index < len(argv):
+        token = argv[index]
+        if token in valued:
+            if index + 1 >= len(argv):
+                return None
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in valued if option.startswith("--")) or token == "--cgi":
+            index += 1
+            continue
+        if not token.isdigit() or found is not None or not 0 <= int(token) <= 65535:
+            return None
+        found = (index, int(token))
+        index += 1
+    return found if found is not None else (len(argv), 8000)
 
 
 def _looks_like_python(program: str) -> bool:
@@ -249,6 +284,8 @@ class ProjectProcess(QObject):
         self._started_at = 0.0
         self._pending_restart = False
         self.detected_url: str | None = None
+        self._url_recovery_until: float | None = None
+        self._force_free_port = False
         # PIDs of processes this object started and is still running.
         # Kept separately from the live proc because Windows
         # QProcess.processId() returns 0 until the started signal, so
@@ -279,6 +316,7 @@ class ProjectProcess(QObject):
         # left over from an earlier run can never kill its replacement.
         self._generation = 0
         self._kill_target: tuple[int, QProcess, int] | None = None
+        self._interrupt_grace = False
         # None uses the platform production grace; tests may inject a short one
         # without changing the shipped timeout.
         self._term_grace_ms = term_grace_ms
@@ -328,6 +366,14 @@ class ProjectProcess(QObject):
     def start(self) -> None:
         if self.proc is not None and self.proc.state() != QProcess.NotRunning:
             return  # already running/starting
+        if self._restart_waiting == self._generation:
+            return  # A second Start must not discard the active cleanup/port wait.
+        tree = self._tree_target
+        if tree is not None and tree[0] == self._generation and self._tree_has_live_members(tree[3]):
+            # Stop may have reaped only the launcher. Start must finish its
+            # captured cleanup too, not cancel the timer and orphan its child.
+            self._restart_after_port_free(generation=self._generation)
+            return
         # A new run supersedes any escalation armed for the previous one, even
         # if this start is refused below. Nothing from the old run may kill a
         # process this call goes on to create.
@@ -335,6 +381,8 @@ class ProjectProcess(QObject):
         self._restart_waiting = None
         self._stop_kill_timer()
         self._start_failed = False
+        self.detected_url = None
+        self._url_recovery_until = None
         # Refuse to start when a foreign process already holds this project's
         # port. This used to live only in HubWindow._launch(), so any other path
         # into start() -- tests, and any future headless use -- launched straight
@@ -392,6 +440,14 @@ class ProjectProcess(QObject):
         # its full path into every command (release spec §3: "discovering or
         # selecting Python interpreters").
         argv = prepend_interpreter(argv, self.rec.get("interpreter") or "")
+        port_spec = _http_server_port(argv) if url_is_auto(self.rec) else None
+        if port_spec is not None and (self._force_free_port or urldetect.port_in_use(port_spec[1])):
+            index, _port = port_spec
+            if index == len(argv):
+                argv.append("0")
+            else:
+                argv[index] = "0"
+            self.output.emit("[hub] requested port is in use; asking the server for a free port\n")
         program, args = argv[0], argv[1:]
         workdir = self.rec.get("working_dir") or None
         if workdir and os.path.dirname(program) and not os.path.isabs(program):
@@ -499,20 +555,23 @@ class ProjectProcess(QObject):
                 self.state_changed.emit("stopped")
             return
         self._user_stopped = True
-        self.output.emit("[hub] terminating (waiting for a clean exit)...\n")
         pid = self._pid_of(self.proc)
         tree = self._snapshot_tree(pid)
-        # One tracked escalation for both platforms. Windows gets the short
-        # leash: terminate() posts WM_CLOSE, which a console process never
-        # receives, so waiting out the POSIX grace would stall every stop.
         self._arm_escalation(self._grace_ms(), tree=tree)
-        # Signal the whole owned tree, not only the direct child. On POSIX
-        # this covers a shell/launcher and descendants that outlive it.
-        self._signal_owned_tree(tree, pid, _SIGTERM)
-        try:
-            self.proc.terminate()
-        except RuntimeError:
-            pass
+        if not IS_WINDOWS and pid in tree:
+            self._interrupt_grace = True
+            # Match one terminal Ctrl-C. Do not immediately follow SIGINT with
+            # QProcess.terminate()/SIGTERM: that cuts off a collector's flush.
+            self.output.emit("[hub] interrupting (Ctrl-C; waiting for a clean exit)...\n")
+            self._signal_owned_tree(tree, pid, signal.SIGINT)
+        else:
+            # Windows retains its console/tree fallback. When POSIX identity
+            # cannot be established, the tracked Qt handle is safer than a PID.
+            self.output.emit("[hub] terminating (waiting for a clean exit)...\n")
+            try:
+                self.proc.terminate()
+            except RuntimeError:
+                pass
 
     def restart(self) -> None:
         running = self.proc is not None and self.proc.state() != QProcess.NotRunning
@@ -574,6 +633,7 @@ class ProjectProcess(QObject):
             pass
         self._kill_target = None
         self._tree_target = None
+        self._interrupt_grace = False
 
     def _pid_of(self, proc: QProcess | None) -> int:
         if proc is None:
@@ -649,9 +709,11 @@ class ProjectProcess(QObject):
         if IS_WINDOWS or not tree:
             return
         root_identity = tree.get(root_pid)
+        group_sent = False
         if self._group_verified(root_pid, root_identity):
             try:
                 os.killpg(root_pid, sig)
+                group_sent = True
             except OSError:
                 pass
         for pid, identity in tree.items():
@@ -659,6 +721,12 @@ class ProjectProcess(QObject):
                 continue
             if urldetect.process_identity(pid) != identity:
                 continue
+            if group_sent:
+                try:
+                    if os.getpgid(pid) == root_pid:
+                        continue  # already received this signal through its group
+                except OSError:
+                    continue  # exited while its identity/group was being checked
             try:
                 os.kill(pid, sig)
             except OSError:
@@ -705,6 +773,22 @@ class ProjectProcess(QObject):
 
     def _on_kill_timer(self) -> None:
         target, self._kill_target = self._kill_target, None
+        if target is not None and self._interrupt_grace:
+            self._interrupt_grace = False
+            generation, proc, pid = target
+            if generation != self._generation or proc is not self.proc:
+                return
+            tree_target = self._tree_target
+            tree = tree_target[3] if tree_target is not None and tree_target[0] == generation else {}
+            if proc.state() == QProcess.NotRunning and not self._tree_has_live_members(tree):
+                self._stop_kill_timer()
+                return
+            self.output.emit("[hub] still running after Ctrl-C; sending terminate before force-kill\n")
+            # Keep the same ownership snapshot and generation for a final,
+            # bounded TERM grace, including children outliving their launcher.
+            self._arm_escalation(min(self._grace_ms(), 5000), tree=tree)
+            self._signal_owned_tree(tree, pid, _SIGTERM)
+            return
         if target is not None:
             self._force_kill_if_current(*target)
 
@@ -781,9 +865,26 @@ class ProjectProcess(QObject):
         Synchronous, and cheap when the port is free (it returns before running
         lsof). Callers on the GUI thread must only reach it on that fast path.
         """
+        if self._automatic_port_spec() is not None:
+            # This recognized server can ask the OS for a free port at bind
+            # time. Never ask to end a different project for its convenience.
+            return None
+        # A previous auto-detected port is not a promise that the next run will
+        # bind it. In particular it may now belong to a different project.
+        url = "" if url_is_auto(self.rec) else self.rec.get("url")
         return _find_foreign_port_holder(
-            self.rec.get("url"), self._own_pids, fallback_port=self._expected_port()
+            url, self._own_pids, fallback_port=self._expected_port()
         )
+
+    def _automatic_port_spec(self) -> tuple[int, int] | None:
+        if not url_is_auto(self.rec):
+            return None
+        try:
+            argv = split_command(self.rec.get("command") or "")
+            argv += split_command(self.rec.get("args") or "")
+            return _http_server_port(prepend_interpreter(argv, self.rec.get("interpreter") or ""))
+        except ValueError:
+            return None
 
     def _expected_port(self) -> int | None:
         """The port this project will bind, even with no URL configured.
@@ -794,6 +895,9 @@ class ProjectProcess(QObject):
         runs into a guaranteed "Address already in use", and the hub loops
         restarting a server that can never come up.
         """
+        spec = self._automatic_port_spec()
+        if spec is not None:
+            return spec[1] or None
         det = self.rec.get("detected") or {}
         port = det.get("port")
         if port:
@@ -803,7 +907,7 @@ class ProjectProcess(QObject):
         # the restart port-wait silently does nothing, and on Windows the
         # replacement server dies with "Address already in use" because the old
         # child still holds the socket.
-        url = str(self.rec.get("url") or "")
+        url = "" if url_is_auto(self.rec) else str(self.rec.get("url") or "")
         if url:
             try:
                 _, url_port = url_host_port(url)
@@ -889,7 +993,7 @@ class ProjectProcess(QObject):
         first time a plausible URL appears; the caller decides whether to use
         it (it never overrides a URL the user configured themselves).
         """
-        if self.detected_url or self.rec.get("url"):
+        if self.detected_url or not url_is_auto(self.rec):
             return
         url = urldetect.find_url(text)
         if not url:
@@ -907,10 +1011,19 @@ class ProjectProcess(QObject):
             return self.detected_url
         pid = self.proc.processId()
         ports = urldetect.listening_ports(pid)
-        if ports:
-            self.detected_url = urldetect.url_from_port(ports[0])
-            self.url_detected.emit(self.detected_url)
-        return self.detected_url
+        for port in ports:
+            # A port does not identify an address family. Probe ownership of
+            # each loopback endpoint before choosing it; another project may
+            # own the same port on the other family.
+            for host in ("127.0.0.1", "::1"):
+                owners = urldetect.port_owners(port, host)
+                if not owners or owners - self._own_pids():
+                    continue
+                authority = f"[{host}]" if ":" in host else host
+                self.detected_url = urldetect.url_from_port(port, authority)
+                self.url_detected.emit(self.detected_url)
+                return self.detected_url
+        return None
 
     def _on_error(self, error, proc: QProcess | None = None) -> None:
         """A failed OS spawn has no finished signal; surface its actual cause."""
@@ -1074,7 +1187,11 @@ class ProjectProcess(QObject):
             self._pending_restart = False
             self._restart_after_port_free(generation=self._generation)
 
-    def _restart_after_port_free(self, attempts: int = 40, generation: int | None = None) -> None:
+    def _restart_after_port_free(
+        self, attempts: int = 40, generation: int | None = None, *,
+        cleanup_tree: dict[int, str | None] | None = None,
+        cleanup_deadline: float | None = None,
+    ) -> None:
         """Start the replacement, waiting for the old process to release the port.
 
         On Windows a terminated child keeps its listening socket briefly, so
@@ -1099,7 +1216,37 @@ class ProjectProcess(QObject):
         # Record the active wait. restart() checks this and coalesces rather
         # than starting a second server on a port the old child may still hold.
         self._restart_waiting = generation
+        if cleanup_tree is None:
+            captured = self._tree_target
+            cleanup_tree = dict(captured[3]) if captured and captured[0] == generation else {}
+        if self._tree_has_live_members(cleanup_tree):
+            # A cached URL is not a launch requirement, but the old owned tree
+            # is still our cleanup responsibility, even without a fixed port.
+            # Keep this identity snapshot after the force-kill clears its timer
+            # state, until actual exit (or a bounded reap failure) is observed.
+            if cleanup_deadline is None:
+                remaining = max(0, self._kill_timer.remainingTime())
+                if self._interrupt_grace:
+                    remaining += min(self._grace_ms(), 5000)
+                cleanup_deadline = time.monotonic() + (remaining + 2000) / 1000
+            if time.monotonic() >= cleanup_deadline:
+                self._restart_waiting = None
+                self.output.emit("[hub] old project processes have not exited; cannot restart\n")
+                self.state_changed.emit("error")
+                return
+            QTimer.singleShot(
+                RESTART_PORT_RETRY_MS,
+                lambda: self._restart_after_port_free(
+                    attempts, generation, cleanup_tree=cleanup_tree,
+                    cleanup_deadline=cleanup_deadline),
+            )
+            return
         port = self._expected_port()
+        tree = self._tree_target
+        if self._automatic_port_spec() is not None and not (tree and self._tree_has_live_members(tree[3])):
+            # The old child is reaped; an unrelated holder need not delay a
+            # configurable server, which can select a free port on its own.
+            port = None
         host = None
         url = self.rec.get("url")
         if url:
@@ -1115,7 +1262,9 @@ class ProjectProcess(QObject):
             if attempts > 0:
                 QTimer.singleShot(
                     RESTART_PORT_RETRY_MS,
-                    lambda: self._restart_after_port_free(attempts - 1, generation),
+                    lambda: self._restart_after_port_free(
+                        attempts - 1, generation, cleanup_tree=cleanup_tree,
+                        cleanup_deadline=cleanup_deadline),
                 )
                 return
             if self._restart_waiting == generation:

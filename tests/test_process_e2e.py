@@ -255,6 +255,7 @@ def test_restart_exit_is_expected_while_waiting_for_the_port(tmp: Path) -> None:
     p.proc = old
     p._generation = 1
     p.rec["url"] = f"http://127.0.0.1:{reserve_port()}/"
+    p.rec["url_mode"] = "manual"  # this case requires a fixed launch endpoint
     states = []
     conflicts = []
     p.state_changed.connect(states.append)
@@ -322,7 +323,7 @@ def test_late_finished_cannot_consume_replacement_restart_intent(tmp: Path) -> N
     states = []
     p.state_changed.connect(states.append)
     waits = []
-    p._restart_after_port_free = lambda **kwargs: waits.append(kwargs)
+    p._restart_after_port_free = lambda *args, **kwargs: waits.append(kwargs)
     with patch.object(pm.os, "kill") as kill, patch.object(pm.os, "killpg", create=True) as killpg:
         try:
             p.restart()
@@ -425,6 +426,7 @@ def _waiting_project() -> tuple[ProjectProcess, dict[str, bool]]:
 
     p = _restartable(grace_ms=120)
     p.rec["url"] = "http://127.0.0.1:12345/"
+    p.rec["url_mode"] = "manual"  # wait/cancel checks intentionally pin the port
     p.proc = _FakeProc(1001, running=False)
     p._generation = 1
     busy = {"value": True}
@@ -1511,14 +1513,156 @@ def test_existing_node_and_bash_commands_keep_their_cli_contract(tmp: Path) -> N
             assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning)
 
 
+def test_restart_does_not_abandon_dynamic_descendant_cleanup(tmp: Path) -> None:
+    _dynamic_descendant_restart(tmp, escaped=False)
+
+
+def test_restart_cleans_an_escaped_dynamic_descendant(tmp: Path) -> None:
+    _dynamic_descendant_restart(tmp, escaped=True)
+
+
+def test_start_during_restart_cannot_abandon_cleanup(tmp: Path) -> None:
+    _dynamic_descendant_restart(tmp, escaped=True, start_during_wait=True)
+
+
+def test_start_after_stop_preserves_captured_descendant_cleanup(tmp: Path) -> None:
+    _dynamic_descendant_restart(tmp, escaped=True, after_stop=True)
+
+
+def _dynamic_descendant_restart(tmp: Path, *, escaped: bool, start_during_wait: bool = False,
+                                after_stop: bool = False) -> None:
+    """An exited launcher must not transfer its old live child into oblivion."""
+    import json
+    import os
+    import shlex
+    import signal
+    import urllib.request
+
+    if os.name != "posix":
+        raise SkipTest("POSIX descendant/group lifetime")
+    child = tmp / "owned_child.py"
+    child.write_text('''import json, os, signal, sys
+from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+root = Path(sys.argv[1])
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OLD_DYNAMIC_CHILD")
+    def log_message(self, *args): pass
+server = HTTPServer(("127.0.0.1", 0), H)
+server.timeout = 0.05
+pending = root / "child.pending"
+pending.write_text(json.dumps({"pid": os.getpid(), "port": server.server_port}))
+pending.replace(root / "child.json")
+while not (root / "child-quit").exists(): server.handle_request()
+server.server_close()
+''', encoding="utf-8")
+    launcher = tmp / "dynamic_launcher.py"
+    launcher.write_text('''import json, os, signal, subprocess, sys, time
+from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+root = Path(sys.argv[1])
+if os.getpgrp() != os.getpid(): os.setsid()
+signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
+counter = root / "runs.txt"
+run = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(run))
+if run == 1:
+    subprocess.Popen([sys.executable, str(root / "owned_child.py"), str(root)],
+                     start_new_session=bool(int(sys.argv[2])),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    while True: time.sleep(0.05)
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"NEW_DYNAMIC_ROOT")
+    def log_message(self, *args): pass
+previous = json.loads((root / "child.json").read_text())["port"]
+server = HTTPServer(("127.0.0.1", 0), H)
+while server.server_port == previous:
+    server.server_close()
+    server = HTTPServer(("127.0.0.1", 0), H)
+print("REPLACEMENT_READY http://127.0.0.1:" + str(server.server_port) + "/", flush=True)
+server.serve_forever()
+''', encoding="utf-8")
+    rec = sm.validate({"name": "Dynamic tree", "working_dir": str(tmp),
+                       "interpreter": sys.executable,
+                       "command": shlex.quote(str(launcher)) + " " + shlex.quote(str(tmp)) + " " + str(int(escaped)),
+                       "url": ""})
+    proc = ProjectProcess(rec, term_grace_ms=2500 if after_stop else (1800 if start_during_wait else 800))
+    captured = []
+    real_snapshot = proc._snapshot_tree
+    def observed_snapshot(pid):
+        tree = real_snapshot(pid)
+        captured.append(dict(tree))
+        return tree
+    proc._snapshot_tree = observed_snapshot
+    old_pid, identity = None, None
+    try:
+        proc.start()
+        state = tmp / "child.json"
+        assert _wait_for(state.exists, timeout_s=8), list(proc.history)
+        data = json.loads(state.read_text())
+        old_pid = data["pid"]
+        identity = urldetect.process_identity(old_pid)
+        assert identity and old_pid in proc._own_pids(), "fixture child is not an owned descendant"
+        handle = proc.proc
+        assert handle is not None
+        assert (os.getpgid(old_pid) != os.getpgid(handle.processId())) == escaped
+        old_url = "http://127.0.0.1:" + str(data["port"]) + "/"
+        with urllib.request.urlopen(old_url, timeout=2) as response:
+            assert response.read() == b"OLD_DYNAMIC_CHILD", "fixture never served"
+        proc.rec["url"] = old_url
+        assert proc.rec["url_mode"] == "auto" and proc._expected_port() is None
+        if after_stop:
+            proc.stop()
+            assert _wait_for(lambda: handle.state() == QProcess.NotRunning, timeout_s=2)
+            proc.start()
+        else:
+            proc.restart()
+        assert captured and captured[0].get(old_pid) == identity, "actual restart snapshot missed the fixture child"
+        if start_during_wait:
+            assert _wait_for(lambda: handle.state() == QProcess.NotRunning, timeout_s=2)
+            assert proc._restart_waiting == proc._generation, "fixture missed the live cleanup wait"
+            proc.start()  # A second Start must not bypass the existing restart wait.
+        assert _wait_for(lambda: "REPLACEMENT_READY" in "".join(proc.history), timeout_s=6), list(proc.history)
+        assert _wait_for(lambda: urldetect.process_identity(old_pid) != identity, timeout_s=2), (
+            "captured old dynamic-port child survived beyond its injected escalation grace", old_pid, escaped,
+            proc._kill_timer.isActive(), proc._tree_target, list(proc.history))
+        assert not tcp_open("127.0.0.1", data["port"]), "old listener survived restart"
+        assert proc.detected_url and proc.detected_url != old_url
+        with urllib.request.urlopen(proc.detected_url, timeout=2) as response:
+            assert response.read() == b"NEW_DYNAMIC_ROOT"
+    finally:
+        # Normal case-owned shutdown even when the RED assertion catches an orphan.
+        (tmp / "child-quit").touch()
+        proc.stop()
+        assert _wait_for(lambda: proc.proc is None or proc.proc.state() == QProcess.NotRunning, timeout_s=6)
+        if old_pid is not None:
+            if not _wait_for(lambda: urldetect.process_identity(old_pid) != identity, timeout_s=3):
+                if identity is not None and urldetect.process_identity(old_pid) == identity:
+                    os.kill(old_pid, signal.SIGKILL)
+            assert _wait_for(lambda: urldetect.process_identity(old_pid) != identity, timeout_s=3), "owned fixture child remains"
+
+
 if __name__ == "__main__":
     import tempfile
 
     app = QCoreApplication([])
     fails = 0
     skipped = 0
+    only = next((arg.split("=", 1)[1] for arg in sys.argv[1:] if arg.startswith("--test=")), None)
+    if only and (not only.startswith("test_") or not callable(globals().get(only))):
+        raise SystemExit("unknown test: " + only)
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            if only and name != only:
+                continue
             with temp_project_dir() as d:
                 try:
                     fn(Path(d))

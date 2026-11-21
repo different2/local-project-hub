@@ -215,6 +215,36 @@ def test_blob_raw_text_download_prompts_and_saves_exact_bytes(tmp):
             profile.downloadRequested.disconnect(observe)
 
 
+def test_repeated_exports_keep_profile_valid_and_one_picker_per_export(tmp):
+    from shiboken6 import isValid, getCppPointer
+    with _browser(tmp) as (window, view, base, counts):
+        profile = view.page().profile()
+        profile_identity = getCppPointer(profile)[0]
+        choices = []
+        def choose(*args, **kwargs):
+            destination = tmp / ("export-" + str(len(choices) + 1) + ".txt")
+            choices.append(destination)
+            _spin(60)  # a real native picker runs a nested event loop too
+            return str(destination), ""
+        source = ('const a = document.createElement("a");'
+                  'a.href = URL.createObjectURL(new Blob([' + json.dumps(RAW_TEXT) + ']));'
+                  'a.download="sphere-export.txt";a.click();URL.revokeObjectURL(a.href);')
+        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", side_effect=choose):
+            for number in range(1, 4):
+                view.page().runJavaScript("(() => {" + source + "})()")
+                assert _wait_for(lambda: len(choices) >= number and choices[number - 1].exists()
+                                 and not window._browser_downloads._active), window.status.currentMessage()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                _spin(100)
+                assert isValid(profile), "completing a download invalidated the shared browser profile"
+                assert getCppPointer(view.page().profile())[0] == profile_identity
+                # Opening/focusing another tab consults watch again in real use.
+                window._browser_downloads.watch(view.page().profile())
+                assert len(choices) == number, ("duplicate save pickers", len(choices), number)
+                assert choices[-1].read_bytes() == RAW_TEXT.encode("utf-8")
+            assert view.title() == "Spheres" and view.isVisible()
+
+
 def test_closing_in_progress_download_cancels_without_deleted_widget_callback(tmp):
     errors = []
     with patch("sys.excepthook", lambda *exc: errors.append(str(exc[1]))):

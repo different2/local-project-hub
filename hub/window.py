@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import weakref
 from datetime import datetime
 from pathlib import Path
@@ -1508,7 +1509,7 @@ class HubWindow(QMainWindow):
         if proc.is_stopping:
             self._show_start_page(rec, state="stopping")
         elif proc.state == "running":
-            if rec.get("url"):
+            if rec.get("url") and not (store_mod.url_is_auto(rec) and not proc.detected_url):
                 self._show_dashboard(rec)
             else:
                 self._show_start_page(rec, state="running")
@@ -1531,18 +1532,29 @@ class HubWindow(QMainWindow):
         self._select_project(pid)
         self._stop_active()
 
-    def _scan_ports_after(self, rec: dict, proc: ProjectProcess, delay_ms: int = 6000) -> None:
+    def _recover_url_discovery(self, rec: dict, proc: ProjectProcess) -> None:
+        # Candidate rejection must not renew an overall recovery budget.
+        if proc._url_recovery_until is None:
+            proc._url_recovery_until = time.monotonic() + 45
+        self._scan_ports_after(rec, proc, delay_ms=0,
+                               retry_until=proc._url_recovery_until)
+
+    def _scan_ports_after(self, rec: dict, proc: ProjectProcess, delay_ms: int = 6000,
+                          *, retry_until: float | None = None) -> None:
         """For a silent server: look at what ports it opened, once it is up.
 
         Only runs when no URL is known yet, and gives the server time to bind
-        before asking the OS. Best-effort — silence here is not an error.
+        before asking the OS. A rejected announcement may request bounded retries
+        after that initial scan has already elapsed. Silence is not an error.
         """
 
         pid, generation = rec["id"], proc._generation
 
         def _scan():
+            if retry_until is not None and time.monotonic() >= retry_until:
+                return
             current = self.store.get(pid)
-            if (current is None or current.get("url")
+            if (current is None or not store_mod.url_is_auto(current) or proc.detected_url
                     or self.procs.get(pid) is not proc
                     or proc._generation != generation or proc.state != "running"
                     or (current.get("detected") or {}).get("type") == "desktop"):
@@ -1550,6 +1562,8 @@ class HubWindow(QMainWindow):
             url = proc.detect_url_from_ports()
             if url:
                 self._append_log(f"[hub] detected listening port: {url}", rec["id"])
+            elif retry_until is not None and time.monotonic() < retry_until:
+                QTimer.singleShot(500, _scan)
 
         QTimer.singleShot(delay_ms, _scan)
 
@@ -1604,6 +1618,19 @@ class HubWindow(QMainWindow):
         """
         proc = self.procs.get(pid)
         if proc is None:
+            return
+        if proc._automatic_port_spec() is not None and not proc._force_free_port:
+            # A listener can win after preflight. Let the old finished handler
+            # finish before creating its replacement, or it reports the old
+            # error against the new run and can consume the new run's intent.
+            proc._force_free_port = True
+            generation = proc._generation
+            def retry_on_free_port():
+                current = self.store.get(pid)
+                if (current is not None and self.procs.get(pid) is proc
+                        and proc._generation == generation and not proc._user_stopped):
+                    self._launch(current, proc)
+            QTimer.singleShot(0, retry_on_free_port)
             return
         own = proc._own_pids()
         conflict = self._conflict_for_port(port, own) if port else None
@@ -1675,7 +1702,7 @@ class HubWindow(QMainWindow):
                         return port
         return None
 
-    def _on_url_detected(self, url: str, pid: str | None = None) -> None:
+    def _on_url_detected(self, url: str, pid: str | None = None, _attempts: int = 12) -> None:
         """A project announced its own address — use it and remember it.
 
         `pid` is the project whose process emitted the signal, NOT whatever is
@@ -1693,21 +1720,46 @@ class HubWindow(QMainWindow):
         """
         pid = pid or self.active_id
         rec = self.store.get(pid) if pid else None
-        if rec is None or rec.get("url"):
+        if rec is None or not store_mod.url_is_auto(rec):
             return
+        project_id: str = rec["id"]
+        proc = self.procs.get(project_id)
+        mode = rec.get("url_mode", "auto")
+        if mode == "legacy":
+            # A legacy URL might have been typed. Refresh only the address of
+            # a backend we actually own, never a random printed docs/service URL.
+            from urllib.parse import urlsplit, urlunsplit
+            host, port = urldetect.url_host_port(url)
+            owners = urldetect.port_owners(port, host) if proc is not None else set()
+            if proc is None or not owners or owners - proc._own_pids():
+                if proc is not None and _attempts:
+                    generation = proc._generation
+                    QTimer.singleShot(150, lambda: self._on_url_detected(url, project_id, _attempts - 1)
+                                      if self.procs.get(project_id) is proc and proc._generation == generation
+                                      and proc.detected_url == url else None)
+                elif proc is not None and proc.detected_url == url:
+                    # Rejection is not accepted discovery. Release only this
+                    # candidate; a newer announcement must not be cleared.
+                    proc.detected_url = None
+                    self._recover_url_discovery(rec, proc)
+                return
+            old, new = urlsplit(rec["url"]), urlsplit(url)
+            url = urlunsplit((new.scheme, new.netloc, old.path or new.path, old.query, old.fragment))
         self._append_log(f"[hub] detected dashboard URL: {url}", rec["id"])
-        rec["url"] = url
         try:
-            self.store.update(rec)
-        except store_mod.RegistryError:
-            pass
+            rec = self.store.update(dict(rec, url=url, url_mode=mode))
+        except store_mod.RegistryError as exc:
+            self._append_log(f"[hub] could not save detected address: {exc}", pid)
+            return
+        if proc is not None:
+            proc.rec = rec
         if pid == self.active_id:
             self.status.showMessage(f"Detected {rec['name']} at {url}", 6000)
         # Navigate the emitting project's own tab, wherever it is in the tab
         # bar. _show_dashboard() used to read self.web (the ACTIVE tab), so a
         # background detection either did nothing or pointed the wrong tab at
         # the URL.
-        self._show_dashboard(rec)
+        self._wait_ready(rec)
 
     # ---------- popups as tabs (window.open / target="_blank") ----------
 
@@ -1891,11 +1943,12 @@ class HubWindow(QMainWindow):
                 # It exited on its own: keep the tab (so the terminal is still
                 # there to read) but put the Start button back.
                 self._show_start_page(rec, state="stopped")
-        if state == "running" and not rec.get("url"):
+        awaiting_address = store_mod.url_is_auto(rec) and not getattr(self.procs.get(pid), "detected_url", None)
+        if state == "running" and awaiting_address:
             proc = self.procs.get(pid)
             if proc is not None and (rec.get("detected") or {}).get("type") != "desktop":
                 self._scan_ports_after(rec, proc)
-        if state == "running" and rec.get("url"):
+        if state == "running" and rec.get("url") and not awaiting_address:
             self._wait_ready(rec)
         elif state in ("error", "starting", "running"):
             # Keep the project's own tab honest: "Starting…" while it comes up,
@@ -1935,6 +1988,30 @@ class HubWindow(QMainWindow):
         self._browser_downloads.watch(profile)
         return profile
 
+    def _current_dashboard_url(self, rec: dict, *, require_owned: bool = True) -> str:
+        """Automatic addresses are usable only after this run rediscovers them."""
+        if not rec.get("url"):
+            return ""
+        if store_mod.url_is_auto(rec):
+            from urllib.parse import urlsplit
+            proc = self.procs.get(rec["id"])
+            current = self.store.get(rec["id"])
+            if (proc is None or proc.state != "running" or proc._pending_restart
+                    or proc.is_stopping or not proc.detected_url or current is None
+                    or current["url"] != rec["url"]):
+                return ""
+            saved, detected = urlsplit(rec["url"]), urlsplit(proc.detected_url)
+            if (saved.scheme, saved.netloc) != (detected.scheme, detected.netloc):
+                return ""
+            if require_owned:
+                host, port = urldetect.url_host_port(rec["url"])
+                owners = urldetect.port_owners(port, host)
+                # A hostname may select either address family. One owned
+                # listener cannot vouch for a disjoint foreign listener.
+                if not owners or owners - proc._own_pids():
+                    return ""
+        return dashboard_url(rec)
+
     def _show_dashboard(self, rec: dict) -> None:
         """Point this project's OWN tab at its URL (not the active tab's).
 
@@ -1944,13 +2021,14 @@ class HubWindow(QMainWindow):
         project's URL -- for example when a closed tab's readiness callback
         lands while another tab is selected.
         """
-        if not rec.get("url"):
+        url = self._current_dashboard_url(rec)
+        if not url:
             return
         view = self._view_for(rec["id"])
         if view is None:
             return
         view.use_profile(self._profile_for(rec))
-        target = QUrl(dashboard_url(rec))
+        target = QUrl(url)
         if view.url() != target:
             view.setUrl(target)
 
@@ -1962,8 +2040,8 @@ class HubWindow(QMainWindow):
         pid = view.property("hub_project_id") if view is not None else None
         pid = pid or self.active_id
         rec = self.store.get(pid) or {}
-        if ok:
-            return  # the tab is already the visible page
+        if ok or not rec.get("url"):
+            return  # a failed Hub start/status page is not an unreachable backend
         name = rec.get("name", "project")
         proc = self.procs.get(pid)
         if proc is not None and proc.state == "running":
@@ -1982,7 +2060,9 @@ class HubWindow(QMainWindow):
 
     def _wait_ready(self, rec: dict) -> None:
         pid = rec["id"]
-        target = dashboard_url(rec)
+        target = self._current_dashboard_url(rec, require_owned=False)
+        if not target:
+            return
         existing = self.waiters.get(pid)
         if existing is not None:
             if existing.url == target:
@@ -2015,6 +2095,15 @@ class HubWindow(QMainWindow):
                     pid,
                 )
                 return
+            if store_mod.url_is_auto(rec) and proc is not None:
+                if self._current_dashboard_url(rec, require_owned=False) != target:
+                    return  # superseded address/run; do not clear a newer result
+                if not self._current_dashboard_url(rec):
+                    self._append_log(
+                        "[hub] the detected address belongs to another process; checking this project's own listeners", pid)
+                    proc.detected_url = None
+                    self._recover_url_discovery(rec, proc)
+                    return
             own_tab = self._view_for(pid)
             if own_tab is None and pid != self.active_id:
                 # Nothing of this project's is on screen, so there is nowhere
@@ -2119,7 +2208,7 @@ class HubWindow(QMainWindow):
             self._offer_to_free_port(rec, proc, conflict)
             return
         self._append_log(f"[hub] starting {rec['name']}: {rec['command']}", rec["id"])
-        if rec.get("url"):
+        if rec.get("url") and not store_mod.url_is_auto(rec):
             # Poll for the dashboard now; when it answers, _ready() points the
             # tab's webview at it. Do not wait on the "running" state signal
             # alone — it can be missed when this runs from the selection handler.
@@ -2137,7 +2226,7 @@ class HubWindow(QMainWindow):
     def _launch(self, rec: dict, proc: ProjectProcess) -> None:
         """Start the process and begin waiting for its dashboard."""
         self._append_log(f"[hub] starting {rec['name']}: {rec['command']}", rec["id"])
-        if rec.get("url"):
+        if rec.get("url") and not store_mod.url_is_auto(rec):
             self._wait_ready(rec)
         proc.start()
 
@@ -2245,6 +2334,7 @@ class HubWindow(QMainWindow):
             return
         rec = self.store.get(pid)
         self._append_log(f"[hub] restarting {rec['name']}\n", pid)
+        _cancel_readiness(self.waiters, pid)
         self._show_start_page(rec, state="starting")
         self._proc_for(rec).restart()
 
@@ -2270,7 +2360,7 @@ class HubWindow(QMainWindow):
         if not pid:
             return
         rec = self.store.get(pid)
-        url = dashboard_url(rec) if rec else ""
+        url = self._current_dashboard_url(rec) if rec else ""
         if url:
             QDesktopServices.openUrl(QUrl(url))
 

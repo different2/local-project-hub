@@ -489,6 +489,24 @@ def test_static_html_storage_origin_is_canonical_and_conservative() -> None:
         assert not static_site_origin(dict(base, command="python3 server.py"))
 
 
+def test_static_html_auto_runtime_port_preserves_entry_and_origin_not_manual_mismatch() -> None:
+    from hub.static_site import dashboard_url, static_site_origin
+
+    with tempfile.TemporaryDirectory() as d:
+        _mk_project(Path(d), {"chosen page.html": "selected entry"})
+        base = {"command": "python3 -m http.server 8000", "working_dir": d,
+                "url": "http://127.0.0.1:9001/", "entry_file": "chosen page.html"}
+        for mode in ("auto", "legacy"):
+            rec = dict(base, url_mode=mode)
+            original = dict(rec)
+            assert dashboard_url(rec) == base["url"] + "chosen%20page.html", mode
+            assert static_site_origin(rec) == "http://127.0.0.1:9001", mode
+            assert rec == original, "entry/profile resolution rewrote stored launch fields"
+        for rec in (base, dict(base, url_mode="manual")):
+            assert dashboard_url(rec) == base["url"], "manual port mismatch was inferred"
+            assert not static_site_origin(rec), "manual port mismatch enabled compatibility"
+
+
 def test_static_html_path_resolution_failures_are_advisory() -> None:
     from unittest.mock import patch
     from hub.static_site import dashboard_url

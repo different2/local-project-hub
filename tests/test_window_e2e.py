@@ -2165,6 +2165,7 @@ def test_close_and_reopen_still_reaps_an_owned_bot_ignoring_termination(tmp: Pat
     script.write_text(
         "import signal, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"  # stubborn under Ctrl-C-first Stop too
         "print('STUBBORN_BOT_READY', flush=True)\n"
         "while True: time.sleep(0.1)\n"
     )

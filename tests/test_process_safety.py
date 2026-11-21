@@ -32,8 +32,10 @@ def _project_double(**attributes) -> pm.ProjectProcess:
 def _restart_probe(port: int, url: str = ""):
     started, states, output = [], [], []
     owner = _project_double(
-        _generation=0, _restart_waiting=None,
-        rec={"url": url},
+        _generation=0, _restart_waiting=None, _tree_target=None,
+        _tree_has_live_members=lambda tree: pm.ProjectProcess._tree_has_live_members(owner, tree),
+        _automatic_port_spec=lambda: None,
+        rec={"url": url, "url_mode": "manual"},
         _expected_port=lambda: port,
         start=lambda: started.append(True),
         state_changed=SimpleNamespace(emit=states.append),

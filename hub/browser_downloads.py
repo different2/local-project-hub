@@ -96,6 +96,12 @@ class BrowserDownloads(QObject):
     def _requested(self, request):
         page = request.page()
         view = QWebEngineView.forPage(page) if page is not None else None
+        if view is not None:
+            # PySide's return-value ownership heuristic makes request.page()
+            # a Python child of this short-lived request. Re-read via its real
+            # owner before deleting the request; otherwise its destruction
+            # invalidates the page/profile wrappers and later subscriptions.
+            view.page()
         if view is None or self.window.tabs.indexOf(view) < 0:
             # The default Chromium profile can serve more than one Hub window.
             # A different owner must decide; never show a duplicate save dialog.

@@ -20,6 +20,13 @@ sys.path.insert(0, str(HERE.parent))
 import run_all  # noqa: E402
 
 
+def test_restart_and_interrupt_regressions_are_in_the_serial_runner() -> None:
+    registered = dict(run_all.SUITES)
+    assert registered.get("test_dynamic_urls.py") is True, "restart/address regressions are not registered"
+    assert registered.get("test_interrupt_stop.py") is True, "Ctrl-C stop regressions are not registered"
+    assert "test_dynamic_urls.py" in run_all.ISOLATE_TESTS, "WebEngine address cases must run one per process"
+
+
 def test_gui_backend_matches_native_mac_and_keeps_explicit_overrides() -> None:
     """The observer must use Cocoa on Mac, not Qt6.9's crashing offscreen path."""
     import os

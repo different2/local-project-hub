@@ -108,6 +108,8 @@ SUITES = [
     ("test_updater.py", False),
     ("test_process_safety.py", False),
     ("test_process_e2e.py", True),
+    ("test_interrupt_stop.py", True),
+    ("test_dynamic_urls.py", True),
     ("test_window_e2e.py", True),
     ("test_popup_bridge.py", True),
     ("test_browser_controls.py", True),
@@ -136,6 +138,7 @@ SUITES = [
 # suite: test_urldetect and test_popup_bridge create views too and were exiting
 # -11 with all tests green, which the non-isolated path scored as a failure.
 ISOLATE_TESTS = {
+    "test_dynamic_urls.py",
     "test_window_e2e.py",
     "test_urldetect.py",
     "test_popup_bridge.py",
